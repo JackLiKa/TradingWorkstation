@@ -1,0 +1,71 @@
+spring:
+  application:
+    name: trading-workstation
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:a_stock_baostock}?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      pool-name: QuantHikari
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 10000
+      idle-timeout: 300000
+      max-lifetime: 1800000
+      connection-test-query: SELECT 1
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        jdbc.batch_size: 500
+        order_inserts: true
+        order_updates: true
+    show-sql: false
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+    time-zone: Asia/Shanghai
+
+server:
+  port: ${SERVER_PORT:8090}
+  servlet:
+    context-path: ${SERVER_CONTEXT_PATH:/TradingWorkstation}
+
+app:
+  title: ${APP_TITLE:量化交易工作台}
+  query-defaults:
+    adjustflag: ${DEFAULT_ADJUSTFLAG:3}
+    limit: ${DEFAULT_LIMIT:200}
+    lookback-days: ${LOOKBACK_DAYS:180}
+  cache:
+    summary-ttl-seconds: ${CACHE_SUMMARY_TTL_SECONDS:60}
+    metrics-ttl-seconds: ${CACHE_METRICS_TTL_SECONDS:30}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3010}
+  sync:
+    python-executable: ${SYNC_PYTHON_EXECUTABLE:python}
+    ingestion-script: ${SYNC_INGESTION_SCRIPT:ingestion/baostock_ingest.py}
+    batch-size: ${SYNC_BATCH_SIZE:1000}
+    default-start-date: ${SYNC_DEFAULT_START_DATE:2021-01-01}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
