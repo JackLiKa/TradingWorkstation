@@ -1,7 +1,17 @@
 # 量化交易工作台 (Trading Workstation)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.4-green.svg)](https://spring.io/projects/spring-boot)
+[![Next.js](https://img.shields.io/badge/Next.js-15.1.9-black.svg)](https://nextjs.org/)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
+[![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1.svg)](https://www.mysql.com/)
+
 > 基于 **Java 21 + Spring Boot** 后端 + **Next.js 15** 前端 + **FastAPI AI Agent** 的 Web 量化交易工作台。
 > 由原 PySide6 桌面端项目 ([Quantization](https://github.com/JackLiKa/Quantization.git)) 重构而来，保持原有全部功能并做性能优化、功能完善与 AI 策略优化集成。
+
+**[功能特性](#功能一览)** • **[快速开始](#快速开始)** • **[文档](#项目导航)** • **[贡献指南](CONTRIBUTING.md)** • **[行为准则](CODE_OF_CONDUCT.md)**
 
 ---
 
@@ -234,6 +244,27 @@ curl http://localhost:8100/api/agent/health
 | Baostock 登录超时 | 脚本已实现自动重新登录，无需人工干预 |
 | `NoClassDefFoundError` | Maven 本地仓库路径含非 ASCII 字符，改为纯 ASCII 路径 |
 
+## 致谢
+
+- [Baostock](http://baostock.com/) — A 股历史数据源
+- [Spring Boot](https://spring.io/projects/spring-boot) — 后端框架
+- [Next.js](https://nextjs.org/) — 前端框架
+- [ECharts](https://echarts.apache.org/) — 图表库
+- [shadcn/ui](https://ui.shadcn.com/) — UI 组件设计
+- [FastAPI](https://fastapi.tiangolo.com/) — Agent 服务框架
+- 原 [Quantization](https://github.com/JackLiKa/Quantization.git) PySide6 桌面端项目
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=JackLiKa/TradingWorkstation&type=Date)](https://star-history.com/#JackLiKa/TradingWorkstation&Date)
+
 ## License
 
-本项目仅供学习和个人使用。
+本项目基于 [MIT License](LICENSE) 开源，仅供学习和个人使用。
+
+## 相关文档
+
+- [贡献指南](CONTRIBUTING.md)
+- [行为准则](CODE_OF_CONDUCT.md)
+- [安全政策](SECURITY.md)
+- [项目导航与开发规范](AGENTS.md)
