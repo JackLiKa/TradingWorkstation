@@ -1,0 +1,80 @@
+{
+  "annotations": { "list": [] },
+  "title": "Trading Workstation Agent",
+  "uid": "tw-agent",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "title": "優化迭代總數",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "agent_optimization_iterations_total", "refId": "A" }],
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "title": "當前最佳評分",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "agent_optimization_score", "refId": "A" }],
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "title": "LLM 調用速率 (req/min)",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "rate(agent_llm_calls_total[5m]) * 60",
+        "refId": "A",
+        "legendFormat": "{{provider}}/{{model}}"
+      }],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "title": "各階段耗時 (P95)",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, rate(agent_stage_duration_seconds_bucket[5m]))",
+        "refId": "A",
+        "legendFormat": "{{stage}}"
+      }],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 }
+    },
+    {
+      "title": "各階段評委評分",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "agent_stage_judge_score",
+        "refId": "A",
+        "legendFormat": "{{stage}}"
+      }],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+    },
+    {
+      "title": "RAG 操作速率",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "rate(agent_rag_operations_total[5m]) * 60",
+        "refId": "A",
+        "legendFormat": "{{operation}}/{{status}}"
+      }],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 }
+    },
+    {
+      "title": "後端 API 錯誤率",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "rate(agent_backend_errors_total[5m]) / rate(agent_backend_calls_total[5m])",
+        "refId": "A",
+        "legendFormat": "{{endpoint}}"
+      }],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 }
+    }
+  ],
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s"
+}

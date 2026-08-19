@@ -387,6 +387,16 @@ export interface AgentModelStatus {
   error?: string;
 }
 
+/** 單個供應商的模型檢查結果 */
+export interface ModelCheckResult {
+  provider: string;
+  model_name: string;
+  available: boolean;
+  is_free: boolean;
+  last_check: string;
+  error: string;
+}
+
 /** Agent 運行時狀態（當前迭代、最佳評分、各階段結果、市場上下文等） */
 export interface AgentState {
   running: boolean;
@@ -415,6 +425,16 @@ export interface AgentState {
   started_at: string | null;
   stopped_at: string | null;
   model_status: AgentModelStatus;
+  available_providers: AvailableProvider[];
+}
+
+/** 可用 LLM 供應商 */
+export interface AvailableProvider {
+  provider: string;
+  display_name?: string;
+  model: string;
+  available: boolean;
+  is_free?: boolean;
 }
 
 /** 單個 AI 節點的評委結果 */
@@ -520,4 +540,69 @@ export interface MonitorAnalysis {
   analysis: string;
   health: 'idle' | 'healthy' | 'warning' | 'critical';
   suggestions: string[];
+}
+
+// ===== AI 調用日誌（Agent Dashboard）=====
+
+/** AI 調用日誌記錄 — 對應後端 ai_call_log 表 */
+export interface AiCallLog {
+  id: number;
+  iteration: number;
+  stageName: string;
+  stageDisplayName: string;
+  provider: string;
+  modelName: string;
+  inputJson: string;
+  outputText: string;
+  outputJson: string;
+  judgeScore: number | null;
+  judgePassed: boolean | null;
+  judgeFeedback: string;
+  attempts: number;
+  durationMs: number;
+  error: string | null;
+  createdAt: string;
+}
+
+/** 評分趨勢數據（用於前端圖表） */
+export interface ScoreTrend {
+  stageTrends: StageTrendPoint[];
+  iterationTrends: IterationTrendPoint[];
+  stages: string[];
+  maxIteration: number | null;
+}
+
+export interface StageTrendPoint {
+  iteration: number;
+  stageName: string;
+  avgScore: number;
+  maxScore: number;
+  minScore: number;
+}
+
+export interface IterationTrendPoint {
+  iteration: number;
+  avgScore: number;
+  callCount: number;
+}
+
+/** 供應商偏好設置請求 */
+export interface SetStageProviderRequest {
+  stage_name: string;
+  provider: string;
+}
+
+/** 供應商列表響應 */
+export interface ProvidersResponse {
+  providers: AvailableProvider[];
+  stage_preferences: Record<string, string>;
+  stage_defaults: Record<string, string>;
+  provider_details: Record<string, {
+    display_name: string;
+    model_id: string;
+    is_free: boolean;
+    supports_json_mode: boolean;
+    tags: string[];
+    description: string;
+  }>;
 }

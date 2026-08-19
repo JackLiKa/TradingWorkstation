@@ -68,6 +68,7 @@ export default function ScreenerPage() {
   const [screenerError, setScreenerError] = useState<string | null>(null);
   const [backtestError, setBacktestError] = useState<string | null>(null);
   const [compareStrategies, setCompareStrategies] = useState<SavedStrategyDetailDto[]>([]);
+  const [autoSave, setAutoSave] = useState(true); // 回測自動保存開關（默認開啟）
 
   const runScreener = useCallback(async () => {
     setRunningScreener(true);
@@ -87,14 +88,17 @@ export default function ScreenerPage() {
     setRunningBacktest(true);
     setBacktestError(null);
     try {
-      const result = await api.runBacktest({ criteria, config: backtestConfig });
+      // 自動保存開啟時調用 run-and-save 端點，結果自動寫入數據庫
+      const result = autoSave
+        ? await api.runBacktestAndSave({ criteria, config: backtestConfig })
+        : await api.runBacktest({ criteria, config: backtestConfig });
       setBacktestResult(result);
     } catch (e) {
       setBacktestError((e as Error).message);
     } finally {
       setRunningBacktest(false);
     }
-  }, [criteria, backtestConfig]);
+  }, [criteria, backtestConfig, autoSave]);
 
   // 載入歷史策略：更新選股條件、回測配置和可選的結果
   const loadStrategy = useCallback((
@@ -155,6 +159,8 @@ export default function ScreenerPage() {
             onChange={setBacktestConfig}
             onRun={runBacktest}
             loading={runningBacktest}
+            autoSave={autoSave}
+            onToggleAutoSave={setAutoSave}
           />
           <StrategyManager
             criteria={criteria}

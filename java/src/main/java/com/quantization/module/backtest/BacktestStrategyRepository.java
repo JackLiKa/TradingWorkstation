@@ -12,4 +12,7 @@ import java.util.List;
 public interface BacktestStrategyRepository extends JpaRepository<BacktestStrategyEntity, Long> {
     /** 查询全部策略，按创建时间倒序排列。 */
     List<BacktestStrategyEntity> findAllByOrderByCreatedAtDesc();
+
+    /** 按来源过滤策略，按创建时间倒序排列。 */
+    List<BacktestStrategyEntity> findBySourceOrderByCreatedAtDesc(String source);
 }

@@ -1,0 +1,125 @@
+# 量化交易工作台 — Docker Compose 全棧部署
+# 使用: docker-compose up -d
+#
+# 服務:
+#   mysql    — 數據庫 (3306)
+#   java     — 後端 API (8090)
+#   next     — 前端 (3010)
+#   agent    — AI 優化服務 (8100)
+#
+# 啟動順序由 depends_on 控制，但首次啟動需等待 MySQL 初始化完成。
+
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: tw-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root123}
+      MYSQL_DATABASE: ${DB_NAME:-a_stock_baostock}
+      MYSQL_CHARACTER_SET_SERVER: utf8mb4
+      MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - tw-network
+
+  java:
+    build: ./java
+    container_name: tw-java
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD:-root123}
+      DB_NAME: ${DB_NAME:-a_stock_baostock}
+      SERVER_PORT: 8090
+      SERVER_CONTEXT_PATH: /TradingWorkstation
+    ports:
+      - "8090:8090"
+    networks:
+      - tw-network
+    restart: unless-stopped
+
+  next:
+    build: ./next
+    container_name: tw-next
+    depends_on:
+      - java
+    environment:
+      BACKEND_HOST: http://java:8090
+    ports:
+      - "3010:3010"
+    networks:
+      - tw-network
+    restart: unless-stopped
+
+  agent:
+    build: ./agent
+    container_name: tw-agent
+    depends_on:
+      - java
+    environment:
+      BACKEND_API_URL: http://java:8090/TradingWorkstation
+      DEVIN_API_KEY: ${DEVIN_API_KEY:-}
+      QODER_PERSONAL_ACCESS_TOKEN: ${QODER_PERSONAL_ACCESS_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8100:8100"
+    volumes:
+      - agent_data:/app/data
+      - agent_logs:/app/logs
+    networks:
+      - tw-network
+    restart: unless-stopped
+
+  # ===== 監控 =====
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: tw-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - tw-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: tw-grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docs/grafana-agent-dashboard.json:/etc/grafana/provisioning/dashboards/tw-agent.json:ro
+    networks:
+      - tw-network
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  agent_data:
+  agent_logs:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  tw-network:
+    driver: bridge

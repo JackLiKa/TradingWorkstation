@@ -1,14 +1,34 @@
 # AI Agent 服务 (Trading Workstation Agent)
 
-> FastAPI + LangGraph 风格优化循环的 AI 策略优化服务，通过 LLM 自动生成、回测、反思、改进量化交易策略。
+> FastAPI + LangGraph 风格优化循环的 AI 策略优化服务，通过多模型 LLM 路由自动生成、回测、反思、改进量化交易策略。
 
 ## 技术栈
 
 - **Python 3.10+**
 - **FastAPI** + **Uvicorn** Web 服务
 - **LangGraph 风格** 六阶段优化循环
-- **LLM 路由**：支持 Devin (Cognition) 和 Qoder 两种 LLM 提供商，自动降级
+- **多模型 LLM 路由**：支持 7 个供應商（DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin），按階段性價比自動路由 + 自動降級
+- **RAG 經驗記憶**：Milvus Lite + BGE 中文 embedding，策略生成前檢索歷史經驗
+- **Prometheus 指標**：`/metrics` 端點暴露優化/LLM/RAG/後端全鏈路指標
+- **速率限制**：令牌桶算法，防止高頻迭代壓垮後端 API
 - **HTTP 客户端** 调用后端 REST API（选股、回测、策略保存）
+
+## 多模型 LLM 路由（2026 性價比最優配置）
+
+每個 AI 節點按需求特點路由到最適合的模型：
+
+| 節點 | 默認供應商 | 理由 | 價格($/1M) |
+|------|-----------|------|-----------|
+| AI 0 行情新聞 | Qwen3.6 | 中文金融文本最佳 | 0.33/1.95 |
+| AI 0.5 行業分析 | GLM-5.2 | JSON 結構化最穩定 | 0.55/1.85 |
+| AI 1 行情分析 | DeepSeek V4-Flash | 性價比最高 | 0.14/0.28 |
+| AI 2 策略生成 ★ | DeepSeek V4-Pro | 推理最強 + JSON strict | 0.44/0.87 |
+| AI 3 回測反思 | DeepSeek V4-Pro | 深度推理分析 | 0.44/0.87 |
+| AI 4 提示詞 | GLM-4-Flash | 免費，短文本足夠 | 0/0 |
+| Judge 評委 | GLM-4-Flash | 免費 + 快速 + 一致 | 0/0 |
+| Monitor 監控 | GLM-4-Flash | 免費 | 0/0 |
+
+用戶可通過前端或 API 為每個階段獨立選擇供應商，支持自動降級。
 
 ## 目录结构
 
@@ -17,19 +37,24 @@ agent/
 ├── app/
 │   ├── main.py                    # FastAPI 入口
 │   ├── core/
-│   │   ├── config.py              # 配置（从 agent/.env 读取）
-│   │   ├── llm_client.py          # LLM 客户端（Devin/Qoder 路由）
-│   │   ├── logging.py             # 日志配置
+│   │   ├── config.py              # 統一配置管理（分層 + 驗證）
+│   │   ├── providers.py           # LLM 供應商註冊表 + 階段路由
+│   │   ├── llm_client.py          # LLM 客戶端（多模型路由 + 降級）
+│   │   ├── metrics.py             # Prometheus 指標
+│   │   ├── rate_limiter.py        # 令牌桶速率限制器
+│   │   ├── logging.py             # 日誌配置（文件輪轉 + 敏感信息過濾）
 │   │   └── model_checker.py       # 模型可用性检查
 │   ├── agents/
 │   │   ├── optimizer.py           # 优化循环主逻辑
-│   │   ├── state.py               # 优化器状态（best_score/best_criteria 等）
-│   │   ├── judge.py               # Judge AI 评分
+│   │   ├── state.py               # 优化器状态（持久化 + 內存截斷）
+│   │   ├── judge.py               # Judge AI 评分（多維度 rubric）
 │   │   ├── monitor.py             # 系统监控
 │   │   ├── monitor_ai.py          # AI 诊断监控
+│   │   ├── charter.py             # Agent 憲章（共享身份/職責/約束）
+│   │   ├── few_shot.py            # 少樣本提示示例
 │   │   ├── scoring.py             # 综合评分计算
 │   │   └── stages/                # 六阶段 AI 节点
-│   │       ├── base.py            # 阶段基类
+│   │       ├── base.py            # 阶段基类（含供應商路由 + JSON mode）
 │   │       ├── market_news.py     # 阶段 1：市场新闻分析
 │   │       ├── industry_analysis.py  # 阶段 2：行业分析与选股
 │   │       ├── market_analysis.py    # 阶段 3：市场分析
@@ -37,11 +62,16 @@ agent/
 │   │       ├── backtest_reflection.py  # 阶段 5：回测反思
 │   │       └── prompt_generation.py    # 阶段 6：Prompt 生成
 │   ├── api/
-│   │   └── routes.py              # API 路由
+│   │   └── routes.py              # API 路由（含 /metrics + /providers）
 │   └── services/
-│       ├── backend_client.py      # 后端 REST API 客户端
+│       ├── backend_client.py      # 后端 REST API 客户端（連接池 + 重試 + 速率限制）
+│       ├── experience_store.py    # RAG 經驗存儲/檢索
+│       ├── vector_store.py        # Milvus Lite 向量數據庫
 │       └── market_data_client.py  # 市场数据客户端
+├── tests/                         # pytest 測試套件（114 個測試）
 ├── requirements.txt
+├── requirements-dev.txt           # 測試依賴
+├── pytest.ini
 ├── .env.example                   # 环境变量模板
 └── start.ps1                      # Windows 启动脚本
 ```

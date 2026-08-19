@@ -37,7 +37,20 @@ public class BacktestStrategyService {
      * @return 策略摘要列表
      */
     public List<SavedStrategySummaryDto> list() {
-        return repository.findAllByOrderByCreatedAtDesc().stream()
+        return list(null);
+    }
+
+    /**
+     * 获取已保存策略摘要列表，可按来源过滤。
+     *
+     * @param source 来源过滤（manual/auto/null=全部）
+     * @return 策略摘要列表（按创建时间倒序）
+     */
+    public List<SavedStrategySummaryDto> list(String source) {
+        List<BacktestStrategyEntity> entities = (source == null || source.isBlank())
+                ? repository.findAllByOrderByCreatedAtDesc()
+                : repository.findBySourceOrderByCreatedAtDesc(source);
+        return entities.stream()
                 .map(e -> new SavedStrategySummaryDto(e.getId(), e.getName(), e.getCreatedAt(), e.getUpdatedAt()))
                 .toList();
     }
@@ -73,6 +86,7 @@ public class BacktestStrategyService {
             entity.setCriteriaJson(criteriaJson);
             entity.setConfigJson(configJson);
             entity.setResultJson(resultJson);
+            entity.setSource(dto.effectiveSource());
             entity.setCreatedAt(java.time.LocalDateTime.now());
             entity.setUpdatedAt(java.time.LocalDateTime.now());
             entity = repository.save(entity);

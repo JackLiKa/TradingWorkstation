@@ -1,0 +1,292 @@
+"""向量存儲服務 — Milvus Lite 嵌入式模式 + sentence-transformers 中文 embedding。
+
+用於 RAG 歷史經驗回憶：
+- 每輪優化結束後，將「市場環境 + 策略條件 + 回測結果 + 反思」向量化存入 Milvus
+- 下一輪策略生成前，用當前市場狀態做語義搜索，返回相似歷史經驗
+- 注入到 AI 2 策略生成 prompt 的「歷史經驗」部分
+
+設計要點：
+- Milvus Lite 嵌入式模式（無需獨立服務，數據存本地文件）
+- BAAI/bge-small-zh-v1.5 中文 embedding 模型（95MB，本地運行，無 API 成本）
+- 自動降級：Milvus/embedding 不可時靜默跳過，不影響優化循環
+"""
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any, Optional
+
+logger = logging.getLogger("agent.rag")
+
+# 延遲導入 — Milvus 和 sentence-transformers 是可選依賴
+_milvus = None
+_embedding_model = None
+_init_attempted = False
+_init_error = ""
+
+
+def _try_init():
+    """延遲初始化 Milvus 和 embedding 模型（首次使用時）。"""
+    global _milvus, _embedding_model, _init_attempted, _init_error
+    if _init_attempted:
+        return
+    _init_attempted = True
+
+    try:
+        from pymilvus import MilvusClient
+        # 數據存儲路徑（agent/data/milvus_lite.db）
+        data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+        data_dir.mkdir(exist_ok=True)
+        db_path = str(data_dir / "milvus_lite.db")
+
+        _milvus = MilvusClient(db_path)
+        logger.info(f"Milvus Lite 初始化成功: {db_path}")
+    except Exception as e:
+        _init_error = f"Milvus 初始化失敗: {e}"
+        logger.warning(_init_error)
+        return
+
+    try:
+        from sentence_transformers import SentenceTransformer
+        # bge-small-zh-v1.5: 95MB, 512 維, 中文優化, 本地運行
+        model_name = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+        _embedding_model = SentenceTransformer(model_name)
+        logger.info(f"Embedding 模型載入成功: {model_name}")
+    except Exception as e:
+        _init_error = f"Embedding 模型載入失敗: {e}"
+        logger.warning(_init_error)
+        _milvus = None  # 沒有 embedding 就無法使用 RAG
+
+
+COLLECTION_NAME = "optimization_experiences"
+EMBEDDING_DIM = 512  # bge-small-zh-v1.5 輸出維度
+
+
+def _ensure_collection():
+    """確保 Milvus collection 存在。"""
+    if not _milvus:
+        return False
+    try:
+        from pymilvus import DataType
+        if _milvus.has_collection(COLLECTION_NAME):
+            return True
+        # 創建 collection schema
+        schema = _milvus.create_schema(auto_id=False, enable_dynamic_field=True)
+        schema.add_field("id", DataType.INT64, is_primary=True, auto_id=True)
+        schema.add_field("embedding", DataType.FLOAT_VECTOR, dim=EMBEDDING_DIM)
+        schema.add_field("iteration", DataType.INT64)
+        schema.add_field("market_context", DataType.VARCHAR, max_length=2000)
+        schema.add_field("criteria_json", DataType.VARCHAR, max_length=4000)
+        schema.add_field("result_json", DataType.VARCHAR, max_length=2000)
+        schema.add_field("reflection", DataType.VARCHAR, max_length=2000)
+        schema.add_field("composite_score", DataType.FLOAT)
+        schema.add_field("timestamp", DataType.VARCHAR, max_length=50)
+
+        index_params = _milvus.prepare_index_params()
+        index_params.add_index(field_name="embedding", index_type="AUTOINDEX", metric_type="COSINE")
+        _milvus.create_collection(
+            collection_name=COLLECTION_NAME,
+            schema=schema,
+            index_params=index_params,
+        )
+        logger.info(f"Milvus collection 創建: {COLLECTION_NAME}")
+        return True
+    except Exception as e:
+        logger.warning(f"Milvus collection 創建失敗: {e}")
+        return False
+
+
+def _embed(text: str) -> Optional[list[float]]:
+    """將文本轉為向量。"""
+    if not _embedding_model:
+        return None
+    try:
+        vec = _embedding_model.encode(text, normalize_embeddings=True)
+        return vec.tolist()
+    except Exception as e:
+        logger.warning(f"Embedding 失敗: {e}")
+        return None
+
+
+def _build_experience_text(
+    market_context: str,
+    criteria: dict[str, Any],
+    stats: dict[str, Any],
+    reflection: str,
+) -> str:
+    """構建用於 embedding 的經驗文本（語義豐富的描述）。"""
+    # 提取關鍵策略特徵
+    active_filters = {
+        k: v for k, v in criteria.items()
+        if v is not None and v != False and v != "any" and v != 0
+    }
+    # 提取回測結果摘要
+    total_return = stats.get("totalReturn", 0)
+    max_drawdown = stats.get("maxDrawdown", 0)
+    sharpe = stats.get("sharpe", 0)
+    # 構建語義文本（包含市場環境 + 策略特徵 + 結果）
+    text = (
+        f"市場環境: {market_context[:300]}\n"
+        f"策略條件: {json.dumps(active_filters, ensure_ascii=False)}\n"
+        f"回測結果: 收益{total_return}%, 回撤{max_drawdown}%, 夏普{sharpe}\n"
+        f"反思: {reflection[:200]}"
+    )
+    return text
+
+
+def is_available() -> bool:
+    """RAG 服務是否可用。"""
+    _try_init()
+    return _milvus is not None and _embedding_model is not None
+
+
+def store_experience(
+    iteration: int,
+    market_context: str,
+    criteria: dict[str, Any],
+    stats: dict[str, Any],
+    reflection: str,
+    composite_score: float,
+    timestamp: str = "",
+) -> bool:
+    """存儲一輪優化經驗到向量數據庫。
+
+    Args:
+        iteration: 迭代輪次
+        market_context: 市場環境分析文本
+        criteria: 選股條件
+        stats: 回測統計
+        reflection: 回測反思結論
+        composite_score: 綜合評分
+        timestamp: 時間戳
+
+    Returns:
+        bool: 是否存儲成功
+    """
+    _try_init()
+    if not is_available():
+        return False
+
+    if not _ensure_collection():
+        return False
+
+    try:
+        # 構建經驗文本並 embedding
+        experience_text = _build_experience_text(market_context, criteria, stats, reflection)
+        embedding = _embed(experience_text)
+        if embedding is None:
+            return False
+
+        # 截斷字段以適應 Milvus VARCHAR 限制
+        from datetime import datetime
+        _milvus.insert(
+            collection_name=COLLECTION_NAME,
+            data=[{
+                "embedding": embedding,
+                "iteration": iteration,
+                "market_context": market_context[:2000],
+                "criteria_json": json.dumps(criteria, ensure_ascii=False)[:4000],
+                "result_json": json.dumps(stats, ensure_ascii=False)[:2000],
+                "reflection": reflection[:2000],
+                "composite_score": composite_score,
+                "timestamp": timestamp or datetime.now().isoformat(),
+            }],
+        )
+        logger.info(f"RAG: 已存儲第 {iteration} 輪經驗 (score={composite_score})")
+        return True
+    except Exception as e:
+        logger.warning(f"RAG 存儲經驗失敗: {e}")
+        return False
+
+
+def search_similar_experiences(
+    market_context: str,
+    current_criteria: dict[str, Any],
+    top_k: int = 3,
+    min_score: float = 0.5,
+) -> list[dict[str, Any]]:
+    """搜索與當前市場環境相似的歷史優化經驗。
+
+    Args:
+        market_context: 當前市場環境分析
+        current_criteria: 當前選股條件（用於構建查詢語義）
+        top_k: 返回 top_k 條最相似經驗
+        min_score: 最低相似度閾值（cosine similarity）
+
+    Returns:
+        list[dict]: 歷史經驗列表，每項含 iteration/criteria/result/reflection/score
+    """
+    _try_init()
+    if not is_available():
+        return []
+
+    if not _ensure_collection():
+        return []
+
+    try:
+        # 構建查詢文本（市場環境 + 當前策略特徵）
+        active_filters = {
+            k: v for k, v in current_criteria.items()
+            if v is not None and v != False and v != "any" and v != 0
+        }
+        query_text = (
+            f"市場環境: {market_context[:300]}\n"
+            f"策略條件: {json.dumps(active_filters, ensure_ascii=False)}"
+        )
+        query_embedding = _embed(query_text)
+        if query_embedding is None:
+            return []
+
+        # 搜索相似經驗
+        results = _milvus.search(
+            collection_name=COLLECTION_NAME,
+            data=[query_embedding],
+            limit=top_k,
+            output_fields=[
+                "iteration", "market_context", "criteria_json",
+                "result_json", "reflection", "composite_score", "timestamp",
+            ],
+            search_params={"metric_type": "COSINE", "params": {"radius": min_score}},
+        )
+
+        if not results or not results[0]:
+            return []
+
+        experiences = []
+        for hit in results[0]:
+            entity = hit.get("entity", {})
+            score = hit.get("distance", 0)
+            if score < min_score:
+                continue
+            try:
+                criteria = json.loads(entity.get("criteria_json", "{}"))
+                stats = json.loads(entity.get("result_json", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            experiences.append({
+                "iteration": entity.get("iteration", 0),
+                "similarity": round(score, 3),
+                "market_context": entity.get("market_context", ""),
+                "criteria": criteria,
+                "stats": stats,
+                "reflection": entity.get("reflection", ""),
+                "composite_score": entity.get("composite_score", 0),
+            })
+
+        logger.info(f"RAG: 搜索到 {len(experiences)} 條相似經驗 (top_k={top_k})")
+        return experiences
+    except Exception as e:
+        logger.warning(f"RAG 搜索經驗失敗: {e}")
+        return []
+
+
+def get_status() -> dict[str, Any]:
+    """獲取 RAG 服務狀態（用於健康檢查）。"""
+    _try_init()
+    return {
+        "available": is_available(),
+        "milvus_connected": _milvus is not None,
+        "embedding_model_loaded": _embedding_model is not None,
+        "init_error": _init_error,
+        "collection": COLLECTION_NAME if _milvus else "",
+    }

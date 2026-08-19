@@ -13,9 +13,12 @@
   - API 客户端：`src/lib/api/`，类型与后端 DTO 一一对应
   - 构建：`npm run build`（需 `--legacy-peer-deps` 安装，因 SWR peer dep 限制）
   - 运行：`npm run dev`，默认 `http://localhost:3010`
-- `agent/` — AI 优化 Agent 服务：FastAPI + LangGraph 风格优化循环 + Devin/Qoder LLM
+- `agent/` — AI 优化 Agent 服务：FastAPI + LangGraph 风格优化循环 + 多模型 LLM 路由
   - 入口：`agent/app/main.py`
   - 配置：`agent/.env`（从 `agent/.env.example` 复制）
+  - LLM 供應商：DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin（7 個供應商，按階段性價比路由）
+  - 測試：`cd agent && python -m pytest tests/`（114 個測試）
+  - 監控：`/api/agent/metrics`（Prometheus 指標端點）
   - 运行：`uvicorn app.main:app`，默认 `http://localhost:8100`，Swagger `/docs`
 - `ingestion/` — Python Baostock 数据采集脚本（由后端 sync 模块编排）
 - `docs/` — 架构 / API / 数据库文档

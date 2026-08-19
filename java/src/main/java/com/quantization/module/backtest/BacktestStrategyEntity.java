@@ -41,6 +41,10 @@ public class BacktestStrategyEntity {
     @Column(name = "result_json", columnDefinition = "LONGTEXT")
     private String resultJson;
 
+    /** 來源：manual=手動保存, auto=回測自動保存 */
+    @Column(name = "source", nullable = false, length = 20)
+    private String source = "manual";
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

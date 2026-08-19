@@ -2,11 +2,12 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Response
+from pydantic import BaseModel, Field
 
 from app.agents.optimizer import state, start_optimization, stop_optimization
 from app.core.llm_client import llm_client
+from app.core.metrics import render_prometheus_metrics
 
 logger = logging.getLogger("agent.api")
 
@@ -26,15 +27,38 @@ class UpdateCriteriaRequest(BaseModel):
 
 @router.get("/health")
 async def health():
-    """健康檢查 — 返回服務狀態、後端可用性和當前 LLM 模型信息。
+    """健康檢查 — 返回服務狀態、後端可用性、LLM 模型信息和 RAG 狀態。
 
     Returns:
-        dict: 包含 status / backend_available / model 三個維度的健康信息
+        dict: 包含 status / backend_available / model / models / rag 五個維度的健康信息
+              status: "ok"（服務存活）或 "degraded"（後端不可用）
+              model: 當前選中的供應商狀態（向後兼容）
+              models: 全部供應商的檢查結果列表
+              rag: RAG 向量數據庫狀態
     """
     from app.services.backend_client import backend_client
-    backend_ok = await backend_client.health()
+    from app.services.experience_store import get_rag_status
+    import asyncio
+
+    # 帶超時的後端健康檢查（防止掛起）
+    try:
+        backend_ok = await asyncio.wait_for(backend_client.health(), timeout=5.0)
+    except asyncio.TimeoutError:
+        backend_ok = False
+
+    # RAG 狀態
+    rag_status = get_rag_status()
+
+    # 速率限制狀態
+    from app.core.rate_limiter import get_status as get_rate_limit_status
+    rate_limit_status = get_rate_limit_status()
+
+    # 配置概覽
+    from app.core.config import settings
+    config_overview = settings.to_dict()
+
     return {
-        "status": "ok",
+        "status": "ok" if backend_ok else "degraded",
         "backend_available": backend_ok,
         "model": {
             "provider": llm_client.model_status.provider,
@@ -44,7 +68,28 @@ async def health():
             "last_check": llm_client.model_status.last_check,
             "error": llm_client.model_status.error,
         },
+        "models": llm_client.get_all_model_statuses(),
+        "rag": rag_status,
+        "rate_limits": rate_limit_status,
+        "config": config_overview,
     }
+
+
+@router.get("/metrics")
+async def metrics():
+    """Prometheus 指標端點 — 供 Prometheus 抓取。
+
+    返回 Prometheus 文本格式指標，包含：
+    - 優化迭代數和評分
+    - 各階段耗時和評委評分
+    - LLM 調用數/耗時/降級
+    - RAG 操作數/耗時
+    - 後端 API 調用數/錯誤/重試
+    """
+    return Response(
+        content=render_prometheus_metrics(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @router.post("/start")
@@ -160,7 +205,9 @@ async def check_model():
     """手動觸發 LLM 模型可用性檢查。
 
     Returns:
-        dict: 模型狀態（provider / model_name / available / last_check / error）
+        dict: 當前選中模型狀態 + 全部模型檢查結果列表
+              model: 當前選中的供應商（向後兼容）
+              models: 全部供應商的檢查結果
     """
     status = await llm_client.check_models()
     return {
@@ -169,7 +216,81 @@ async def check_model():
         "available": status.available,
         "last_check": status.last_check,
         "error": status.error,
+        "models": llm_client.get_all_model_statuses(),
     }
+
+
+@router.get("/providers")
+async def get_providers():
+    """獲取當前可用的 LLM 供應商列表（供前端選擇）。
+
+    Returns:
+        dict: 包含 providers 列表、當前每階段的供應商偏好設置、默認路由
+    """
+    from app.core.config import settings
+    from app.core.providers import STAGE_DEFAULT_PROVIDERS, PROVIDERS
+    return {
+        "providers": llm_client.get_available_providers(),
+        "stage_preferences": settings.stage_providers,
+        "stage_defaults": STAGE_DEFAULT_PROVIDERS,
+        "provider_details": {
+            pid: {
+                "display_name": info.display_name,
+                "model_id": info.model_id,
+                "is_free": info.is_free,
+                "supports_json_mode": info.supports_json_mode,
+                "tags": info.tags,
+                "description": info.description,
+            }
+            for pid, info in PROVIDERS.items()
+        },
+    }
+
+
+class SetStageProviderRequest(BaseModel):
+    """設置某個 AI 階段的供應商偏好。"""
+    stage_name: str = ""
+    provider: str = ""
+
+    model_config = {"extra": "allow"}
+
+    def effective_stage_name(self) -> str:
+        return self.stage_name
+
+
+@router.post("/providers/stage")
+async def set_stage_provider(req: SetStageProviderRequest):
+    """設置某個 AI 階段的供應商偏好。
+
+    Args:
+        req: 包含 stage_name 和 provider 的請求體
+            provider 可選值: deepseek-pro / deepseek-flash / glm-5.2 / glm-flash /
+            qwen / qoder / devin / 空字符串(自動選擇)
+
+    Returns:
+        dict: 更新後的全部階段供應商偏好
+    """
+    from app.core.config import settings
+    from app.core.providers import PROVIDERS
+    valid_providers = list(PROVIDERS.keys()) + [""]
+    if req.provider and req.provider not in valid_providers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"provider 必須是 {', '.join(PROVIDERS.keys())} 或空字符串",
+        )
+    stage = req.effective_stage_name()
+    if not stage:
+        raise HTTPException(status_code=400, detail="stage_name 不能為空")
+    settings.stage_providers[stage] = req.provider
+    return {"status": "updated", "stage_preferences": settings.stage_providers}
+
+
+@router.post("/providers/stage/reset")
+async def reset_stage_providers():
+    """重置所有階段的供應商偏好為自動選擇。"""
+    from app.core.config import settings
+    settings.stage_providers = {}
+    return {"status": "reset", "stage_preferences": settings.stage_providers}
 
 
 # ===== 監控端點 =====

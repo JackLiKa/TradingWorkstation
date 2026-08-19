@@ -7,8 +7,12 @@ import type {
   AgentHistory,
   AgentIteration,
   AgentModelStatus,
+  ModelCheckResult,
   MonitorStatus,
   MonitorAnalysis,
+  AvailableProvider,
+  SetStageProviderRequest,
+  ProvidersResponse,
 } from './types';
 
 const AGENT_BASE = process.env.NEXT_PUBLIC_AGENT_API_BASE || 'http://localhost:8100';
@@ -46,14 +50,14 @@ async function agentPost<T>(path: string, payload?: unknown): Promise<T> {
 }
 
 export const agentApi = {
-  health: () => agentFetch<{ status: string; backend_available: boolean; model: AgentModelStatus }>(`/health`),
+  health: () => agentFetch<{ status: string; backend_available: boolean; model: AgentModelStatus; models: ModelCheckResult[] }>(`/health`),
   start: (criteria?: Record<string, unknown>, config?: Record<string, unknown>) =>
     agentPost<{ status: string; state: AgentState }>(`/start`, { criteria, config }),
   stop: () => agentPost<{ status: string; state: AgentState }>(`/stop`),
   status: () => agentFetch<AgentState>(`/status`),
   history: (limit = 20) => agentFetch<AgentHistory>(`/history?limit=${limit}`),
   iteration: (n: number) => agentFetch<AgentIteration>(`/history/${n}`),
-  checkModel: () => agentPost<AgentModelStatus>(`/model/check`),
+  checkModel: () => agentPost<AgentModelStatus & { models: ModelCheckResult[] }>(`/model/check`),
   getCriteria: () => agentFetch<{ criteria: Record<string, unknown>; config: Record<string, unknown> }>(`/criteria`),
   updateCriteria: (criteria: Record<string, unknown>) =>
     agentPost<{ status: string; criteria: Record<string, unknown> }>(`/criteria`, { criteria }),
@@ -61,4 +65,10 @@ export const agentApi = {
   monitorAnalyze: () => agentFetch<MonitorAnalysis>(`/monitor/analyze`),
   resolveAlert: (alertId: string) =>
     agentPost<{ status: string; alert_id: string }>(`/monitor/alerts/${alertId}/resolve`),
+  // ===== 供應商管理 =====
+  getProviders: () => agentFetch<ProvidersResponse>(`/providers`),
+  setStageProvider: (req: SetStageProviderRequest) =>
+    agentPost<{ status: string; stage_preferences: Record<string, string> }>(`/providers/stage`, req),
+  resetStageProviders: () =>
+    agentPost<{ status: string; stage_preferences: Record<string, string> }>(`/providers/stage/reset`),
 };

@@ -39,6 +39,17 @@ from app.agents.stages.backtest_reflection import BacktestReflectionStage
 from app.agents.stages.prompt_generation import PromptGenerationStage
 from app.core.llm_client import llm_client
 from app.services.backend_client import backend_client
+from app.services.experience_store import (
+    store_iteration_experience,
+    retrieve_relevant_experiences,
+    format_experiences_for_prompt,
+    is_rag_available,
+)
+from app.core.metrics import (
+    record_iteration_complete,
+    record_stage_duration,
+    record_rag_operation,
+)
 
 logger = logging.getLogger("agent.optimizer")
 
@@ -147,8 +158,15 @@ async def run_optimization_loop():
 
     # 從數據庫讀取最高分策略作為 f0
     state.status_message = "從數據庫載入最佳策略..."
+
+    # 嘗試從 checkpoint 恢復狀態（崩潰恢復）
+    restored = state.restore()
+    if restored and state.best_score > -999:
+        logger.info(f"從 checkpoint 恢復: iteration={state.current_iteration}, best_score={state.best_score}")
+
     criteria, config, db_best_score, db_strategy_id = await _load_best_strategy_from_db()
     if db_best_score > -999:
+        # DB 有策略時，用 DB 的（權威來源），但保留 checkpoint 的 reflection/next_prompt
         state.current_criteria = criteria
         state.current_config = config
         state.best_score = db_best_score
@@ -225,9 +243,29 @@ async def run_optimization_loop():
             market_context = market_result.output
             state.current_market_context = market_context
 
-            # === AI 2: 策略生成（+ 評委） ===
+            # === AI 2: 策略生成（+ 評委 + RAG 歷史經驗） ===
             state.status_message = f"第 {iteration} 輪：AI 2 策略生成中..."
             logger.info(f"第 {iteration} 輪：AI 2 策略生成")
+
+            # RAG: 檢索與當前市場環境相似的歷史優化經驗
+            rag_experiences_text = ""
+            if is_rag_available():
+                try:
+                    rag_start = time.time()
+                    experiences = retrieve_relevant_experiences(
+                        market_context=market_context,
+                        current_criteria=state.current_criteria,
+                        top_k=3,
+                    )
+                    rag_duration = time.time() - rag_start
+                    rag_experiences_text = format_experiences_for_prompt(experiences)
+                    record_rag_operation("search", rag_duration, success=True)
+                    if experiences:
+                        logger.info(f"RAG: 注入 {len(experiences)} 條歷史經驗到策略生成 prompt")
+                except Exception as e:
+                    record_rag_operation("search", 0, success=False)
+                    logger.warning(f"RAG 檢索失敗（不影響優化）: {e}")
+
             strategy_result: StageResult = await _strategy_stage.run(
                 state=state,
                 judge=_judge,
@@ -238,6 +276,7 @@ async def run_optimization_loop():
                 history=state.iterations,
                 prev_reflection=state.current_reflection,
                 next_prompt=state.current_next_prompt,
+                rag_experiences=rag_experiences_text,
             )
             _add_stage_result(strategy_result)
             parsed = parse_strategy_output(strategy_result.output)
@@ -332,6 +371,29 @@ async def run_optimization_loop():
                 stage_results=stage_results,
             )
             state.iterations.append(result)
+            # 截斷舊記錄防止內存洩漏（保留最近 100 輪）
+            from app.agents.state import MAX_IN_MEMORY_ITERATIONS
+            if len(state.iterations) > MAX_IN_MEMORY_ITERATIONS:
+                removed = len(state.iterations) - MAX_IN_MEMORY_ITERATIONS
+                state.iterations = state.iterations[removed:]
+                logger.info(f"狀態截斷: 移除 {removed} 條舊記錄")
+
+            # === RAG: 存儲本輪經驗到向量數據庫 ===
+            if is_rag_available():
+                try:
+                    store_iteration_experience(
+                        iteration=iteration,
+                        market_context=market_context,
+                        criteria=new_criteria,
+                        stats=stats,
+                        reflection=reflection,
+                        composite_score=composite_score,
+                        timestamp=result.timestamp,
+                    )
+                    record_rag_operation("store", success=True)
+                except Exception as e:
+                    record_rag_operation("store", success=False)
+                    logger.warning(f"RAG 存儲經驗失敗（不影響優化）: {e}")
 
             # === 更新最佳記錄並寫入 DB ===
             if composite_score > state.best_score:
@@ -375,6 +437,12 @@ async def run_optimization_loop():
             node_monitor.record_score(composite_score)
 
             logger.info(f"第 {iteration} 輪完成，評分: {composite_score}")
+
+            # === 記錄 Prometheus 指標 ===
+            record_iteration_complete(iteration, composite_score)
+
+            # === 狀態 checkpoint（崩潰恢復用）===
+            state.checkpoint()
 
             # 等待間隔
             await asyncio.wait_for(_stop_event.wait(), timeout=settings.optimization_interval)

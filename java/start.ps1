@@ -91,6 +91,12 @@ if ($portConns) {
 }
 
 # 4. 啟動 Spring Boot
-Write-Host "[INFO] 啟動 Java 後端（端口 8090）..." -ForegroundColor Cyan
+# 設置 JVM 編碼為 UTF-8，解決 Windows 終端中文亂碼
+$env:JAVA_TOOL_OPTIONS = "-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8"
+# 同時設置 PowerShell 控制台輸出編碼為 UTF-8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+try { chcp 65001 | Out-Null } catch {}
+
+Write-Host "[INFO] 啟動 Java 後端（端口 8090，UTF-8 編碼）..." -ForegroundColor Cyan
 Set-Location $PSScriptRoot
-mvn spring-boot:run
+mvn spring-boot:run "-Dspring-boot.run.jvmArguments=-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8"

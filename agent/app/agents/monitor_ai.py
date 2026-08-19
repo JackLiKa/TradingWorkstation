@@ -151,9 +151,9 @@ class MonitorAI:
             response = await llm_client.analyze(prompt, SYSTEM_PROMPT)
             logger.info(f"[MonitorAI] 分析完成，健康狀態: {health}")
             return {
-                "analysis": response,
+                "analysis": response.text,
                 "health": health,
-                "suggestions": self._extract_suggestions(response),
+                "suggestions": self._extract_suggestions(response.text),
             }
         except Exception as e:
             logger.warning(f"[MonitorAI] LLM 分析失敗: {e}")

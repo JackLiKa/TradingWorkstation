@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
 
     # 關閉清理
     await model_checker.stop()
+    # 關閉後端連接池
+    from app.services.backend_client import backend_client
+    await backend_client.aclose()
     logger.info("Agent 服務已關閉")
 
 

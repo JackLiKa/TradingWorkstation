@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from app.agents.stages.base import BaseStage
+from app.agents.few_shot import get_few_shot
 
 logger = logging.getLogger("agent.stage.prompt")
 
@@ -24,13 +25,15 @@ PROMPT_TEMPLATE = """請根據反思結論，為下一輪策略生成生成精�
 ## 歷史趨勢
 {history_text}
 
+{few_shot}
+
 ## 你的任務
 生成一段簡潔的指引（2-3句話），告訴策略生成 AI 下一輪應該：
-1. 重點調整哪些參數
-2. 避免什麼樣的策略
-3. 追求什麼樣的目標
+1. 重點調整哪些參數（必須用具體參數名，如 minTurn、stopLossPct）
+2. 避免什麼樣的策略（具體描述，如「避免增加過多篩選條件」）
+3. 追求什麼樣的目標（量化目標，如「將最大回撤降至5%以下」）
 
-直接輸出指引，不要 JSON 格式。"""
+直接輸出指引，不要 JSON 格式。控制在 80-150 字。"""
 
 
 class PromptGenerationStage(BaseStage):
@@ -66,6 +69,7 @@ class PromptGenerationStage(BaseStage):
             reflection=reflection,
             composite_score=composite_score,
             history_text=history_text if history_text else "無",
+            few_shot=get_few_shot("prompt_generation"),
         )
 
         response = await self._call_llm(SYSTEM_PROMPT, prompt)

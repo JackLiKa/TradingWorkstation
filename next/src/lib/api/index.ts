@@ -24,6 +24,8 @@ import type {
   DatabaseConfigDto,
   DatabaseConfigUpdateDto,
   UserPreferenceDto,
+  AiCallLog,
+  ScoreTrend,
 } from './types';
 
 /** 後端 API 調用集合，按功能模塊分組 */
@@ -49,10 +51,22 @@ export const api = {
 
   // ===== Backtest 回測 =====
   runBacktest: (request: BacktestRequestDto) => apiPost<BacktestResultDto>(`/backtest/run`, request, 180000),
+  runBacktestAndSave: (request: BacktestRequestDto) => apiPost<BacktestResultDto>(`/backtest/run-and-save`, request, 180000),
   saveStrategy: (dto: SaveStrategyDto) => apiPost<SavedStrategyDetailDto>(`/backtest/strategies`, dto),
-  listStrategies: () => apiFetch<SavedStrategySummaryDto[]>(`/backtest/strategies`),
+  listStrategies: (source?: string) =>
+    apiFetch<SavedStrategySummaryDto[]>(`/backtest/strategies${source ? `?source=${source}` : ''}`),
   getStrategy: (id: number) => apiFetch<SavedStrategyDetailDto>(`/backtest/strategies/${id}`),
   deleteStrategy: (id: number) => apiDelete<void>(`/backtest/strategies/${id}`),
+
+  // ===== AI 調用日誌（Agent Dashboard）=====
+  aiCallLogs: (page = 0, size = 20) =>
+    apiFetch<{ content: AiCallLog[]; totalElements: number; totalPages: number }>(`/aicalllog?page=${page}&size=${size}`),
+  aiCallLogsByStage: (stageName: string, page = 0, size = 20) =>
+    apiFetch<{ content: AiCallLog[]; totalElements: number; totalPages: number }>(`/aicalllog/stage/${stageName}?page=${page}&size=${size}`),
+  aiCallLogsByIteration: (iteration: number) =>
+    apiFetch<AiCallLog[]>(`/aicalllog/iteration/${iteration}`),
+  recentAiCallLogs: (limit = 10) => apiFetch<AiCallLog[]>(`/aicalllog/recent?limit=${limit}`),
+  scoreTrend: () => apiFetch<ScoreTrend>(`/aicalllog/score-trend`),
 
   // ===== Sync 數據同步 =====
   runSync: (request: SyncRequestDto) => apiPost<SyncStatusDto>(`/sync/run`, request),

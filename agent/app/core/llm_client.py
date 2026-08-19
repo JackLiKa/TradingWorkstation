@@ -1,15 +1,24 @@
-"""LLM 客戶端 — 優先 Qoder SDK（免費 lite 模型），降級 Devin session API（免費 GLM-5.2 High）。
+"""LLM 客戶端 — 多模型路由架構 + 自動降級 + 全鏈路可觀測。
 
-免費模型優先級：
-1. Qoder lite（免費輕量化模型）— 優先
-2. Devin GLM-5.2 High（免費模型）— 降級
-3. 如果都不免費/不可用 → 降級關閉 AI 優化功能
+支持供應商（2026 性價比優先）：
+1. DeepSeek V4-Pro / V4-Flash（OpenAI-compatible, 推理最強 + 性價比）
+2. GLM-5.2 / GLM-4-Flash（OpenAI-compatible, JSON 最穩定 + 免費 Flash）
+3. Qwen3.6（OpenAI-compatible, 中文金融最佳）
+4. Qoder Lite（agent SDK, 免費備用）
+5. Devin GLM-5.2-High（agent session, 免費備用, 延遲高）
 
-統一接口: analyze(prompt) -> str (返回 LLM 的文本分析結果)
+統一接口: analyze(prompt, system_prompt, preferred_provider, json_mode) -> LLMResponse
+
+路由邏輯：
+- 每個階段有默認供應商（見 providers.STAGE_DEFAULT_PROVIDERS）
+- 用戶可通過 API/前端覆蓋每個階段的供應商
+- preferred_provider 參數可臨時指定供應商
+- 主供應商失敗時自動降級到備用供應商
 """
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
@@ -17,21 +26,34 @@ from typing import Optional
 import httpx
 
 from app.core.config import settings
+from app.core.providers import (
+    PROVIDERS,
+    STAGE_DEFAULT_PROVIDERS,
+    get_provider_info,
+    get_api_key,
+    is_openai_compatible,
+    get_default_provider_for_stage,
+)
+from app.core.metrics import record_llm_call
 
 logger = logging.getLogger("agent.llm")
 
-# 免費模型清單 — 這些模型在對應平台上是免費的
-# 如果平台調整了免費策略，更新這裡即可
-FREE_MODELS = {
-    "qoder": ["qoder-lite", "lite"],  # Qoder 免費 lite 模型
-    "devin": ["glm-5.2-high", "glm-5.2", "glm5.2-high"],  # Devin 免費 GLM 模型
-}
+
+@dataclass
+class LLMResponse:
+    """LLM 調用結果 — 包含文本輸出和可觀測性元數據。"""
+    text: str
+    provider: str
+    model_name: str
+    duration_ms: int
+    fallback_from: str = ""
+    error: str = ""
 
 
 @dataclass
 class ModelStatus:
     """當前可用模型狀態。"""
-    provider: str = "unknown"  # "qoder" | "devin" | "none"
+    provider: str = "unknown"
     model_name: str = "unknown"
     available: bool = False
     is_free: bool = False
@@ -40,18 +62,18 @@ class ModelStatus:
 
 
 class LLMClient:
-    """統一 LLM 客戶端，支持 Qoder 和 Devin 雙通道降級。
+    """統一 LLM 客戶端 — 多模型路由 + 自動降級 + 可觀測。
 
-    免費模型優先級：
-    1. Qoder lite（免費）— 優先
-    2. Devin GLM-5.2 High（免費）— 降級
-    3. 都不免費/不可用 → 關閉功能
+    供應商優先級（可被 preferred_provider / stage_providers 覆蓋）：
+    1. 用戶指定供應商 → 嘗試該供應商
+    2. 階段默認供應商 → 嘗試該供應商
+    3. 自動選擇 → 按可用性 + 性價比排序
+    4. 降級鏈: deepseek-flash → glm-flash → qoder → devin
     """
 
     def __init__(self):
         self._model_status = ModelStatus()
-        self._qoder_available = False
-        self._devin_available = False
+        self._provider_status: dict[str, bool] = {}  # provider_id -> available
         self._devin_org_id: Optional[str] = None
 
     @property
@@ -59,206 +81,362 @@ class LLMClient:
         return self._model_status
 
     async def check_models(self) -> ModelStatus:
-        """檢查可用的免費 LLM 提供者，更新狀態。
+        """檢查所有供應商的可用性，更新狀態。"""
+        self._provider_status = {}
 
-        邏輯：
-        1. 檢查 Qoder lite（免費）是否可用
-        2. 檢查 Devin GLM-5.2 High（免費）是否可用
-        3. 如果都不免費/不可用 → available=False，功能關閉
-        """
-        # 先檢查 Qoder（免費 lite 模型）
-        self._qoder_available = await self._check_qoder()
-        # 再檢查 Devin（免費 GLM-5.2 High 模型）
-        self._devin_available = await self._check_devin()
+        for provider_id, info in PROVIDERS.items():
+            available = await self._check_provider(provider_id)
+            self._provider_status[provider_id] = available
+            if available:
+                logger.info(f"供應商可用: {info.display_name} ({provider_id})")
+            else:
+                logger.debug(f"供應商不可用: {info.display_name} ({provider_id})")
 
-        if self._qoder_available:
+        # 選擇最佳可用供應商作為默認狀態
+        best = self._select_best_provider()
+        if best:
+            info = PROVIDERS[best]
             self._model_status = ModelStatus(
-                provider="qoder",
-                model_name="qoder-lite",
+                provider=best,
+                model_name=info.model_id,
                 available=True,
-                is_free=True,
+                is_free=info.is_free,
                 last_check=datetime.now().isoformat(),
             )
-            logger.info("使用 Qoder lite 免費模型")
-        elif self._devin_available:
-            self._model_status = ModelStatus(
-                provider="devin",
-                model_name="glm-5.2-high",
-                available=True,
-                is_free=True,
-                last_check=datetime.now().isoformat(),
-            )
-            logger.info("降級使用 Devin GLM-5.2 High 免費模型")
+            logger.info(f"默認供應商: {info.display_name}")
         else:
-            # 兩個平台的免費模型都不可用 → 關閉 AI 優化功能
             self._model_status = ModelStatus(
-                provider="none",
-                model_name="none",
-                available=False,
-                is_free=False,
+                provider="none", model_name="none",
+                available=False, is_free=False,
                 last_check=datetime.now().isoformat(),
-                error="所有免費模型不可用，AI 優化功能已關閉",
+                error="所有供應商不可用",
             )
-            logger.warning("所有免費模型不可用，AI 優化功能已關閉")
+            logger.warning("所有供應商不可用")
 
-        logger.info(
-            f"模型檢查完成: provider={self._model_status.provider}, "
-            f"model={self._model_status.model_name}, "
-            f"available={self._model_status.available}, "
-            f"is_free={self._model_status.is_free}"
-        )
         return self._model_status
 
-    async def _check_qoder(self) -> bool:
-        """檢查 Qoder SDK 是否可用（免費 lite 模型）。
+    def _select_best_provider(self) -> str:
+        """選擇最佳可用供應商（優先免費 + OpenAI-compatible）。"""
+        # 優先級：免費的 OpenAI-compatible > 付費的 OpenAI-compatible > agent SDK
+        priority_order = [
+            "glm-flash",       # 免費 + JSON 穩定
+            "deepseek-flash",  # 便宜 + 快
+            "qwen",            # 中文最佳
+            "glm-5.2",         # JSON 最穩定
+            "deepseek-pro",    # 推理最強
+            "qoder",           # 免費 SDK
+            "devin",           # 免費 session（延遲高）
+        ]
+        for pid in priority_order:
+            if self._provider_status.get(pid):
+                return pid
+        return ""
 
-        Qoder 的 lite 模型是免費的，只需要有效的 PAT。
-        """
-        if not settings.qoder_token:
-            logger.info("Qoder PAT 未配置，跳過")
-            return False
-        try:
-            # 嘗試導入 SDK
-            from qoder_agent_sdk import QoderAgentOptions, access_token_from_env, query
-            # 設置環境變量
-            os.environ["QODER_PERSONAL_ACCESS_TOKEN"] = settings.qoder_token
-            logger.info("Qoder lite 免費模型可用")
-            return True
-        except ImportError:
-            logger.warning("qoder-agent-sdk 未安裝，跳過 Qoder 通道")
-            return False
-        except Exception as e:
-            logger.warning(f"Qoder 檢查失敗: {e}")
-            return False
-
-    async def _check_devin(self) -> bool:
-        """檢查 Devin API 是否可用（免費 GLM-5.2 High 模型）。
-
-        Devin 的 GLM-5.2 High 是免費模型，需要有效的 API key。
-        通過 /v3/self 端點驗證 API key 有效性。
-        """
-        if not settings.devin_api_key:
-            logger.info("Devin API key 未配置，跳過")
-            return False
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                # 驗證 API key 有效性
-                resp = await client.get(
-                    "https://api.devin.ai/v3/self",
-                    headers={"Authorization": f"Bearer {settings.devin_api_key}"},
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # 嘗試從 self 獲取 org_id
-                    self._devin_org_id = data.get("organization_id") or data.get("org_id")
-                    if not self._devin_org_id:
-                        # 嘗試列出 organizations
-                        resp2 = await client.get(
-                            "https://api.devin.ai/v3/enterprise/organizations",
-                            headers={"Authorization": f"Bearer {settings.devin_api_key}"},
-                        )
-                        if resp2.status_code == 200:
-                            orgs = resp2.json()
-                            if isinstance(orgs, list) and len(orgs) > 0:
-                                self._devin_org_id = orgs[0].get("id")
-                    logger.info("Devin GLM-5.2 High 免費模型可用")
-                    return True
-                else:
-                    logger.warning(f"Devin API 認證失敗: HTTP {resp.status_code}，免費模型不可用")
-                    return False
-        except Exception as e:
-            logger.warning(f"Devin 檢查失敗: {e}")
+    async def _check_provider(self, provider_id: str) -> bool:
+        """檢查單個供應商是否可用。"""
+        info = PROVIDERS.get(provider_id)
+        if not info:
             return False
 
-    async def analyze(self, prompt: str, system_prompt: str = "") -> str:
-        """調用 LLM 分析，返回文本結果。
+        # 檢查 API key
+        api_key = get_api_key(provider_id)
+        if not api_key:
+            return False
 
-        優先 Qoder SDK（免費 lite），降級 Devin session API（免費 GLM-5.2 High）。
-        如果都不免費/不可用，拋出 RuntimeError。
-        """
-        if not self._model_status.available:
-            raise RuntimeError("沒有可用的免費 LLM 模型，AI 優化功能已關閉")
-
-        if self._qoder_available:
+        # Qoder 需要 SDK
+        if provider_id == "qoder":
             try:
-                return await self._call_qoder(prompt, system_prompt)
+                from qoder_agent_sdk import QoderAgentOptions  # noqa: F401
+                os.environ["QODER_PERSONAL_ACCESS_TOKEN"] = api_key
+                return True
+            except ImportError:
+                return False
+
+        # Devin 需要 API 可達
+        if provider_id == "devin":
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.get(
+                        "https://api.devin.ai/v3/self",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        self._devin_org_id = data.get("organization_id") or data.get("org_id")
+                        if not self._devin_org_id:
+                            resp2 = await client.get(
+                                "https://api.devin.ai/v3/enterprise/organizations",
+                                headers={"Authorization": f"Bearer {api_key}"},
+                            )
+                            if resp2.status_code == 200:
+                                orgs = resp2.json()
+                                if isinstance(orgs, list) and len(orgs) > 0:
+                                    self._devin_org_id = orgs[0].get("id")
+                        return True
+                    return False
+            except Exception:
+                return False
+
+        # OpenAI-compatible 供應商：有 API key 即視為可用
+        if is_openai_compatible(provider_id):
+            return True
+
+        return False
+
+    def get_available_providers(self) -> list[dict]:
+        """返回當前可用的供應商列表（供前端選擇）。"""
+        providers = []
+        for pid, info in PROVIDERS.items():
+            available = self._provider_status.get(pid, False)
+            providers.append({
+                "provider": pid,
+                "display_name": info.display_name,
+                "model": info.model_id,
+                "available": available,
+                "is_free": info.is_free,
+            })
+        # 按可用性 + 免費優先排序
+        providers.sort(key=lambda p: (not p["available"], not p["is_free"]))
+        return providers
+
+    def get_all_model_statuses(self) -> list[dict]:
+        """返回所有供應商的詳細檢查狀態（供前端展示全部模型）。"""
+        last_check = self._model_status.last_check
+        result = []
+        for pid, info in PROVIDERS.items():
+            available = self._provider_status.get(pid, False)
+            api_key_set = bool(get_api_key(pid))
+            error = ""
+            if not available:
+                if not api_key_set:
+                    error = f"未配置 {info.api_key_env}"
+                elif pid == "qoder":
+                    error = "qoder-agent-sdk 未安裝"
+                elif pid == "devin":
+                    error = "Devin API 不可達"
+                else:
+                    error = "API key 已配置但檢查失敗"
+            result.append({
+                "provider": pid,
+                "display_name": info.display_name,
+                "model_name": info.model_id,
+                "available": available,
+                "is_free": info.is_free,
+                "last_check": last_check,
+                "error": error,
+                "supports_json_mode": info.supports_json_mode,
+                "tags": info.tags,
+            })
+        return result
+
+    def get_fallback_chain(self, preferred: str = "") -> list[str]:
+        """獲取降級鏈（主供應商 + 備用供應商列表）。"""
+        chain = []
+        if preferred and self._provider_status.get(preferred):
+            chain.append(preferred)
+
+        # 降級順序（排除已在 chain 中的）
+        fallback_order = [
+            "glm-flash", "deepseek-flash", "qwen",
+            "glm-5.2", "deepseek-pro",
+            "qoder", "devin",
+        ]
+        for pid in fallback_order:
+            if pid not in chain and self._provider_status.get(pid):
+                chain.append(pid)
+        return chain
+
+    async def analyze(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        preferred_provider: str = "",
+        json_mode: bool = False,
+    ) -> LLMResponse:
+        """調用 LLM 分析，返回 LLMResponse（含可觀測性元數據）。
+
+        Args:
+            prompt: 用戶提示詞
+            system_prompt: 系統提示詞
+            preferred_provider: 手動指定供應商 ID（如 "deepseek-pro"）
+            json_mode: 是否啟用 JSON 結構化輸出模式
+
+        路由邏輯：
+        1. preferred_provider 指定 → 用該供應商
+        2. 否則用階段默認供應商（調用方應傳入）
+        3. 失敗時自動降級到備用供應商
+        """
+        # 自動觸發模型檢查
+        if not self._model_status.available:
+            logger.info("模型狀態不可用，自動觸發模型檢查...")
+            await self.check_models()
+        if not self._model_status.available:
+            raise RuntimeError("沒有可用的 LLM 供應商（已嘗試自動檢查）")
+
+        # 構建降級鏈
+        chain = self.get_fallback_chain(preferred_provider)
+        if not chain:
+            raise RuntimeError("沒有可用的 LLM 供應商")
+
+        start = time.time()
+        last_error = None
+
+        for i, provider_id in enumerate(chain):
+            info = PROVIDERS[provider_id]
+            try:
+                text = await self._call_provider(provider_id, prompt, system_prompt, json_mode)
+                duration_s = time.time() - start
+                duration_ms = int(duration_s * 1000)
+                fallback_from = chain[0] if i > 0 else ""
+
+                # 記錄指標
+                record_llm_call(
+                    provider=provider_id,
+                    model=info.model_id,
+                    duration_s=duration_s,
+                    fallback=bool(fallback_from),
+                )
+
+                return LLMResponse(
+                    text=text,
+                    provider=provider_id,
+                    model_name=info.model_id,
+                    duration_ms=duration_ms,
+                    fallback_from=fallback_from,
+                )
             except Exception as e:
-                logger.warning(f"Qoder 調用失敗，降級到 Devin: {e}")
-                if self._devin_available:
-                    return await self._call_devin(prompt, system_prompt)
-                raise
-        elif self._devin_available:
-            return await self._call_devin(prompt, system_prompt)
+                last_error = e
+                logger.warning(f"供應商 {info.display_name} 調用失敗: {e}")
+                if i < len(chain) - 1:
+                    logger.info(f"降級到: {PROVIDERS[chain[i+1]].display_name}")
+                continue
+
+        duration_ms = int((time.time() - start) * 1000)
+        raise RuntimeError(f"所有供應商調用失敗: {last_error}")
+
+    async def _call_provider(
+        self,
+        provider_id: str,
+        prompt: str,
+        system_prompt: str,
+        json_mode: bool = False,
+    ) -> str:
+        """調用指定供應商（統一入口，內部路由到 OpenAI API / Qoder SDK / Devin session）。"""
+        info = PROVIDERS[provider_id]
+        api_key = get_api_key(provider_id)
+
+        if not api_key:
+            raise RuntimeError(f"{info.display_name} API key 未配置")
+
+        if provider_id == "qoder":
+            return await self._call_qoder(prompt, system_prompt, api_key)
+        elif provider_id == "devin":
+            return await self._call_devin(prompt, system_prompt, api_key)
+        elif is_openai_compatible(provider_id):
+            return await self._call_openai_compatible(
+                info, api_key, prompt, system_prompt, json_mode,
+            )
         else:
-            raise RuntimeError("沒有可用的免費 LLM 提供者，AI 優化功能已關閉")
+            raise RuntimeError(f"未知供應商類型: {provider_id}")
 
-    async def _call_qoder(self, prompt: str, system_prompt: str) -> str:
-        """使用 Qoder SDK 調用免費 lite 模型。"""
+    async def _call_openai_compatible(
+        self,
+        info,
+        api_key: str,
+        prompt: str,
+        system_prompt: str,
+        json_mode: bool = False,
+    ) -> str:
+        """調用 OpenAI-compatible API（DeepSeek/GLM/Qwen 統一接口）。"""
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        body: dict = {
+            "model": info.model_id,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 4096,
+        }
+        # JSON 結構化輸出模式
+        if json_mode and info.supports_json_mode:
+            body["response_format"] = {"type": "json_object"}
+
+        url = f"{info.base_url}/chat/completions"
+        timeout = 120 if "pro" in info.provider else 60
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, headers=headers, json=body)
+            resp.raise_for_status()
+            data = resp.json()
+            choices = data.get("choices", [])
+            if not choices:
+                raise RuntimeError(f"{info.display_name} 返回空 choices")
+            return choices[0]["message"]["content"].strip()
+
+    async def _call_qoder(self, prompt: str, system_prompt: str, api_key: str) -> str:
+        """調用 Qoder agent SDK。"""
         from qoder_agent_sdk import QoderAgentOptions, access_token_from_env, query
-
-        os.environ["QODER_PERSONAL_ACCESS_TOKEN"] = settings.qoder_token
+        os.environ["QODER_PERSONAL_ACCESS_TOKEN"] = api_key
         full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-
         options = QoderAgentOptions(auth=access_token_from_env())
         result_text = ""
-
         async for message in query(prompt=full_prompt, options=options):
-            # 收集文本響應
             if hasattr(message, "content"):
                 for block in message.content if isinstance(message.content, list) else [message.content]:
                     if hasattr(block, "text"):
                         result_text += block.text
             elif isinstance(message, str):
                 result_text += message
-
         return result_text.strip()
 
-    async def _call_devin(self, prompt: str, system_prompt: str) -> str:
-        """使用 Devin session API 調用免費 GLM-5.2 High 模型。"""
+    async def _call_devin(self, prompt: str, system_prompt: str, api_key: str) -> str:
+        """調用 Devin agent session API（延遲較高，備用）。"""
         if not self._devin_org_id:
-            await self._check_devin()
+            await self._check_provider("devin")
         if not self._devin_org_id:
-            raise RuntimeError("無法獲取 Devin org_id，免費模型不可用")
+            raise RuntimeError("無法獲取 Devin org_id")
 
+        max_prompt_chars = 4000
         full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        if len(full_prompt) > max_prompt_chars:
+            full_prompt = full_prompt[:max_prompt_chars] + "\n\n[輸入已截斷]"
 
-        async with httpx.AsyncClient(timeout=120) as client:
-            # 創建會話
+        max_polls = 24
+        poll_interval = 3
+        import asyncio
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 f"https://api.devin.ai/v3/organizations/{self._devin_org_id}/sessions",
-                headers={
-                    "Authorization": f"Bearer {settings.devin_api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"prompt": full_prompt},
             )
             resp.raise_for_status()
             session_data = resp.json()
             session_id = session_data.get("devin_id") or session_data.get("session_id")
-
             if not session_id:
-                raise RuntimeError("Devin 會話創建失敗：未返回 session_id")
-
-            # 輪詢會話狀態直到完成
-            import asyncio
-            for _ in range(60):  # 最多等待 5 分鐘
-                await asyncio.sleep(5)
+                raise RuntimeError("Devin 會話創建失敗")
+            for poll in range(max_polls):
+                await asyncio.sleep(poll_interval)
                 status_resp = await client.get(
                     f"https://api.devin.ai/v3/organizations/{self._devin_org_id}/sessions/{session_id}",
-                    headers={"Authorization": f"Bearer {settings.devin_api_key}"},
+                    headers={"Authorization": f"Bearer {api_key}"},
                 )
                 status_resp.raise_for_status()
                 status_data = status_resp.json()
                 state = status_data.get("state", "")
                 if state == "completed":
-                    # 獲取消息
                     msg_resp = await client.get(
                         f"https://api.devin.ai/v3/organizations/{self._devin_org_id}/sessions/{session_id}/messages",
-                        headers={"Authorization": f"Bearer {settings.devin_api_key}"},
+                        headers={"Authorization": f"Bearer {api_key}"},
                     )
                     msg_resp.raise_for_status()
                     messages = msg_resp.json()
-                    # 提取 assistant 消息
                     result = ""
                     for msg in messages if isinstance(messages, list) else messages.get("messages", []):
                         if msg.get("role") == "assistant":
@@ -272,9 +450,7 @@ class LLMClient:
                     return result.strip()
                 elif state in ("failed", "cancelled", "archived"):
                     raise RuntimeError(f"Devin 會話結束: state={state}")
+            raise RuntimeError(f"Devin 會話超時（{max_polls * poll_interval}s）")
 
-            raise RuntimeError("Devin 會話超時")
 
-
-# 全局 LLM 客戶端
 llm_client = LLMClient()

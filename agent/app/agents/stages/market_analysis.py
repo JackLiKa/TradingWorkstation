@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from app.agents.stages.base import BaseStage
+from app.agents.few_shot import get_few_shot
 
 logger = logging.getLogger("agent.stage.market")
 
@@ -25,13 +26,15 @@ PROMPT_TEMPLATE = """請分析當前 A 股市場環境。
 ## 上一輪反思結論
 {prev_reflection}
 
-## 你的任務
-分析當前市場環境（2-3句話），包括：
-1. 市場整體趨勢（上漲/下跌/震盪）
-2. 波動率水平
-3. 適合的策略類型（趨勢跟蹤/均值回歸/防禦等）
+{few_shot}
 
-直接輸出分析結果，不要 JSON 格式。"""
+## 你的任務
+分析當前市場環境（2-3句話），必須包括：
+1. 市場整體趨勢（上漲/下跌/震盪），引用具體數據（如上漲股票佔比、指數漲跌幅）
+2. 波動率水平（高/中/低），引用具體數值
+3. 適合的策略類型（趨勢跟蹤/均值回歸/防禦等），說明理由
+
+直接輸出分析結果，不要 JSON 格式。控制在 100-200 字。"""
 
 
 class MarketAnalysisStage(BaseStage):
@@ -69,6 +72,7 @@ class MarketAnalysisStage(BaseStage):
             market_data=json.dumps(market_data, ensure_ascii=False, indent=2, default=str),
             history_text=history_text if history_text else "無（首輪）",
             prev_reflection=prev_reflection if prev_reflection else "無（首輪）",
+            few_shot=get_few_shot("market_analysis"),
         )
 
         response = await self._call_llm(SYSTEM_PROMPT, prompt)

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -48,6 +49,32 @@ public class BacktestController {
     }
 
     /**
+     * 运行回测并自动保存结果到数据库（source=auto）。
+     * 用于前端「回测后自动保存」功能，供 AI 优化策略参考。
+     *
+     * @param request 回测请求（含选股条件和回测配置）
+     * @return 回测结果（已自动保存到数据库）
+     */
+    @Operation(summary = "运行回测并自动保存")
+    @PostMapping("/run-and-save")
+    public ApiResponse<BacktestResultDto> runAndSave(@Valid @RequestBody BacktestRequestDto request) {
+        BacktestResultDto result = backtestService.runBacktest(request);
+        // 自動保存到數據庫
+        try {
+            String autoName = "回測-" + java.time.LocalDateTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+            SaveStrategyDto saveDto = new SaveStrategyDto(
+                    autoName, request.criteria(), request.config(), result, "auto");
+            strategyService.save(saveDto);
+        } catch (Exception e) {
+            // 自動保存失敗不影響回測結果返回
+            org.slf4j.LoggerFactory.getLogger(BacktestController.class)
+                    .warn("回測自動保存失敗: {}", e.getMessage());
+        }
+        return ApiResponse.ok(result);
+    }
+
+    /**
      * 保存回测策略。
      *
      * @param dto 策略保存请求
@@ -66,8 +93,9 @@ public class BacktestController {
      */
     @Operation(summary = "策略列表")
     @GetMapping("/strategies")
-    public ApiResponse<List<SavedStrategySummaryDto>> listStrategies() {
-        return ApiResponse.ok(strategyService.list());
+    public ApiResponse<List<SavedStrategySummaryDto>> listStrategies(
+            @RequestParam(required = false) String source) {
+        return ApiResponse.ok(strategyService.list(source));
     }
 
     /**

@@ -9,25 +9,18 @@ import logging
 from typing import Any
 
 from app.agents.stages.base import BaseStage
+from app.agents.few_shot import get_few_shot
 
 logger = logging.getLogger("agent.stage.reflection")
 
 SYSTEM_PROMPT = "你是一個專業的量化策略回測分析師，擅長從回測結果中發現問題並提出改進方向。"
 
-PROMPT_TEMPLATE = """請分析以下回測結果，得出反思結論。
+PROMPT_TEMPLATE = """請分析以下回測結果，得出反思結論（控制在 500 字以內）。
 
 ## 回測統計
-- 策略總收益: {total_return}%
-- 年化收益: {annual_return}%
-- 基準收益: {benchmark_return}%
-- 超額收益: {excess_return}%
-- 最大回撤: {max_drawdown}%
-- 夏普比率: {sharpe}
-- 調倉次數: {rebalance_count}
-- 交易筆數: {total_trades}
-
-## 綜合評分
-{composite_score}（收益40% + 回撤控制30% + 夏普30%）
+- 總收益: {total_return}% | 年化: {annual_return}% | 基準: {benchmark_return}% | 超額: {excess_return}%
+- 最大回撤: {max_drawdown}% | 夏普: {sharpe} | 調倉: {rebalance_count}次 | 交易: {total_trades}筆
+- 綜合評分: {composite_score}
 
 ## 當前選股條件
 {active_filters}
@@ -35,17 +28,18 @@ PROMPT_TEMPLATE = """請分析以下回測結果，得出反思結論。
 ## 市場環境
 {market_context}
 
-## 歷史優化記錄
+## 歷史記錄（最近3輪）
 {history_text}
 
-## 你的任務
-分析當前策略的表現，指出：
-1. 策略的優點和不足
-2. 收益來源（選股還是擇時？）
-3. 風險控制效果
-4. 具體的改進方向（2-3條）
+{few_shot}
 
-直接輸出分析結果，不要 JSON 格式。"""
+## 輸出要求（簡潔，500字以內，必須引用具體數值）
+1. 優點和不足（各1-2句，引用收益/回撤/夏普等具體數值）
+2. 收益來源（選股/擇時，1句，說明依據）
+3. 風險控制評價（1句，引用回撤數據）
+4. 改進方向（2-3條，每條必須包含：具體參數名 + 調整方向 + 預期效果）
+
+直接輸出分析，不要 JSON。"""
 
 
 class BacktestReflectionStage(BaseStage):
@@ -73,9 +67,9 @@ class BacktestReflectionStage(BaseStage):
         market_context = kwargs.get("market_context", "")
         history = kwargs.get("history", [])
 
-        # 構建歷史摘要
+        # 構建歷史摘要（只取最近 3 輪，避免 prompt 過長導致 LLM 思考太久）
         history_text = ""
-        for h in history[-5:]:
+        for h in history[-3:]:
             s = h.backtest_statistics
             history_text += (
                 f"  第{h.iteration}輪: 評分={h.composite_score}, 收益={s.get('totalReturn', 0)}%, "
@@ -83,6 +77,9 @@ class BacktestReflectionStage(BaseStage):
             )
 
         active_filters = {k: v for k, v in criteria.items() if v is not None and v != False and v != "any" and v != 0}
+        # 截斷市場環境文本，避免 prompt 過長
+        if len(market_context) > 500:
+            market_context = market_context[:500] + "..."
 
         prompt = PROMPT_TEMPLATE.format(
             total_return=stats.get("totalReturn", 0),
@@ -97,6 +94,7 @@ class BacktestReflectionStage(BaseStage):
             active_filters=json.dumps(active_filters, ensure_ascii=False, indent=2),
             market_context=market_context,
             history_text=history_text if history_text else "無",
+            few_shot=get_few_shot("backtest_reflection"),
         )
 
         response = await self._call_llm(SYSTEM_PROMPT, prompt)

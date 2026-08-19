@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from app.agents.stages.base import BaseStage
+from app.agents.few_shot import get_few_shot
 from app.services.backend_client import backend_client
 
 logger = logging.getLogger("agent.stage.industry")
@@ -38,24 +39,25 @@ PROMPT_TEMPLATE = """請根據行情新聞分析結果，結合數據庫行業�
 ## 行業下的股票代碼（抽樣）
 {industry_stocks}
 
-## 你的任務
-1. 從行情新聞中識別利好行業關鍵詞
-2. 將關鍵詞與數據庫行業分類匹配
-3. 列出利好行業和對應的股票代碼
+{few_shot}
 
-請嚴格按以下 JSON 格式返回:
-```json
+## 你的任務
+1. 從行情新聞中識別利好行業關鍵詞（如「半導體」「新能源」「醫藥」）
+2. 將關鍵詞與數據庫行業分類模糊匹配（如「半導體」→「C39電子設備製造」）
+3. 從匹配行業的股票代碼中選取龍頭股，filtered_codes 最多 50 個
+
+請嚴格按以下 JSON 格式返回（不要加 markdown 代碼塊標記）:
 {{
-  "reasoning": "分析理由（1-2句話）",
-  "favorable_industries": ["行業1", "行業2"],
+  "reasoning": "分析理由（1-2句話，說明匹配邏輯）",
+  "favorable_industries": ["數據庫行業全名1", "數據庫行業全名2"],
   "filtered_codes": ["sh.600000", "sz.000001"]
 }}
-```
 
 注意:
-- filtered_codes 最多 50 個
+- filtered_codes 最多 50 個，優先選龍頭股
 - 如果無法匹配到利好行業，返回空列表
-- 行業名稱用數據庫中的完整名稱"""
+- 行業名稱必須用數據庫中的完整名稱（如 "C39電子設備製造"）
+- JSON 中不要加 ```json 標記"""
 
 
 class IndustryAnalysisStage(BaseStage):
@@ -94,9 +96,10 @@ class IndustryAnalysisStage(BaseStage):
             market_news=market_news[:2000],  # 截斷避免 token 過多
             industry_list=json.dumps(industry_list[:50], ensure_ascii=False, indent=2),
             industry_stocks=json.dumps(industry_stocks, ensure_ascii=False, indent=2),
+            few_shot=get_few_shot("industry_analysis"),
         )
 
-        response = await self._call_llm(SYSTEM_PROMPT, prompt)
+        response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
         logger.info(f"[AI0.5 行業分析] {response[:100]}...")
         return response
 

@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from app.agents.stages.base import BaseStage
+from app.agents.few_shot import get_few_shot
 from app.services.market_data_client import market_data_client
 
 logger = logging.getLogger("agent.stage.market_news")
@@ -34,25 +35,27 @@ PROMPT_TEMPLATE = """請分析今天的實時金融市場數據，按行業總�
 ## 歷史優化記錄
 {history_text}
 
+{few_shot}
+
 ## 你的任務
 1. 分析大盤走勢（上漲/下跌/震盪），判斷市場情緒
-2. 識別強勢行業（利好）和弱勢行業（利空）
+2. 識別強勢行業（利好）和弱勢行業（利空），每個行業必須引用具體漲跌幅數據
 3. 推斷可能的資金流向和政策影響
 4. 總結哪些行業適合選股，哪些應該避開
 
 請按以下格式輸出（自然語言，不要 JSON）：
 
 ### 市場情緒
-（1-2句話描述整體市場情緒）
+（1-2句話，引用指數漲跌幅描述整體市場情緒）
 
 ### 利好行業
-（列出 2-3 個強勢行業及原因）
+（列出 2-3 個強勢行業，每個行業必須包含：行業名稱 + 漲跌幅 + 利好原因）
 
 ### 利空行業
-（列出 1-2 個弱勢行業及原因）
+（列出 1-2 個弱勢行業，每個行業必須包含：行業名稱 + 跌幅 + 利空原因）
 
 ### 選股建議
-（1-2句話，建議關注哪些行業的股票）"""
+（1-2句話，明確指出關注哪些行業的股票，避開哪些）"""
 
 
 class MarketNewsStage(BaseStage):
@@ -100,6 +103,7 @@ class MarketNewsStage(BaseStage):
             indices=indices_text,
             db_stats=db_stats_text,
             history_text=history_text if history_text else "無（首輪）",
+            few_shot=get_few_shot("market_news"),
         )
 
         response = await self._call_llm(SYSTEM_PROMPT, prompt)

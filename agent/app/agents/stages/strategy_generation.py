@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from app.agents.stages.base import BaseStage
+from app.agents.few_shot import get_few_shot
 
 logger = logging.getLogger("agent.stage.strategy")
 
@@ -34,15 +35,19 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 ## 歷史優化記錄
 {history_text}
 
+{rag_experiences}
+
+{few_shot}
+
 ## 你的任務
 1. 根據市場分析和反思結論，調整選股條件
-2. 每次只調整 1-3 個參數，不要大幅變動
-3. 說明你的調整理由
+2. 參考歷史相似經驗（如有），避免重複歷史上效果差的策略
+3. 每次只調整 1-3 個參數，不要大幅變動
+4. reasoning 必須說明：為何調整這些參數 + 預期效果 + 是否借鑒了歷史經驗
 
-請嚴格按以下 JSON 格式返回:
-```json
+請嚴格按以下 JSON 格式返回（不要加 markdown 代碼塊標記）:
 {{
-  "reasoning": "調整理由（1-2句話）",
+  "reasoning": "調整理由（2-3句話，說明為何調整這些參數及預期效果）",
   "criteria": {{
     "asOfDate": "{asof_date}",
     "adjustflag": {adjustflag},
@@ -87,13 +92,15 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
     "ma20AboveMa60": false
   }}
 }}
-```
 
 注意:
 - 數值參數用數字或 null，不要用字符串
 - 信號字段用 "any"/"golden_cross"/"death_cross"/"none"
 - 布爾字段用 true/false
-- 只調整選股條件，不要改變回測配置"""
+- 只調整選股條件，不要改變回測配置
+- JSON 中不要加 ```json 標記
+- 只填寫需要調整的字段，其餘保持 null/false/"any"
+- 常用參數範圍參考: minTurn 0.5-5.0, minVolumeRatio 0.5-3.0, minReturn20 -10~20, minRsi14 20-80, macdCrossWithinDays 1-10"""
 
 
 class StrategyGenerationStage(BaseStage):
@@ -115,6 +122,7 @@ class StrategyGenerationStage(BaseStage):
             history: list[IterationResult] — 歷史記錄
             prev_reflection: str — 上一輪反思
             next_prompt: str — 下一輪提示詞指引
+            rag_experiences: str — RAG 檢索的歷史經驗文本（可選）
         """
         market_context = kwargs.get("market_context", "")
         current_criteria = kwargs.get("current_criteria", {})
@@ -122,6 +130,7 @@ class StrategyGenerationStage(BaseStage):
         history = kwargs.get("history", [])
         prev_reflection = kwargs.get("prev_reflection", "")
         next_prompt = kwargs.get("next_prompt", "")
+        rag_experiences = kwargs.get("rag_experiences", "")
 
         # 構建歷史摘要
         history_text = ""
@@ -145,11 +154,13 @@ class StrategyGenerationStage(BaseStage):
             current_criteria=json.dumps(current_criteria, ensure_ascii=False, indent=2),
             config=json.dumps(config, ensure_ascii=False, indent=2),
             history_text=history_text if history_text else "無（首輪）",
+            rag_experiences=rag_experiences if rag_experiences else "無（RAG 不可用或無相似經驗）",
             asof_date=asof_date,
             adjustflag=adjustflag,
+            few_shot=get_few_shot("strategy_generation"),
         )
 
-        response = await self._call_llm(SYSTEM_PROMPT, prompt)
+        response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
         logger.info(f"[AI2 策略生成] {response[:100]}...")
         return response
 

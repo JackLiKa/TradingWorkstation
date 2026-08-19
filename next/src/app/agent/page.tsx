@@ -19,6 +19,7 @@ import { AgentWorkflowGraph } from '@/components/agent/AgentWorkflowGraph';
 import { AgentMonitorPanel } from '@/components/agent/AgentMonitorPanel';
 import { AgentScoreTrend } from '@/components/agent/AgentScoreTrend';
 import { AgentModelCard } from '@/components/agent/AgentModelCard';
+import { AgentProviderSelector } from '@/components/agent/AgentProviderSelector';
 
 /** Agent 狀態輪詢間隔（運行時 2 秒） */
 const STATUS_REFETCH_MS = 2000;
@@ -98,6 +99,7 @@ export default function AgentPage() {
   }, [refreshHealth]);
 
   const modelStatus = health?.model;
+  const allModels = health?.models ?? [];
   const isRunning = state?.running ?? false;
   const iterations = history?.iterations ?? [];
 
@@ -117,12 +119,16 @@ export default function AgentPage() {
         </div>
       </div>
 
-      {/* 模型狀態卡片 — 可展開查看詳情，支持手動檢查 */}
+      {/* 模型狀態卡片 — 顯示全部模型檢查結果，支持手動檢查 */}
       <AgentModelCard
         modelStatus={modelStatus}
+        allModels={allModels}
         checking={checkingModel}
         onCheck={handleCheckModel}
       />
+
+      {/* 每階段供應商選擇 */}
+      <AgentProviderSelector />
 
       {/* 控制面板 */}
       <Card>

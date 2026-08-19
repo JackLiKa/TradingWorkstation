@@ -1,9 +1,23 @@
-"""優化器狀態數據類 — 負責狀態存儲和序列化。"""
+"""優化器狀態數據類 — 負責狀態存儲和序列化。
+
+工程化改進：
+- iterations 列表自動截斷（保留最近 100 輪），防止內存洩漏
+- 提供 checkpoint/restore 方法，支持狀態持久化到磁盤
+"""
+import json
+import logging
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 
 from app.core.llm_client import llm_client
+
+logger = logging.getLogger("agent.state")
+
+# 內存中保留的最大迭代輪數（防止 OOM）
+MAX_IN_MEMORY_ITERATIONS = 100
 
 # 預設選股條件（初始值）
 _now = datetime.now()
@@ -143,4 +157,120 @@ class OptimizerState:
                 "available": llm_client.model_status.available,
                 "is_free": llm_client.model_status.is_free,
             },
+            "available_providers": llm_client.get_available_providers(),
         }
+
+    def add_iteration(self, result: IterationResult) -> None:
+        """添加迭代結果並自動截斷舊記錄（防止內存洩漏）。
+
+        保留最近 MAX_IN_MEMORY_ITERATIONS 輪的完整數據。
+        """
+        self.iterations.append(result)
+        # 截斷：超過上限時移除最舊的記錄
+        if len(self.iterations) > MAX_IN_MEMORY_ITERATIONS:
+            removed = len(self.iterations) - MAX_IN_MEMORY_ITERATIONS
+            self.iterations = self.iterations[removed:]
+            logger.info(f"狀態截斷: 移除 {removed} 條舊迭代記錄，保留最近 {len(self.iterations)} 條")
+
+    def checkpoint(self, path: str = None) -> str:
+        """將關鍵狀態保存到磁盤（用於崩潰恢復）。
+
+        保存內容：best_score, best_criteria, best_config, current_criteria,
+        current_config, current_reflection, current_next_prompt, current_iteration。
+        不保存完整 iterations（太大），只保存最近 5 輪摘要。
+
+        Returns:
+            str: checkpoint 文件路徑
+        """
+        if path is None:
+            data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+            data_dir.mkdir(exist_ok=True)
+            path = str(data_dir / "optimizer_checkpoint.json")
+
+        try:
+            # 確保目錄存在
+            checkpoint_dir = os.path.dirname(path)
+            if checkpoint_dir:
+                os.makedirs(checkpoint_dir, exist_ok=True)
+
+            checkpoint_data = {
+                "saved_at": datetime.now().isoformat(),
+                "current_iteration": self.current_iteration,
+                "best_score": self.best_score,
+                "best_iteration": self.best_iteration,
+                "best_strategy_id": self.best_strategy_id,
+                "best_criteria": self.best_criteria,
+                "best_config": self.best_config,
+                "current_criteria": self.current_criteria,
+                "current_config": self.current_config,
+                "current_reflection": self.current_reflection,
+                "current_next_prompt": self.current_next_prompt,
+                # 只保存最近 5 輪摘要（完整數據太大）
+                "recent_iterations": [
+                    {
+                        "iteration": it.iteration,
+                        "composite_score": it.composite_score,
+                        "criteria": it.criteria,
+                        "backtest_statistics": it.backtest_statistics,
+                    }
+                    for it in self.iterations[-5:]
+                ],
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(checkpoint_data, f, ensure_ascii=False, indent=2)
+            logger.info(f"狀態 checkpoint 已保存: {path}")
+            return path
+        except Exception as e:
+            logger.warning(f"Checkpoint 保存失敗: {e}")
+            return ""
+
+    def restore(self, path: str = None) -> bool:
+        """從磁盤恢復狀態（崩潰恢復）。
+
+        Returns:
+            bool: 是否成功恢復
+        """
+        if path is None:
+            data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+            path = str(data_dir / "optimizer_checkpoint.json")
+
+        if not os.path.exists(path):
+            logger.info("無 checkpoint 文件，使用默認狀態")
+            return False
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            self.current_iteration = data.get("current_iteration", 0)
+            self.best_score = data.get("best_score", -999)
+            self.best_iteration = data.get("best_iteration", 0)
+            self.best_strategy_id = data.get("best_strategy_id")
+            self.best_criteria = data.get("best_criteria", dict(DEFAULT_CRITERIA))
+            self.best_config = data.get("best_config", dict(DEFAULT_BACKTEST_CONFIG))
+            self.current_criteria = data.get("current_criteria", dict(DEFAULT_CRITERIA))
+            self.current_config = data.get("current_config", dict(DEFAULT_BACKTEST_CONFIG))
+            self.current_reflection = data.get("current_reflection", "")
+            self.current_next_prompt = data.get("current_next_prompt", "")
+
+            # 恢復最近迭代摘要（不完整恢復，只供歷史參考）
+            recent = data.get("recent_iterations", [])
+            for r in recent:
+                self.iterations.append(IterationResult(
+                    iteration=r.get("iteration", 0),
+                    timestamp="",
+                    criteria=r.get("criteria", {}),
+                    config={},
+                    screener_summary="",
+                    backtest_statistics=r.get("backtest_statistics", {}),
+                    composite_score=r.get("composite_score", 0),
+                ))
+
+            logger.info(
+                f"狀態已從 checkpoint 恢復: iteration={self.current_iteration}, "
+                f"best_score={self.best_score}, 歷史記錄={len(self.iterations)} 條"
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Checkpoint 恢復失敗: {e}")
+            return False

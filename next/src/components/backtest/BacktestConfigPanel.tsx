@@ -20,6 +20,10 @@ interface Props {
   onRun: () => void;
   /** 是否正在運行回測 */
   loading?: boolean;
+  /** 是否自動保存回測結果到數據庫 */
+  autoSave?: boolean;
+  /** 切換自動保存開關 */
+  onToggleAutoSave?: (value: boolean) => void;
 }
 
 /**
@@ -28,8 +32,10 @@ interface Props {
  * @param onChange 配置變更回調
  * @param onRun 運行回測回調
  * @param loading 是否運行中
+ * @param autoSave 是否自動保存
+ * @param onToggleAutoSave 切換自動保存
  */
-export function BacktestConfigPanel({ config, onChange, onRun, loading }: Props) {
+export function BacktestConfigPanel({ config, onChange, onRun, loading, autoSave = true, onToggleAutoSave }: Props) {
   const update = <K extends keyof BacktestConfigDto>(key: K, value: BacktestConfigDto[K]) =>
     onChange({ ...config, [key]: value });
 
@@ -43,6 +49,18 @@ export function BacktestConfigPanel({ config, onChange, onRun, loading }: Props)
         </Button>
       </CardHeader>
       <CardContent>
+        {/* 自動保存開關 */}
+        {onToggleAutoSave && (
+          <label className="flex items-center gap-2 cursor-pointer mb-3 p-2 rounded-md bg-bg-hover border border-border-subtle">
+            <input
+              type="checkbox"
+              checked={autoSave}
+              onChange={(e) => onToggleAutoSave(e.target.checked)}
+              className="w-4 h-4 rounded border-border accent-accent"
+            />
+            <span className="text-xs text-slate-200">回測完成後自動保存到數據庫（供 AI 優化參考）</span>
+          </label>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <Field label="开始日期">
             <Input type="date" value={config.startDate} onChange={(e) => update('startDate', e.target.value)} />

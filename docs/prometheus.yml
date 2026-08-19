@@ -1,0 +1,21 @@
+# Prometheus 抓取配置
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Agent 服務指標
+  - job_name: "agent"
+    metrics_path: /api/agent/metrics
+    static_configs:
+      - targets: ["agent:8100"]
+        labels:
+          service: "trading-workstation-agent"
+
+  # Java 後端 Actuator 指標
+  - job_name: "java-backend"
+    metrics_path: /TradingWorkstation/actuator/prometheus
+    static_configs:
+      - targets: ["java:8090"]
+        labels:
+          service: "trading-workstation-backend"
