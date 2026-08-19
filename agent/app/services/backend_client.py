@@ -182,6 +182,25 @@ class BackendClient:
         )
         return data.get("data", {})
 
+    async def get_latest_trade_date(self) -> str | None:
+        """獲取數據庫中已有數據的最新交易日。
+
+        用於校準 AI 策略優化的基準日期，避免使用未來日期或缺失數據的日期。
+        後端 /api/dashboard/summary 返回 latestTradeDate 字段。
+
+        Returns:
+            str | None: 最新交易日字符串（YYYY-MM-DD），後端不可用時返回 None
+        """
+        try:
+            data = await self.get_market_overview()
+            latest = data.get("latestTradeDate")
+            if latest:
+                return str(latest)[:10]  # 確保 YYYY-MM-DD 格式
+            return None
+        except Exception as e:
+            logger.warning(f"獲取最新交易日失敗: {e}")
+            return None
+
     async def get_industries(self, code: str = None, industry: str = None) -> list[dict[str, Any]]:
         """查詢股票行業分類數據。"""
         params = {}

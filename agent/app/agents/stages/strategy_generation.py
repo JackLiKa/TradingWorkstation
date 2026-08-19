@@ -13,7 +13,14 @@ from app.agents.few_shot import get_few_shot
 
 logger = logging.getLogger("agent.stage.strategy")
 
-SYSTEM_PROMPT = "你是一個專業的量化策略設計師，擅長 A 股選股策略設計和參數調優。"
+SYSTEM_PROMPT = """你是一個專業的量化策略設計師，擅長 A 股選股策略設計和參數調優。
+
+【數據真實性鐵律】
+- reasoning 中引用的市場數據、歷史評分、回測指標必須來自上方 prompt 提供的輸入
+- 禁止編造未在輸入中出現的歷史回測結果、市場數據、個股表現
+- 禁止引用訓練記憶中的 A 股歷史行情或個股數據來支撐調整理由
+- 調整理由必須基於上方「市場分析」「上一輪反思結論」「歷史優化記錄」中的具體內容
+- 如果引用歷史經驗，必須是上方 RAG 區塊中實際提供的經驗，不要編造經驗"""
 
 PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析結果生成選股條件。
 
@@ -40,14 +47,21 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 {few_shot}
 
 ## 你的任務
-1. 根據市場分析和反思結論，調整選股條件
-2. 參考歷史相似經驗（如有），避免重複歷史上效果差的策略
+1. 根據上方「市場分析」和「上一輪反思結論」，調整選股條件
+2. 參考上方「歷史優化記錄」和 RAG 經驗（如有），避免重複歷史上效果差的策略
 3. 每次只調整 1-3 個參數，不要大幅變動
-4. reasoning 必須說明：為何調整這些參數 + 預期效果 + 是否借鑒了歷史經驗
+4. reasoning 必須說明：為何調整這些參數 + 預期效果 + 是否借鑒了上方提供的歷史經驗
+
+【數據引用要求】
+- reasoning 中引用的市場狀況必須來自上方「市場分析」區塊
+- reasoning 中引用的歷史評分/收益/回撤必須來自上方「歷史優化記錄」區塊
+- reasoning 中引用的歷史經驗必須來自上方 RAG 區塊，禁止編造未提供的經驗
+- 禁止引用訓練記憶中的 A 股歷史行情、個股數據、政策事件
+- 如果上方輸入數據不足，在 reasoning 中標註「數據不足」而非編造
 
 請嚴格按以下 JSON 格式返回（不要加 markdown 代碼塊標記）:
 {{
-  "reasoning": "調整理由（2-3句話，說明為何調整這些參數及預期效果）",
+  "reasoning": "調整理由（2-3句話，說明為何調整這些參數及預期效果，引用上方輸入中的具體數據）",
   "criteria": {{
     "asOfDate": "{asof_date}",
     "adjustflag": {adjustflag},
@@ -100,7 +114,8 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 - 只調整選股條件，不要改變回測配置
 - JSON 中不要加 ```json 標記
 - 只填寫需要調整的字段，其餘保持 null/false/"any"
-- 常用參數範圍參考: minTurn 0.5-5.0, minVolumeRatio 0.5-3.0, minReturn20 -10~20, minRsi14 20-80, macdCrossWithinDays 1-10"""
+- 常用參數範圍參考: minTurn 0.5-5.0, minVolumeRatio 0.5-3.0, minReturn20 -10~20, minRsi14 20-80, macdCrossWithinDays 1-10
+- reasoning 中禁止編造未在上方輸入中出現的數據"""
 
 
 class StrategyGenerationStage(BaseStage):

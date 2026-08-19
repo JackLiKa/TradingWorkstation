@@ -1,0 +1,117 @@
+{
+  "collection_name": "optimization_experiences",
+  "enable_dynamic_field": true,
+  "fields": [
+    {
+      "auto_id": true,
+      "default_value": null,
+      "dim": null,
+      "dtype": "int64",
+      "element_type": null,
+      "is_primary": true,
+      "max_capacity": null,
+      "max_length": null,
+      "name": "id",
+      "nullable": false
+    },
+    {
+      "auto_id": false,
+      "default_value": null,
+      "dim": 512,
+      "dtype": "float_vector",
+      "element_type": null,
+      "is_primary": false,
+      "max_capacity": null,
+      "max_length": null,
+      "name": "embedding",
+      "nullable": false
+    },
+    {
+      "auto_id": false,
+      "default_value": null,
+      "dim": null,
+      "dtype": "int64",
+      "element_type": null,
+      "is_primary": false,
+      "max_capacity": null,
+      "max_length": null,
+      "name": "iteration",
+      "nullable": false
+    },
+    {
+      "auto_id": false,
+      "default_value": null,
+      "dim": null,
+      "dtype": "varchar",
+      "element_type": null,
+      "is_primary": false,
+      "max_capacity": null,
+      "max_length": 2000,
+      "name": "market_context",
+      "nullable": false
+    },
+    {
+      "auto_id": false,
+      "default_value": null,
+      "dim": null,
+      "dtype": "varchar",
+      "element_type": null,
+      "is_primary": false,
+      "max_capacity": null,
+      "max_length": 4000,
+      "name": "criteria_json",
+      "nullable": false
+    },
+    {
+      "auto_id": false,
+      "default_value": null,
+      "dim": null,
+      "dtype": "varchar",
+      "element_type": null,
+      "is_primary": false,
+      "max_capacity": null,
+      "max_length": 2000,
+      "name": "result_json",
+      "nullable": false
+    },
+    {
+      "auto_id": false,
+      "default_value": null,
+      "dim": null,
+      "dtype": "varchar",
+      "element_type": null,
+      "is_primary": false,
+      "max_capacity": null,
+      "max_length": 2000,
+      "name": "reflection",
+      "nullable": false
+    },
+    {
+      "auto_id": false,
+      "default_value": null,
+      "dim": null,
+      "dtype": "float",
+      "element_type": null,
+      "is_primary": false,
+      "max_capacity": null,
+      "max_length": null,
+      "name": "composite_score",
+      "nullable": false
+    },
+    {
+      "auto_id": false,
+      "default_value": null,
+      "dim": null,
+      "dtype": "varchar",
+      "element_type": null,
+      "is_primary": false,
+      "max_capacity": null,
+      "max_length": 50,
+      "name": "timestamp",
+      "nullable": false
+    }
+  ],
+  "properties": {},
+  "schema_format_version": 2,
+  "version": 1
+}

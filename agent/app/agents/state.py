@@ -43,6 +43,41 @@ DEFAULT_BACKTEST_CONFIG: dict[str, Any] = {
 }
 
 
+def build_default_criteria(latest_trade_date: str | None = None) -> dict[str, Any]:
+    """構建預設選股條件，基準日期校準到數據庫最新交易日。
+
+    Args:
+        latest_trade_date: 數據庫最新交易日（YYYY-MM-DD）。None 時用年初。
+
+    Returns:
+        dict: 預設選股條件
+    """
+    criteria = dict(DEFAULT_CRITERIA)
+    if latest_trade_date:
+        # asOfDate 用最新交易日所在年的 1/1
+        year = latest_trade_date[:4]
+        criteria["asOfDate"] = f"{year}-01-01"
+    return criteria
+
+
+def build_default_backtest_config(latest_trade_date: str | None = None) -> dict[str, Any]:
+    """構建預設回測配置，日期校準到數據庫最新交易日。
+
+    Args:
+        latest_trade_date: 數據庫最新交易日（YYYY-MM-DD）。None 時用今天。
+
+    Returns:
+        dict: 預設回測配置，startDate=年初, endDate=最新交易日
+    """
+    config = dict(DEFAULT_BACKTEST_CONFIG)
+    if latest_trade_date:
+        year = latest_trade_date[:4]
+        config["startDate"] = f"{year}-01-01"
+        config["endDate"] = latest_trade_date
+    return config
+
+
+
 @dataclass
 class StageResult:
     """單個 AI 節點的執行結果。"""

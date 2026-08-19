@@ -78,8 +78,8 @@ PROVIDERS: dict[str, ModelInfo] = {
     ),
     "glm-flash": ModelInfo(
         provider="glm-flash",
-        display_name="GLM-4-Flash（免費）",
-        model_id="glm-4-flash",
+        display_name="GLM-4.5-Flash（免費）",
+        model_id="glm-4.5-flash",
         base_url="https://open.bigmodel.cn/api/paas/v4",
         api_key_env="GLM_API_KEY",
         is_free=True,

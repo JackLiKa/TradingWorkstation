@@ -26,6 +26,8 @@ from app.agents.state import (
     StageResult,
     DEFAULT_CRITERIA,
     DEFAULT_BACKTEST_CONFIG,
+    build_default_criteria,
+    build_default_backtest_config,
 )
 from app.agents.scoring import compute_composite_score
 from app.agents.judge import JudgeAI
@@ -68,16 +70,19 @@ _prompt_stage = PromptGenerationStage()
 _judge = JudgeAI(pass_threshold=60.0)
 
 
-async def _load_best_strategy_from_db() -> tuple[dict, dict, float, Optional[int]]:
+async def _load_best_strategy_from_db(latest_trade_date: str | None = None) -> tuple[dict, dict, float, Optional[int]]:
     """從數據庫讀取評分最高的策略作為 f0。
 
     評分從策略的 result.statistics 計算（而非名稱解析），確保可靠性。
+    無歷史策略時返回的默認配置會校準到 latest_trade_date。
     """
+    default_criteria = build_default_criteria(latest_trade_date)
+    default_config = build_default_backtest_config(latest_trade_date)
     try:
         strategies = await backend_client.list_strategies()
         if not strategies:
             logger.info("數據庫無已保存策略，使用默認參數")
-            return dict(DEFAULT_CRITERIA), dict(DEFAULT_BACKTEST_CONFIG), -999, None
+            return default_criteria, default_config, -999, None
 
         best_score = -999
         best_id = None
@@ -124,13 +129,13 @@ async def _load_best_strategy_from_db() -> tuple[dict, dict, float, Optional[int
 
         if best_id is None or best_criteria is None:
             logger.info("無法找到有評分的策略，使用默認參數")
-            return dict(DEFAULT_CRITERIA), dict(DEFAULT_BACKTEST_CONFIG), -999, None
+            return default_criteria, default_config, -999, None
 
         logger.info(f"從數據庫載入最佳策略: id={best_id}, 評分={best_score}")
         return best_criteria, best_config, best_score, best_id
     except Exception as e:
         logger.warning(f"從數據庫讀取策略失敗: {e}，使用默認參數")
-        return dict(DEFAULT_CRITERIA), dict(DEFAULT_BACKTEST_CONFIG), -999, None
+        return default_criteria, default_config, -999, None
 
 
 async def run_optimization_loop():
@@ -164,7 +169,14 @@ async def run_optimization_loop():
     if restored and state.best_score > -999:
         logger.info(f"從 checkpoint 恢復: iteration={state.current_iteration}, best_score={state.best_score}")
 
-    criteria, config, db_best_score, db_strategy_id = await _load_best_strategy_from_db()
+    # === 校準基準日期到數據庫最新交易日 ===
+    latest_trade_date = await backend_client.get_latest_trade_date()
+    if latest_trade_date:
+        logger.info(f"數據庫最新交易日: {latest_trade_date}，基準日期已校準")
+    else:
+        logger.warning("無法獲取最新交易日，使用默認日期（今天）")
+
+    criteria, config, db_best_score, db_strategy_id = await _load_best_strategy_from_db(latest_trade_date)
     if db_best_score > -999:
         # DB 有策略時，用 DB 的（權威來源），但保留 checkpoint 的 reflection/next_prompt
         state.current_criteria = criteria
@@ -176,11 +188,12 @@ async def run_optimization_loop():
         state.best_config = dict(config)
         logger.info(f"f0 = 數據庫最佳策略 (評分={db_best_score}, id={db_strategy_id})")
     else:
-        state.current_criteria = dict(DEFAULT_CRITERIA)
-        state.current_config = dict(DEFAULT_BACKTEST_CONFIG)
-        state.best_criteria = dict(DEFAULT_CRITERIA)
-        state.best_config = dict(DEFAULT_BACKTEST_CONFIG)
-        logger.info("f0 = 默認策略（數據庫無歷史策略）")
+        # 無歷史策略時用默認配置，日期校準到最新交易日
+        state.current_criteria = build_default_criteria(latest_trade_date)
+        state.current_config = build_default_backtest_config(latest_trade_date)
+        state.best_criteria = dict(state.current_criteria)
+        state.best_config = dict(state.current_config)
+        logger.info(f"f0 = 默認策略（數據庫無歷史策略，日期校準到 {latest_trade_date or '今天'}）")
 
     while not _stop_event.is_set():
         iteration = state.current_iteration + 1
