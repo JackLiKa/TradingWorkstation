@@ -1,0 +1,38 @@
+# Java 後端 .dockerignore — 減少 Docker build context
+
+# ===== VCS =====
+.git
+.gitignore
+.github
+
+# ===== IDE =====
+.vscode
+.idea
+*.swp
+
+# ===== 文檔 =====
+*.md
+docs/
+LICENSE
+
+# ===== 環境配置 =====
+.env
+.env.*
+
+# ===== 構建產物 =====
+target/
+*.jar
+*.class
+build/
+
+# ===== Maven 本地倉庫（不應進入鏡像）=====
+.mvn/wrapper/maven-wrapper.jar
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Docker 自身 =====
+Dockerfile
+.dockerignore
+docker-compose*.yml

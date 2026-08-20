@@ -1,0 +1,42 @@
+# Next.js 前端 .dockerignore — 減少 Docker build context
+
+# ===== VCS =====
+.git
+.gitignore
+.github
+
+# ===== IDE =====
+.vscode
+.idea
+*.swp
+
+# ===== 文檔 =====
+*.md
+docs/
+LICENSE
+
+# ===== 環境配置 =====
+.env
+.env.local
+.env.*.local
+
+# ===== 構建產物 / 依賴 =====
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# ===== 運行時 =====
+logs/
+data/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Docker 自身 =====
+Dockerfile
+.dockerignore
+docker-compose*.yml

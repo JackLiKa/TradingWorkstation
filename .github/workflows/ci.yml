@@ -26,6 +26,41 @@ jobs:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
           GITLEAKS_CONFIG: .github/gitleaks.toml
 
+  # ===== 依賴漏洞掃描 =====
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: agent/requirements.txt
+
+      - name: Install pip-audit
+        run: pip install pip-audit>=2.7.0,<3.0.0
+
+      - name: Scan Python dependencies (Agent)
+        run: |
+          cd agent
+          pip-audit -r requirements.txt --strict --desc
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: next/package-lock.json
+
+      - name: Scan npm dependencies (Frontend)
+        run: |
+          cd next
+          npm install --legacy-peer-deps
+          npm audit --audit-level=high --omit=dev || true
+
   # ===== Agent 服務：Lint + 測試 =====
   agent-lint:
     name: Agent Lint (ruff)

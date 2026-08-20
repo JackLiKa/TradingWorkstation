@@ -5,6 +5,8 @@ const nextConfig = {
   // 頁面：/TradingWorkstation/agent、/TradingWorkstation/screener 等
   // API 代理：/TradingWorkstation/api/* → 後端 /TradingWorkstation/api/*
   basePath: '/TradingWorkstation',
+  // Docker 生產部署用 standalone 模式（自包含，無需 node_modules）
+  output: 'standalone',
   // 代理超時：回測等慢操作可能需要 3 分鐘，默認 30 秒不夠
   experimental: {
     proxyTimeout: 180000,
