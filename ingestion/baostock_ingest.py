@@ -638,11 +638,12 @@ def _show_menu() -> dict:
     print(" 11. 增量更新全部（三種復權 + 指數 + 行業）")
     print(" 12. 指定日期範圍 + 全部三種復權 + 指數 + 行業")
     print(" 13. 僅同步行業分類數據")
+    print(" 14. 發現並驗證 Baostock 指數清單（更新 index_list.json）")
     print("=" * 60)
 
     while True:
-        choice = input("\n請輸入選項 (1-13): ").strip()
-        if choice in [str(i) for i in range(1, 14)]:
+        choice = input("\n請輸入選項 (1-14): ").strip()
+        if choice in [str(i) for i in range(1, 15)]:
             choice = int(choice)
             break
         print("無效選項，請重新輸入！")
@@ -677,6 +678,18 @@ def _show_menu() -> dict:
         config["end"] = input("請輸入結束日期 (YYYY-MM-DD，回車=今天): ").strip() or date.today().isoformat()
     elif choice == 13:
         config["adjustflags"] = []; config["industry"] = True
+    elif choice == 14:
+        import subprocess
+        import sys
+
+        print("\n[info] 正在調用 discover_indices.py 發現並驗證指數，預計 2-3 分鐘...")
+        script = Path(__file__).resolve().parent / "discover_indices.py"
+        try:
+            subprocess.run([sys.executable, str(script), "--sample", "--delay", "0.2", "--output", "ingestion/index_list.json"], check=True)
+            print("[info] 指數清單已更新，請重新運行同步選項以拉取指數數據。")
+        except subprocess.CalledProcessError as e:
+            print(f"[error] 指數發現失敗: {e}", file=sys.stderr)
+        return {"incremental": False, "adjustflags": [], "index": False, "industry": False, "discover_only": True}
 
     return config
 
@@ -685,6 +698,9 @@ def _run_interactive() -> int:
     """交互式模式入口。"""
     _load_env(Path(__file__).resolve().parent.parent)
     config = _show_menu()
+
+    if config.get("discover_only"):
+        return 0
 
     incremental = config["incremental"]
     adjustflags = config["adjustflags"]

@@ -37,8 +37,8 @@ Trading Workstation/
 | 后端 | Java 21、Spring Boot 3.3.4、Spring Data JPA (Hibernate 6.5)、HikariCP、Caffeine、springdoc-openapi、Lombok |
 | 前端 | Next.js 15.1.9 (App Router, 混合渲染)、React 19、TypeScript、Tailwind CSS、shadcn/ui、ECharts、SWR |
 | AI Agent | Python 3.10+、FastAPI、Uvicorn、LangGraph 风格优化循环、Devin/Qoder LLM API |
-| 数据库 | MySQL 8.0+（`stock_daily` 表，Baostock A 股日线，约 1100 万条记录） |
-| 数据同步 | Python Baostock 脚本（Java SyncService 通过 ProcessBuilder 编排） |
+| 数据库 | MySQL 8.0+（`stock_daily` / `index_daily` / `index_metadata` / `stock_industry`，A 股日线 + 540 个已验证指数） |
+| 数据同步 | Python Baostock 脚本 + `discover_indices.py` 动态发现 540 个有效指数（Java SyncService 通过 ProcessBuilder 编排） |
 
 ## 服务端口总览
 
@@ -99,9 +99,13 @@ CREATE DATABASE IF NOT EXISTS a_stock_baostock DEFAULT CHARACTER SET utf8mb4 COL
 
 ```bash
 pip install -r ingestion/requirements.txt
-# 交互式菜单（推荐首次使用）
+
+# 1. 发现并更新指数清单（可选，首次使用或需要扩展指数时）
+python ingestion/discover_indices.py --sample --output ingestion/index_list.json
+
+# 2. 交互式菜单同步数据
 python ingestion/baostock_ingest.py
-# 选择选项 11（增量更新全部：三种复权 + 指数）
+# 选择选项 11（增量更新全部：三种复权 + 指数 + 行业）
 ```
 
 ### 5. 启动服务
@@ -194,6 +198,7 @@ curl http://localhost:8100/api/agent/health
 ### AI 策略优化（Agent）
 
 - 六阶段 AI 优化循环：市场新闻分析 → 行业分析选股 → 市场分析 → 策略生成 → 回测反思 → Prompt 生成
+- 市场分析注入 540 个指数数据，支持市场形态、市场广度（market breadth）、行业与风格轮动（rotation）综合判断
 - 每阶段 Judge AI 评分 + 自动重试
 - 始终基于历史最优策略迭代
 - 工作流图谱可视化 + 系统监控面板
@@ -202,8 +207,10 @@ curl http://localhost:8100/api/agent/health
 
 ### 数据同步（Sync）
 
-- Baostock 日线增量/全量拉取写入 `stock_daily`
-- 三种复权（前复权/后复权/不复权）+ 指数数据
+- Baostock 日线增量/全量拉取写入 `stock_daily` 与 `index_daily`
+- `discover_indices.py` 从 Baostock `query_all_stock` 动态发现并验证指数代码，当前清单含 540 个有效指数（综合 / 规模 / 行业 / 策略 / 成长 / 价值 / 主题 / 基金 / 债券）
+- 指数元数据自动同步至 `index_metadata` 表
+- 三种复权（前复权/后复权/不复权）+ 指数数据 + 行业分类
 - 前端同步进度可视化 + 取消功能
 
 ### 系统设置（Settings）
@@ -231,7 +238,7 @@ curl http://localhost:8100/api/agent/health
 
 ## 缓存说明
 
-- **后端 Caffeine**：`dashboardSummary`（60s TTL）、`dashboardMetrics`（30s TTL）。数据同步后等待 TTL 过期或重启后端。
+- **后端 Caffeine**：`dashboardSummary`（60s TTL）、`dashboardMetrics`（30s TTL）、`indexMetadata` / `marketBreadth` / `rotationSignal` / `sectorPerformance`（30s TTL）。数据同步后等待 TTL 过期或重启后端。
 - **前端 SWR**：默认 `revalidateOnFocus`，可通过 `mutate()` 手动刷新。
 
 ## 常见问题
