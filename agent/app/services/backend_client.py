@@ -198,6 +198,28 @@ class BackendClient:
         )
         return data.get("data", {})
 
+    async def get_index_history(self, code: str, days: int = 10) -> list[dict[str, Any]]:
+        """獲取指數最近 N 日的歷史數據（用於市場形態識別）。
+
+        Args:
+            code: 指數代碼（如 sh000001）
+            days: 最近天數（默認 10）
+
+        Returns:
+            list[dict]: 指數日線列表，每項含 code/tradeDate/closePrice/pctChange
+        """
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/stock/index-history",
+                params={"code": code, "days": days},
+                timeout=15,
+            )
+            return data.get("data", [])
+        except Exception as e:
+            logger.warning(f"獲取指數歷史失敗 (code={code}): {e}")
+            return []
+
     async def get_latest_trade_date(self) -> str | None:
         """獲取數據庫中已有數據的最新交易日。
 

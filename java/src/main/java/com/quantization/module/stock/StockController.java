@@ -2,6 +2,7 @@ package com.quantization.module.stock;
 
 import com.quantization.common.api.ApiResponse;
 import com.quantization.module.stock.dto.HotSymbolDto;
+import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.SearchResultDto;
 import com.quantization.module.stock.dto.StockDailyDto;
 import com.quantization.module.stock.dto.StockDailyQueryDto;
@@ -28,10 +29,15 @@ public class StockController {
 
     private final StockService stockService;
     private final StockIndustryRepository industryRepository;
+    private final IndexDailyRepository indexDailyRepository;
 
-    public StockController(StockService stockService, StockIndustryRepository industryRepository) {
+    public StockController(
+            StockService stockService,
+            StockIndustryRepository industryRepository,
+            IndexDailyRepository indexDailyRepository) {
         this.stockService = stockService;
         this.industryRepository = industryRepository;
+        this.indexDailyRepository = indexDailyRepository;
     }
 
     /**
@@ -131,5 +137,31 @@ public class StockController {
     @GetMapping("/industries/list")
     public ApiResponse<List<String>> industryList() {
         return ApiResponse.ok(industryRepository.findDistinctIndustries());
+    }
+
+    // ===== 指數歷史（市場形態識別）=====
+
+    /**
+     * 查詢指數最近 N 日的歷史數據（用於市場形態識別）。
+     *
+     * @param code   指數代碼（如 sh000001）
+     * @param days   最近天數（默認 10）
+     * @return 指數日線列表（按日期升序）
+     */
+    @Operation(summary = "指數最近N日歷史（市場形態識別）")
+    @GetMapping("/index-history")
+    public ApiResponse<List<IndexDailyDto>> indexHistory(
+            @RequestParam String code,
+            @RequestParam(required = false, defaultValue = "10") int days) {
+        LocalDate end = LocalDate.now();
+        LocalDate start = end.minusDays(days + 5); // 多取幾天以防非交易日
+        List<IndexDailyEntity> entities = indexDailyRepository
+                .findByCodeAndTradeDateBetweenOrderByTradeDateAsc(code, start, end);
+        // 只取最近 days 條
+        int size = entities.size();
+        if (size > days) {
+            entities = entities.subList(size - days, size);
+        }
+        return ApiResponse.ok(entities.stream().map(IndexDailyDto::from).toList());
     }
 }

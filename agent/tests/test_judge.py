@@ -106,8 +106,11 @@ class TestJudgeEvaluation:
         assert passed is False
 
     def test_high_quality_market_news(self, judge):
-        """高質量 market_news 應該高分。"""
-        output = """### 市場情緒
+        """高質量 market_news 應該高分（含市場形態識別）。"""
+        output = """### 市場形態
+最近10日漲跌交替6次，交替率67%，平均幅度0.8%，呈現震盪行情。
+
+### 市場情緒
 上證指數上漲0.85%，深證成指上漲1.23%，市場情緒偏多。
 
 ### 利好行業

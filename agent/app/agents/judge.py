@@ -124,26 +124,55 @@ def _check_required_keywords(output: str, keywords: list[str]) -> tuple[float, s
     return 0.2, f"關鍵詞嚴重缺失（{found}/{len(keywords)}），缺: {missing}"
 
 
+def _check_regime_identification(output: str) -> tuple[float, str]:
+    """市場形態識別維度 — 檢查輸出是否包含至少一種形態類型名稱。
+
+    形態類型：震盪/上漲中繼/下跌中繼/上漲趨勢/下跌趨勢
+    """
+    regime_types = [
+        ["震盪", "震荡"],
+        ["上漲中繼", "上涨中继"],
+        ["下跌中繼", "下跌中继"],
+        ["上漲趨勢", "上涨趋势"],
+        ["下跌趨勢", "下跌趋势"],
+    ]
+    text = output.lower()
+    found_types = []
+    for aliases in regime_types:
+        if any(a.lower() in text for a in aliases):
+            found_types.append(aliases[0])
+
+    if len(found_types) >= 1:
+        return 1.0, f"識別到市場形態: {found_types}"
+    return 0.0, "未識別到任何市場形態類型（震盪/上漲中繼/下跌中繼/上漲趨勢/下跌趨勢）"
+
+
 # ===== 各階段的多維度評分定義 =====
 # 維度類型：rule（規則驗證）/ llm（LLM 語義判斷）
 STAGE_RUBRICS: dict[str, list[dict]] = {
     "market_news": [
-        {"name": "長度充分", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
-        {"name": "數據引用", "weight": 0.20, "type": "rule", "check": lambda o, e: _check_data_density(o)},
-        {"name": "結構完整", "weight": 0.20, "type": "rule", "check": lambda o, e: _check_structure(o)},
+        {"name": "長度充分", "weight": 0.10, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
+        {"name": "數據引用", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_data_density(o)},
+        {"name": "結構完整", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_structure(o)},
         {
             "name": "必要內容",
-            "weight": 0.25,
+            "weight": 0.20,
             "type": "rule",
             "check": lambda o, e: _check_required_keywords(
                 o, ["市場情緒|大盤情緒", "利好|強勢", "利空|弱勢", "選股|關注|避開"]
             ),
         },
         {
+            "name": "市場形態識別",
+            "weight": 0.20,
+            "type": "rule",
+            "check": lambda o, e: _check_regime_identification(o),
+        },
+        {
             "name": "內容實質",
             "weight": 0.20,
             "type": "llm",
-            "check": "輸出是否包含具體的行業分析（非空洞套話），是否引用了具體的漲跌幅數據",
+            "check": "輸出是否包含具體的行業分析（非空洞套話），是否引用了具體的漲跌幅數據，市場形態判斷是否有多日數據支撐",
         },
     ],
     "industry_analysis": [
@@ -169,19 +198,25 @@ STAGE_RUBRICS: dict[str, list[dict]] = {
         },
     ],
     "market_analysis": [
-        {"name": "長度充分", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
-        {"name": "數據引用", "weight": 0.25, "type": "rule", "check": lambda o, e: _check_data_density(o)},
+        {"name": "長度充分", "weight": 0.10, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
+        {"name": "數據引用", "weight": 0.20, "type": "rule", "check": lambda o, e: _check_data_density(o)},
         {
             "name": "必要內容",
-            "weight": 0.25,
+            "weight": 0.20,
             "type": "rule",
             "check": lambda o, e: _check_required_keywords(o, ["趨勢|走勢|方向", "波動|震盪|風險", "策略|選股|操作"]),
         },
         {
+            "name": "市場形態識別",
+            "weight": 0.20,
+            "type": "rule",
+            "check": lambda o, e: _check_regime_identification(o),
+        },
+        {
             "name": "內容實質",
-            "weight": 0.35,
+            "weight": 0.30,
             "type": "llm",
-            "check": "市場趨勢判斷是否有邏輯依據，策略類型推薦是否與市場環境匹配",
+            "check": "市場趨勢判斷是否有邏輯依據，策略類型推薦是否與識別到的市場形態匹配（震盪→均值回歸，趨勢→趨勢跟蹤，下跌中繼→防禦）",
         },
     ],
     "strategy_generation": [

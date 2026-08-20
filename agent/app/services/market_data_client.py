@@ -39,12 +39,13 @@ class MarketDataClient:
     """
 
     async def get_market_overview(self) -> dict[str, Any]:
-        """獲取全市場概覽：大盤指數 + 後端統計。
+        """獲取全市場概覽：大盤指數 + 後端統計 + 多日形態。
 
         Returns:
             {
                 "indices": [{"name": "上證指數", "code": "sh000001", "price": 3990.3, "change_pct": 0.19}, ...],
                 "db_stats": {...},  # 來自後端 dashboard
+                "regime": {...},    # 市場形態識別結果
                 "timestamp": "2026-08-18 22:30:00",
             }
         """
@@ -59,11 +60,149 @@ class MarketDataClient:
         except Exception as e:
             logger.warning(f"後端 dashboard 數據獲取失敗: {e}")
 
+        # 獲取多日指數歷史 + 計算市場形態
+        regime = await self._compute_market_regime()
+
         return {
             "indices": indices,
             "db_stats": db_stats,
+            "regime": regime,
             "timestamp": _now_str(),
         }
+
+    async def _compute_market_regime(self) -> dict[str, Any]:
+        """計算市場形態識別結果（基於多日指數歷史）。
+
+        形態類型:
+        - trending_up: 上漲趨勢（連續上漲，回撤小）
+        - trending_down: 下跌趨勢（連續下跌，反彈小）
+        - oscillation: 震盪行情（漲跌交替，幅度有限）
+        - continuation_up: 上漲中繼（上漲後小幅回調，可能繼續上漲）
+        - continuation_down: 下跌中繼（下跌後小幅反彈，可能繼續下跌）
+        - unknown: 數據不足
+
+        Returns:
+            dict: 形態識別結果，含 regime_type, description, multi_day_data
+        """
+        try:
+            from app.services.backend_client import backend_client
+
+            # 獲取上證指數最近 10 日歷史
+            history = await backend_client.get_index_history("sh000001", days=10)
+            if len(history) < 3:
+                return {"regime_type": "unknown", "description": "歷史數據不足", "multi_day_data": []}
+
+            # 計算形態特徵
+            changes = [h.get("pctChange", 0) or 0 for h in history]
+            closes = [h.get("closePrice", 0) or 0 for h in history]
+
+            # 漲跌交替次數
+            alternations = 0
+            for i in range(1, len(changes)):
+                if changes[i] * changes[i - 1] < 0:  # 符號相反
+                    alternations += 1
+
+            # 累計漲幅
+            total_change = sum(changes)
+            # 平均絕對漲跌幅
+            avg_abs_change = sum(abs(c) for c in changes) / len(changes)
+            # 最大單日漲幅/跌幅
+            max_change = max(changes) if changes else 0
+            min_change = min(changes) if changes else 0
+            # 波動率（標準差）
+            if len(changes) > 1:
+                mean_change = sum(changes) / len(changes)
+                variance = sum((c - mean_change) ** 2 for c in changes) / len(changes)
+                volatility = variance**0.5
+            else:
+                volatility = 0
+
+            # 價格趨勢（首尾對比）
+            if closes[0] and closes[-1]:
+                price_change_pct = ((closes[-1] - closes[0]) / closes[0]) * 100
+            else:
+                price_change_pct = 0
+
+            # === 形態判定邏輯 ===
+            alternation_ratio = alternations / (len(changes) - 1) if len(changes) > 1 else 0
+
+            regime_type = "unknown"
+            description = ""
+
+            if alternation_ratio >= 0.6 and avg_abs_change < 1.5:
+                # 漲跌交替頻繁 + 幅度小 → 震盪
+                regime_type = "oscillation"
+                description = (
+                    f"最近{len(changes)}日漲跌交替{alternations}次（交替率{alternation_ratio:.0%}），"
+                    f"平均幅度{avg_abs_change:.2f}%，呈現震盪格局。"
+                    f"累計{total_change:+.2f}%，波動率{volatility:.2f}%。"
+                )
+            elif total_change > 3 and alternation_ratio < 0.3:
+                # 累計上漲 + 很少交替 → 上漲趨勢
+                regime_type = "trending_up"
+                description = (
+                    f"最近{len(changes)}日累計上漲{total_change:+.2f}%，交替僅{alternations}次，呈現上漲趨勢。"
+                )
+            elif total_change < -3 and alternation_ratio < 0.3:
+                # 累計下跌 + 很少交替 → 下跌趨勢
+                regime_type = "trending_down"
+                description = (
+                    f"最近{len(changes)}日累計下跌{total_change:+.2f}%，交替僅{alternations}次，呈現下跌趨勢。"
+                )
+            elif total_change > 1 and alternation_ratio >= 0.3 and alternation_ratio < 0.6:
+                # 上漲但有一定回調 → 上漲中繼
+                regime_type = "continuation_up"
+                description = (
+                    f"最近{len(changes)}日累計{total_change:+.2f}%，"
+                    f"有{alternations}次回調（交替率{alternation_ratio:.0%}），"
+                    f"可能是上漲中繼，短期回調後或繼續上漲。"
+                )
+            elif total_change < -1 and alternation_ratio >= 0.3 and alternation_ratio < 0.6:
+                # 下跌但有一定反彈 → 下跌中繼
+                regime_type = "continuation_down"
+                description = (
+                    f"最近{len(changes)}日累計{total_change:+.2f}%，"
+                    f"有{alternations}次反彈（交替率{alternation_ratio:.0%}），"
+                    f"可能是下跌中繼，短期反彈後或繼續下跌。"
+                )
+            else:
+                regime_type = "oscillation"
+                description = (
+                    f"最近{len(changes)}日累計{total_change:+.2f}%，"
+                    f"交替{alternations}次，平均幅度{avg_abs_change:.2f}%，"
+                    f"暫無明確趨勢，偏震盪。"
+                )
+
+            # 構建多日數據摘要（供 prompt 注入）
+            multi_day_data = []
+            for h in history:
+                multi_day_data.append(
+                    {
+                        "date": str(h.get("tradeDate", "")),
+                        "close": h.get("closePrice", 0),
+                        "pct_chg": h.get("pctChange", 0),
+                    }
+                )
+
+            return {
+                "regime_type": regime_type,
+                "description": description,
+                "multi_day_data": multi_day_data,
+                "metrics": {
+                    "total_change": round(total_change, 2),
+                    "avg_abs_change": round(avg_abs_change, 2),
+                    "max_change": round(max_change, 2),
+                    "min_change": round(min_change, 2),
+                    "volatility": round(volatility, 2),
+                    "alternations": alternations,
+                    "alternation_ratio": round(alternation_ratio, 2),
+                    "price_change_pct": round(price_change_pct, 2),
+                    "days_analyzed": len(changes),
+                },
+            }
+        except Exception as e:
+            logger.warning(f"市場形態計算失敗: {e}")
+            return {"regime_type": "unknown", "description": "計算失敗", "multi_day_data": []}
 
     async def _get_indices_sina(self) -> list[dict[str, Any]]:
         """從新浪財經獲取大盤指數實時行情。
