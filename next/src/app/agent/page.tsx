@@ -251,7 +251,7 @@ export default function AgentPage() {
             <div className="space-y-3">
               {iterations.map((it, idx) => (
                 <AgentIterationCard
-                  key={`${it.iteration}-${it.timestamp}`}
+                  key={`iter-${idx}-${it.iteration}`}
                   iteration={it}
                   isBest={it.iteration === state?.best_iteration}
                   defaultExpanded={idx === 0}
