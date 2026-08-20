@@ -1,5 +1,6 @@
-"""測試 RAG 經驗存儲 — 格式化和降級。"""
+"""測試 RAG 經驗存儲 — 格式化、降級、去重、過濾。"""
 
+from app.services import vector_store
 from app.services.experience_store import (
     format_experiences_for_prompt,
     get_rag_status,
@@ -117,3 +118,77 @@ class TestRagAvailability:
         """is_rag_available 應該返回布爾值。"""
         result = is_rag_available()
         assert isinstance(result, bool)
+
+    def test_get_rag_status_has_retention_config(self):
+        """get_rag_status 應該暴露保留策略配置。"""
+        status = get_rag_status()
+        assert "max_experiences" in status
+        assert "dedup_threshold" in status
+        assert isinstance(status["max_experiences"], int)
+        assert isinstance(status["dedup_threshold"], float)
+
+
+class TestContentHash:
+    """測試內容哈希去重。"""
+
+    def test_same_content_same_hash(self):
+        """相同內容應產生相同哈希。"""
+        h1 = vector_store._compute_content_hash(
+            "市場環境A", {"minTurn": 1.5}, {"totalReturn": 5.0, "maxDrawdown": 3.0, "sharpe": 1.0}
+        )
+        h2 = vector_store._compute_content_hash(
+            "市場環境A", {"minTurn": 1.5}, {"totalReturn": 5.0, "maxDrawdown": 3.0, "sharpe": 1.0}
+        )
+        assert h1 == h2
+
+    def test_different_criteria_different_hash(self):
+        """不同策略條件應產生不同哈希。"""
+        h1 = vector_store._compute_content_hash(
+            "市場環境A", {"minTurn": 1.5}, {"totalReturn": 5.0, "maxDrawdown": 3.0, "sharpe": 1.0}
+        )
+        h2 = vector_store._compute_content_hash(
+            "市場環境A", {"minTurn": 2.0}, {"totalReturn": 5.0, "maxDrawdown": 3.0, "sharpe": 1.0}
+        )
+        assert h1 != h2
+
+    def test_different_market_different_hash(self):
+        """不同市場環境應產生不同哈希。"""
+        h1 = vector_store._compute_content_hash(
+            "牛市", {"minTurn": 1.5}, {"totalReturn": 5.0, "maxDrawdown": 3.0, "sharpe": 1.0}
+        )
+        h2 = vector_store._compute_content_hash(
+            "熊市", {"minTurn": 1.5}, {"totalReturn": 5.0, "maxDrawdown": 3.0, "sharpe": 1.0}
+        )
+        assert h1 != h2
+
+    def test_hash_is_deterministic_length(self):
+        """哈希應為固定長度字符串。"""
+        h = vector_store._compute_content_hash("test", {}, {})
+        assert len(h) == 16  # SHA256 前 16 字符
+
+    def test_inactive_filters_ignored(self):
+        """未激活的條件（None/False/any/0）不應影響哈希。"""
+        h1 = vector_store._compute_content_hash("市場A", {"minTurn": 1.5, "minVolume": None, "industry": "any"}, {})
+        h2 = vector_store._compute_content_hash("市場A", {"minTurn": 1.5, "minVolume": False, "industry": "any"}, {})
+        assert h1 == h2  # None 和 False 都被忽略
+
+
+class TestDedupCheck:
+    """測試近似重複檢測（Milvus 不可用時應安全降級）。"""
+
+    def test_dedup_check_without_milvus(self):
+        """Milvus 不可用時，去重檢查應返回 False（不阻止插入）。"""
+        # 確保 Milvus 未初始化
+        vector_store._milvus = None
+        result = vector_store._check_near_duplicate([0.1] * 512, 50.0)
+        assert result is False
+
+
+class TestRetentionEnforcement:
+    """測試保留策略執行（Milvus 不可用時應安全降級）。"""
+
+    def test_retention_without_milvus(self):
+        """Milvus 不可用時，保留策略應安全跳過。"""
+        vector_store._milvus = None
+        # 不應拋出異常
+        vector_store._enforce_retention()

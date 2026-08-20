@@ -21,6 +21,7 @@ from datetime import datetime
 
 from app.agents.judge import JudgeAI
 from app.agents.monitor import node_monitor
+from app.agents.safety import check_json_output, sanitize_output
 from app.agents.scoring import compute_composite_score
 from app.agents.stages.backtest_reflection import BacktestReflectionStage
 from app.agents.stages.industry_analysis import IndustryAnalysisStage, parse_industry_output
@@ -215,7 +216,7 @@ async def run_optimization_loop():
                 history=state.iterations,
             )
             _add_stage_result(news_result)
-            market_news = news_result.output
+            market_news = sanitize_output(news_result.output)
 
             # === AI 0.5: 行業分析（+ 評委） ===
             state.status_message = f"第 {iteration} 輪：AI 0.5 行業篩選中..."
@@ -250,7 +251,7 @@ async def run_optimization_loop():
                 prev_reflection=state.current_reflection,
             )
             _add_stage_result(market_result)
-            market_context = market_result.output
+            market_context = sanitize_output(market_result.output)
             state.current_market_context = market_context
 
             # === AI 2: 策略生成（+ 評委 + RAG 歷史經驗） ===
@@ -289,8 +290,10 @@ async def run_optimization_loop():
                 rag_experiences=rag_experiences_text,
             )
             _add_stage_result(strategy_result)
+            # JSON 輸出做安全檢查（不替換文本，由 Judge 判定）
+            check_json_output(strategy_result.output)
             parsed = parse_strategy_output(strategy_result.output)
-            strategy_reasoning = parsed.get("reasoning", "")
+            strategy_reasoning = sanitize_output(parsed.get("reasoning", ""))
             new_criteria = parsed.get("criteria", state.current_criteria)
 
             # === 回測（非 AI） ===
@@ -342,7 +345,7 @@ async def run_optimization_loop():
                 history=state.iterations,
             )
             _add_stage_result(reflection_result)
-            reflection = reflection_result.output
+            reflection = sanitize_output(reflection_result.output)
             state.current_reflection = reflection
 
             # === AI 4: 提示詞生成（+ 評委） ===
@@ -358,7 +361,7 @@ async def run_optimization_loop():
                 history=state.iterations,
             )
             _add_stage_result(prompt_result)
-            next_prompt = prompt_result.output
+            next_prompt = sanitize_output(prompt_result.output)
             state.current_next_prompt = next_prompt
 
             # === 記錄迭代結果 ===

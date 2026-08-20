@@ -1,0 +1,38 @@
+# pre-commit hooks — 提交前自動檢查
+# 安裝: pip install pre-commit && pre-commit install
+# 手動運行: pre-commit run --all-files
+
+repos:
+  # ===== Python lint + format =====
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9  # 與 requirements-dev.txt 範圍一致
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^agent/
+      - id: ruff-format
+        files: ^agent/
+
+  # ===== 密鑰洩露掃描 =====
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        args: [--config, .github/gitleaks.toml]
+
+  # ===== 通用檢查 =====
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+        files: \.(yaml|yml)$
+      - id: check-toml
+        files: \.toml$
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: end-of-file-fixer
+        exclude: \.(md|svg|png|jpg|jpeg|gif|ico|pdf|db|sqlite|parquet|arrow)$
+      - id: trailing-whitespace
+        exclude: \.(md|svg|png|jpg|jpeg|gif|ico|pdf)$
+      - id: check-merge-conflict
+      - id: detect-private-key

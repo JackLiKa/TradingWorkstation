@@ -11,6 +11,7 @@
 - 自動降級：Milvus/embedding 不可時靜默跳過，不影響優化循環
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -18,6 +19,10 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("agent.rag")
+
+# ===== 配置 =====
+_MAX_EXPERIENCES = int(os.environ.get("RAG_MAX_EXPERIENCES", "1000"))  # 最多保留經驗數
+_DEDUP_SIMILARITY_THRESHOLD = float(os.environ.get("RAG_DEDUP_THRESHOLD", "0.98"))  # 去重相似度閾值
 
 # 延遲導入 — Milvus 和 sentence-transformers 是可選依賴
 _milvus = None
@@ -152,6 +157,93 @@ def is_available() -> bool:
     return _milvus is not None and _embedding_model is not None
 
 
+def _compute_content_hash(
+    market_context: str,
+    criteria: dict[str, Any],
+    stats: dict[str, Any],
+) -> str:
+    """計算經驗內容的確定性哈希（用於精確去重）。
+
+    只取關鍵字段計算，忽略 reflection（反思文本每次不同但策略可能相同）。
+    """
+    active_filters = {
+        k: v for k, v in sorted(criteria.items()) if v is not None and v is not False and v != "any" and v != 0
+    }
+    key_parts = [
+        market_context[:500],  # 市場環境摘要
+        json.dumps(active_filters, ensure_ascii=False, sort_keys=True),
+        json.dumps({k: stats.get(k, 0) for k in ["totalReturn", "maxDrawdown", "sharpe"]}, ensure_ascii=False),
+    ]
+    return hashlib.sha256("|".join(key_parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _check_near_duplicate(embedding: list[float], composite_score: float) -> bool:
+    """檢查是否已存在近似重複的經驗（高相似度 + 相近分數）。
+
+    Args:
+        embedding: 待插入經驗的向量
+        composite_score: 綜合評分
+
+    Returns:
+        bool: True 表示已存在近似重複，應跳過插入
+    """
+    if not _milvus:
+        return False
+    try:
+        results = _milvus.search(
+            collection_name=COLLECTION_NAME,
+            data=[embedding],
+            limit=1,
+            output_fields=["composite_score"],
+            search_params={"metric_type": "COSINE", "params": {"radius": _DEDUP_SIMILARITY_THRESHOLD}},
+        )
+        if results and results[0]:
+            hit = results[0][0]
+            score = hit.get("distance", 0)
+            existing_score = hit.get("entity", {}).get("composite_score", 0)
+            if score >= _DEDUP_SIMILARITY_THRESHOLD:
+                # 如果新經驗分數更高，允許插入（會在後續清理中保留更好的）
+                if composite_score > existing_score:
+                    logger.info(
+                        f"RAG: 檢測到近似重複 (sim={score:.3f}) 但新分數更高 ({composite_score} > {existing_score})，允許插入"
+                    )
+                    return False
+                logger.info(f"RAG: 跳過近似重複經驗 (sim={score:.3f}, score={existing_score})")
+                return True
+    except Exception as e:
+        logger.debug(f"RAG 去重檢查失敗（忽略，繼續插入）: {e}")
+    return False
+
+
+def _enforce_retention():
+    """執行保留策略：當經驗數超過上限時，刪除低分舊經驗。"""
+    if not _milvus:
+        return
+    try:
+        # 查詢當前記錄數
+        stats = _milvus.get_collection_stats(COLLECTION_NAME)
+        count = stats.get("row_count", 0)
+        if count <= _MAX_EXPERIENCES:
+            return
+        # 需要刪除的數量
+        to_delete = count - _MAX_EXPERIENCES
+        logger.info(f"RAG: 經驗數 {count} 超過上限 {_MAX_EXPERIENCES}，清理 {to_delete} 條低分舊經驗")
+        # 查詢最低分的記錄（按 composite_score 升序）
+        results = _milvus.query(
+            collection_name=COLLECTION_NAME,
+            filter="composite_score < 0",  # 只清理負分（明顯失敗的）經驗
+            output_fields=["id"],
+            limit=to_delete,
+        )
+        if results:
+            ids_to_delete = [r["id"] for r in results if "id" in r]
+            if ids_to_delete:
+                _milvus.delete(collection_name=COLLECTION_NAME, ids=ids_to_delete)
+                logger.info(f"RAG: 已清理 {len(ids_to_delete)} 條低分經驗")
+    except Exception as e:
+        logger.debug(f"RAG 保留策略執行失敗（忽略）: {e}")
+
+
 def store_experience(
     iteration: int,
     market_context: str,
@@ -162,6 +254,9 @@ def store_experience(
     timestamp: str = "",
 ) -> bool:
     """存儲一輪優化經驗到向量數據庫。
+
+    含去重邏輯：插入前檢查是否已存在近似重複經驗（高相似度 + 相近分數）。
+    若新經驗分數更高則允許插入（後續清理保留更好的）。
 
     Args:
         iteration: 迭代輪次
@@ -189,6 +284,10 @@ def store_experience(
         if embedding is None:
             return False
 
+        # 去重檢查：近似重複且分數不高時跳過
+        if _check_near_duplicate(embedding, composite_score):
+            return True  # 視為成功（已存在等效經驗）
+
         # 截斷字段以適應 Milvus VARCHAR 限制
         from datetime import datetime
 
@@ -208,6 +307,9 @@ def store_experience(
             ],
         )
         logger.info(f"RAG: 已存儲第 {iteration} 輪經驗 (score={composite_score})")
+
+        # 執行保留策略
+        _enforce_retention()
         return True
     except Exception as e:
         logger.warning(f"RAG 存儲經驗失敗: {e}")
@@ -219,14 +321,19 @@ def search_similar_experiences(
     current_criteria: dict[str, Any],
     top_k: int = 3,
     min_score: float = 0.5,
+    min_composite_score: float = 0.0,
 ) -> list[dict[str, Any]]:
     """搜索與當前市場環境相似的歷史優化經驗。
+
+    支持業務級過濾：只返回 composite_score >= min_composite_score 的經驗，
+    避免返回明顯失敗的策略作為參考。
 
     Args:
         market_context: 當前市場環境分析
         current_criteria: 當前選股條件（用於構建查詢語義）
         top_k: 返回 top_k 條最相似經驗
         min_score: 最低相似度閾值（cosine similarity）
+        min_composite_score: 最低綜合評分閾值（過濾失敗策略）
 
     Returns:
         list[dict]: 歷史經驗列表，每項含 iteration/criteria/result/reflection/score
@@ -248,12 +355,15 @@ def search_similar_experiences(
         if query_embedding is None:
             return []
 
+        # 構建業務過濾表達式（只返回分數達標的經驗）
+        filter_expr = f"composite_score >= {min_composite_score}" if min_composite_score > 0 else ""
+
         # 搜索相似經驗
-        results = _milvus.search(
-            collection_name=COLLECTION_NAME,
-            data=[query_embedding],
-            limit=top_k,
-            output_fields=[
+        search_kwargs = {
+            "collection_name": COLLECTION_NAME,
+            "data": [query_embedding],
+            "limit": top_k,
+            "output_fields": [
                 "iteration",
                 "market_context",
                 "criteria_json",
@@ -262,8 +372,12 @@ def search_similar_experiences(
                 "composite_score",
                 "timestamp",
             ],
-            search_params={"metric_type": "COSINE", "params": {"radius": min_score}},
-        )
+            "search_params": {"metric_type": "COSINE", "params": {"radius": min_score}},
+        }
+        if filter_expr:
+            search_kwargs["filter"] = filter_expr
+
+        results = _milvus.search(**search_kwargs)
 
         if not results or not results[0]:
             return []
@@ -291,7 +405,7 @@ def search_similar_experiences(
                 }
             )
 
-        logger.info(f"RAG: 搜索到 {len(experiences)} 條相似經驗 (top_k={top_k})")
+        logger.info(f"RAG: 搜索到 {len(experiences)} 條相似經驗 (top_k={top_k}, min_score={min_composite_score})")
         return experiences
     except Exception as e:
         logger.warning(f"RAG 搜索經驗失敗: {e}")
@@ -306,5 +420,8 @@ def get_status() -> dict[str, Any]:
         "milvus_connected": _milvus is not None,
         "embedding_model_loaded": _embedding_model is not None,
         "init_error": _init_error,
+        "init_fail_count": _init_fail_count,
         "collection": COLLECTION_NAME if _milvus else "",
+        "max_experiences": _MAX_EXPERIENCES,
+        "dedup_threshold": _DEDUP_SIMILARITY_THRESHOLD,
     }

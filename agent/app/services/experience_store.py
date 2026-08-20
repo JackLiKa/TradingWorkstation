@@ -43,16 +43,19 @@ def retrieve_relevant_experiences(
     market_context: str,
     current_criteria: dict[str, Any],
     top_k: int = 3,
+    min_composite_score: float = 0.0,
 ) -> list[dict[str, Any]]:
     """檢索與當前市場環境相似的歷史優化經驗。
 
     在 AI 2 策略生成前調用，結果注入 prompt。
+    只返回 composite_score >= min_composite_score 的經驗，避免參考失敗策略。
     """
     return vector_store.search_similar_experiences(
         market_context=market_context,
         current_criteria=current_criteria,
         top_k=top_k,
         min_score=0.3,  # cosine similarity 閾值
+        min_composite_score=min_composite_score,
     )
 
 

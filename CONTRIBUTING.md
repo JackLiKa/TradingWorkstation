@@ -88,17 +88,24 @@ perf(screener): 并行化指标计算
 ### Pull Request 流程
 
 1. Fork 仓库并创建功能分支
-2. 确保代码通过编译和测试：
+2. 安装 pre-commit hooks（首次贡献）：
    ```bash
-   # 后端
+   pip install pre-commit
+   pre-commit install
+   ```
+3. 确保代码通过编译和测试：
+   ```bash
+   # 後端
    cd java && mvn -DskipTests compile
    # 前端
    cd next && npx tsc --noEmit && npx eslint src/
    # Agent
-   cd agent && python -c "import app.main"
+   cd agent && python -m pytest tests/ -v
+   cd agent && ruff check app/ tests/ && ruff format --check app/ tests/
    ```
-3. 提交 PR，描述变更内容和测试方式
-4. 等待代码审查
+4. 提交前自动检查（pre-commit 会自动运行 ruff + gitleaks）
+5. 提交 PR，描述变更内容和测试方式
+6. 等待代码审查
 
 ### 模块修改指南
 
