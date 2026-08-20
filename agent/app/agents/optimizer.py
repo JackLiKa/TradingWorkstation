@@ -162,6 +162,10 @@ async def run_optimization_loop():
     # 從數據庫讀取最高分策略作為 f0
     state.status_message = "從數據庫載入最佳策略..."
 
+    # 保存用戶在 /start 時手動設置的回測配置（用戶值優先，不被 checkpoint/DB 策略覆蓋）
+    # 必須在 restore() 之前捕獲，因為 restore() 會覆蓋 state.current_config
+    user_config_overrides = dict(state.current_config)
+
     # 嘗試從 checkpoint 恢復狀態（崩潰恢復）
     restored = state.restore()
     if restored and state.best_score > -999:
@@ -178,20 +182,27 @@ async def run_optimization_loop():
     if db_best_score > -999:
         # DB 有策略時，用 DB 的（權威來源），但保留 checkpoint 的 reflection/next_prompt
         state.current_criteria = criteria
-        state.current_config = config
+        # 用戶手動設置的配置字段優先保留，其餘從 DB 最佳策略繼承
+        state.current_config = {**config, **user_config_overrides}
         state.best_score = db_best_score
         state.best_strategy_id = db_strategy_id
         # 同步保存最優策略的 criteria/config，供後續迭代回退使用
         state.best_criteria = dict(criteria)
         state.best_config = dict(config)
         logger.info(f"f0 = 數據庫最佳策略 (評分={db_best_score}, id={db_strategy_id})")
+        if user_config_overrides:
+            logger.info(f"用戶手動配置已保留: {list(user_config_overrides.keys())}")
     else:
         # 無歷史策略時用默認配置，日期校準到最新交易日
         state.current_criteria = build_default_criteria(latest_trade_date)
-        state.current_config = build_default_backtest_config(latest_trade_date)
+        default_config = build_default_backtest_config(latest_trade_date)
+        # 用戶手動設置的配置字段優先保留，其餘從默認配置繼承
+        state.current_config = {**default_config, **user_config_overrides}
         state.best_criteria = dict(state.current_criteria)
         state.best_config = dict(state.current_config)
         logger.info(f"f0 = 默認策略（數據庫無歷史策略，日期校準到 {latest_trade_date or '今天'}）")
+        if user_config_overrides:
+            logger.info(f"用戶手動配置已保留: {list(user_config_overrides.keys())}")
 
     while not _stop_event.is_set():
         iteration = state.current_iteration + 1
