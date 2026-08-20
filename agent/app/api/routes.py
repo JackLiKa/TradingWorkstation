@@ -440,6 +440,24 @@ async def get_timeline():
     return node_monitor.get_timeline()
 
 
+@router.get("/monitor/errors")
+async def get_error_experiences(limit: int = 100):
+    """獲取錯誤/重試經驗記錄（持久化存儲，供後續優化復用）。
+
+    Args:
+        limit: 最多返回的記錄數（默認 100）
+
+    Returns:
+        dict: 錯誤記錄列表 + 統計摘要
+    """
+    from app.services import error_store
+
+    return {
+        "errors": error_store.get_all_errors(limit),
+        "stats": error_store.get_error_stats(),
+    }
+
+
 @router.get("/monitor/analyze")
 async def analyze_monitor():
     """監測 AI 分析當前系統狀態 — 調用 LLM 分析異常並給出建議。

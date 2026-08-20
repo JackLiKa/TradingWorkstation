@@ -45,12 +45,15 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 
 {rag_experiences}
 
+{error_lessons}
+
 {few_shot}
 
 ## 你的任務
 1. 根據上方「市場分析」和「上一輪反思結論」，調整選股條件
 2. 參考上方「歷史優化記錄」和 RAG 經驗（如有），避免重複歷史上效果差的策略
-3. 每次只調整 1-3 個參數，不要大幅變動
+3. 如有「歷史錯誤教訓」，確保不重複同類錯誤（特別是 JSON 格式錯誤）
+4. 每次只調整 1-3 個參數，不要大幅變動
 4. reasoning 必須說明：為何調整這些參數 + 預期效果 + 是否借鑒了上方提供的歷史經驗
 
 【數據引用要求】
@@ -166,6 +169,11 @@ class StrategyGenerationStage(BaseStage):
         asof_date = current_criteria.get("asOfDate", datetime.now().strftime("%Y-%m-%d"))
         adjustflag = current_criteria.get("adjustflag", 3)
 
+        # 注入歷史錯誤教訓（避免重複犯錯）
+        from app.services import error_store
+
+        error_lessons = error_store.format_errors_for_prompt("strategy_generation", limit=3)
+
         prompt = PROMPT_TEMPLATE.format(
             market_context=market_context,
             prev_reflection=prev_reflection if prev_reflection else "無",
@@ -174,6 +182,7 @@ class StrategyGenerationStage(BaseStage):
             config=json.dumps(config, ensure_ascii=False, indent=2),
             history_text=history_text if history_text else "無（首輪）",
             rag_experiences=rag_experiences if rag_experiences else "無（RAG 不可用或無相似經驗）",
+            error_lessons=error_lessons if error_lessons else "無（無歷史錯誤記錄）",
             asof_date=asof_date,
             adjustflag=adjustflag,
             few_shot=get_few_shot("strategy_generation"),
@@ -185,17 +194,16 @@ class StrategyGenerationStage(BaseStage):
 
 
 def parse_strategy_output(response: str) -> dict[str, Any]:
-    """解析策略生成 AI 的 JSON 輸出。"""
-    json_start = response.find("```json")
-    if json_start >= 0:
-        json_start = response.find("{", json_start)
-        json_end = response.rfind("}")
-        if json_start >= 0 and json_end > json_start:
-            return json.loads(response[json_start : json_end + 1])
+    """解析策略生成 AI 的 JSON 輸出 — 使用穩健的多級降級提取。
 
-    brace_start = response.find("{")
-    brace_end = response.rfind("}")
-    if brace_start >= 0 and brace_end > brace_start:
-        return json.loads(response[brace_start : brace_end + 1])
+    降級策略：
+    1. 直接解析 / ```json 代碼塊 / 棧匹配 / 逐候選 / 修復常見錯誤
+    2. 全部失敗 → 拋出 ValueError（由 base.py 重試機制處理）
+    """
+    from app.utils.json_extractor import extract_json
 
-    raise ValueError(f"無法從 LLM 響應中提取 JSON: {response[:200]}")
+    data = extract_json(response)
+    if data is not None:
+        return data
+
+    raise ValueError(f"無法從 LLM 響應中提取 JSON（已嘗試所有降級策略）: {response[:200]}")

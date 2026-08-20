@@ -174,6 +174,22 @@ class BaseStage(ABC):
                         else:
                             logger.warning(f"[{self.stage_name}] 評委未通過，已達最大嘗試次數，放行")
                             state.current_stage_status = "passed_with_warning"
+
+                            # 持久化評委拒絕記錄
+                            from app.services import error_store
+
+                            error_store.record_error(
+                                stage_name=self.stage_name,
+                                error_type="judge_rejection",
+                                error_message=f"評委未通過(分數={judge_score}): {judge_feedback[:200]}",
+                                raw_output_preview=last_output[:500],
+                                iteration=state.current_iteration + 1,
+                                run_id=node_monitor.run_id,
+                                attempts=attempts,
+                                provider=last_llm_response.provider if last_llm_response else "",
+                                recovered=True,
+                                recovery_method="default",
+                            )
                             break
                 else:
                     state.current_stage_status = "passed"
@@ -183,6 +199,24 @@ class BaseStage(ABC):
                 last_error = str(e)
                 state.current_stage_status = "failed"
                 logger.error(f"[{self.stage_name}] 執行異常: {e}", exc_info=True)
+
+                # 持久化錯誤記錄（供後續優化復用）
+                from app.services import error_store
+
+                error_type = "json_extraction" if "JSON" in str(e) or "json" in str(e) else "llm_call"
+                error_store.record_error(
+                    stage_name=self.stage_name,
+                    error_type=error_type,
+                    error_message=str(e),
+                    raw_output_preview=last_output[:500] if last_output else "",
+                    iteration=state.current_iteration + 1,
+                    run_id=node_monitor.run_id,
+                    attempts=attempt,
+                    provider=last_llm_response.provider if last_llm_response else "",
+                    recovered=attempt < max_attempts,
+                    recovery_method="retry" if attempt < max_attempts else "none",
+                )
+
                 if attempt < max_attempts:
                     logger.info(f"[{self.stage_name}] 異常重試...")
                     continue

@@ -292,9 +292,30 @@ async def run_optimization_loop():
             _add_stage_result(strategy_result)
             # JSON 輸出做安全檢查（不替換文本，由 Judge 判定）
             check_json_output(strategy_result.output)
-            parsed = parse_strategy_output(strategy_result.output)
-            strategy_reasoning = sanitize_output(parsed.get("reasoning", ""))
-            new_criteria = parsed.get("criteria", state.current_criteria)
+            try:
+                parsed = parse_strategy_output(strategy_result.output)
+                strategy_reasoning = sanitize_output(parsed.get("reasoning", ""))
+                new_criteria = parsed.get("criteria", state.current_criteria)
+            except ValueError as e:
+                # JSON 提取失敗兜底：使用當前條件繼續（不中斷優化循環）
+                logger.warning(f"第 {iteration} 輪: 策略 JSON 提取失敗，使用當前條件兜底: {e}")
+                from app.services import error_store
+
+                error_store.record_error(
+                    stage_name="strategy_generation",
+                    error_type="json_extraction",
+                    error_message=str(e),
+                    raw_output_preview=strategy_result.output[:500],
+                    iteration=iteration,
+                    run_id=node_monitor.run_id,
+                    attempts=strategy_result.attempts,
+                    provider=strategy_result.output[:50] if strategy_result.output else "",
+                    recovered=True,
+                    recovery_method="default",
+                )
+                parsed = {}
+                strategy_reasoning = "JSON 提取失敗，使用上一輪條件繼續"
+                new_criteria = state.current_criteria
 
             # === 回測（非 AI） ===
             state.status_message = f"第 {iteration} 輪：運行回測中..."

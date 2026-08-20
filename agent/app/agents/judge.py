@@ -53,33 +53,21 @@ def _check_length(output: str, threshold: int) -> tuple[float, str]:
 
 
 def _check_json_valid(output: str, required_fields: list[str]) -> tuple[float, str]:
-    """JSON 格式維度 — 連續評分，有效 JSON=1.0，缺字段=0.5，無效=0。"""
-    try:
-        text = output.strip()
-        # 提取 JSON
-        json_start = text.find("```json")
-        if json_start >= 0:
-            json_start = text.find("{", json_start)
-            json_end = text.rfind("}")
-            if json_start >= 0 and json_end > json_start:
-                data = json.loads(text[json_start : json_end + 1])
-            else:
-                return 0.0, "無法提取 JSON"
-        else:
-            brace_start = text.find("{")
-            brace_end = text.rfind("}")
-            if brace_start >= 0 and brace_end > brace_start:
-                data = json.loads(text[brace_start : brace_end + 1])
-            else:
-                return 0.0, "無 JSON 結構"
+    """JSON 格式維度 — 連續評分，有效 JSON=1.0，缺字段=0.5，無效=0。
 
-        # 檢查必要字段
-        missing = [f for f in required_fields if f not in data]
-        if not missing:
-            return 1.0, "JSON 格式正確，字段完整"
-        return 0.5, f"JSON 有效但缺少字段: {missing}"
-    except (json.JSONDecodeError, ValueError) as e:
-        return 0.0, f"JSON 解析失敗: {e}"
+    使用穩健的多級降級 JSON 提取（與 parse_strategy_output 一致）。
+    """
+    from app.utils.json_extractor import extract_json
+
+    data = extract_json(output)
+    if data is None:
+        return 0.0, "無法提取 JSON（已嘗試所有降級策略）"
+
+    # 檢查必要字段
+    missing = [f for f in required_fields if f not in data]
+    if not missing:
+        return 1.0, "JSON 格式正確，字段完整"
+    return 0.5, f"JSON 有效但缺少字段: {missing}"
 
 
 def _check_data_density(output: str) -> tuple[float, str]:
@@ -113,11 +101,22 @@ def _check_structure(output: str, markers: list[str] = None) -> tuple[float, str
 
 
 def _check_required_keywords(output: str, keywords: list[str]) -> tuple[float, str]:
-    """必要關鍵詞維度 — 連續評分，基於必須出現的關鍵詞覆蓋率。"""
+    """必要關鍵詞維度 — 連續評分，基於必須出現的關鍵詞覆蓋率。
+
+    支持同義詞匹配：如果關鍵詞有「|」分隔的別名，任一匹配即可。
+    例如 ["趨勢|走勢", "波動", "策略"] 表示「趨勢」或「走勢」都算匹配。
+    """
     text = output.lower()
-    found = sum(1 for kw in keywords if kw.lower() in text)
+    found = 0
+    missing = []
+    for kw in keywords:
+        # 支持「關鍵詞|同義詞1|同義詞2」格式
+        aliases = [a.strip().lower() for a in kw.split("|")]
+        if any(a in text for a in aliases):
+            found += 1
+        else:
+            missing.append(kw)
     ratio = found / len(keywords) if keywords else 1.0
-    missing = [kw for kw in keywords if kw.lower() not in text]
     if ratio == 1.0:
         return 1.0, f"關鍵詞完整（{found}/{len(keywords)}）"
     elif ratio >= 0.5:
@@ -130,17 +129,19 @@ def _check_required_keywords(output: str, keywords: list[str]) -> tuple[float, s
 STAGE_RUBRICS: dict[str, list[dict]] = {
     "market_news": [
         {"name": "長度充分", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
-        {"name": "數據引用", "weight": 0.25, "type": "rule", "check": lambda o, e: _check_data_density(o)},
+        {"name": "數據引用", "weight": 0.20, "type": "rule", "check": lambda o, e: _check_data_density(o)},
         {"name": "結構完整", "weight": 0.20, "type": "rule", "check": lambda o, e: _check_structure(o)},
         {
             "name": "必要內容",
             "weight": 0.25,
             "type": "rule",
-            "check": lambda o, e: _check_required_keywords(o, ["市場情緒", "利好", "利空", "選股"]),
+            "check": lambda o, e: _check_required_keywords(
+                o, ["市場情緒|大盤情緒", "利好|強勢", "利空|弱勢", "選股|關注|避開"]
+            ),
         },
         {
             "name": "內容實質",
-            "weight": 0.15,
+            "weight": 0.20,
             "type": "llm",
             "check": "輸出是否包含具體的行業分析（非空洞套話），是否引用了具體的漲跌幅數據",
         },
@@ -169,16 +170,16 @@ STAGE_RUBRICS: dict[str, list[dict]] = {
     ],
     "market_analysis": [
         {"name": "長度充分", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
-        {"name": "數據引用", "weight": 0.30, "type": "rule", "check": lambda o, e: _check_data_density(o)},
+        {"name": "數據引用", "weight": 0.25, "type": "rule", "check": lambda o, e: _check_data_density(o)},
         {
             "name": "必要內容",
-            "weight": 0.30,
+            "weight": 0.25,
             "type": "rule",
-            "check": lambda o, e: _check_required_keywords(o, ["趨勢", "波動", "策略"]),
+            "check": lambda o, e: _check_required_keywords(o, ["趨勢|走勢|方向", "波動|震盪|風險", "策略|選股|操作"]),
         },
         {
             "name": "內容實質",
-            "weight": 0.25,
+            "weight": 0.35,
             "type": "llm",
             "check": "市場趨勢判斷是否有邏輯依據，策略類型推薦是否與市場環境匹配",
         },
@@ -231,16 +232,18 @@ STAGE_RUBRICS: dict[str, list[dict]] = {
         {"name": "長度充分", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
         {
             "name": "必要內容",
-            "weight": 0.35,
+            "weight": 0.25,
             "type": "rule",
-            "check": lambda o, e: _check_required_keywords(o, ["調整", "避免", "目標"]),
+            "check": lambda o, e: _check_required_keywords(
+                o, ["調整|修改|改進|優化", "避免|不要|防止", "目標|期望|達到"]
+            ),
         },
         {"name": "數據引用", "weight": 0.20, "type": "rule", "check": lambda o, e: _check_data_density(o)},
         {
             "name": "指引精準",
-            "weight": 0.30,
+            "weight": 0.40,
             "type": "llm",
-            "check": "指引是否包含具體參數名（如 minTurn、stopLossPct），而非籠統的「優化策略」",
+            "check": "指引是否包含具體參數名（如 minTurn、stopLossPct、minVolumeRatio），而非籠統的「優化策略」",
         },
     ],
 }

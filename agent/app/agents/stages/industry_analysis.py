@@ -121,17 +121,11 @@ class IndustryAnalysisStage(BaseStage):
 
 
 def parse_industry_output(response: str) -> dict[str, Any]:
-    """解析行業分析 AI 的 JSON 輸出。"""
-    json_start = response.find("```json")
-    if json_start >= 0:
-        json_start = response.find("{", json_start)
-        json_end = response.rfind("}")
-        if json_start >= 0 and json_end > json_start:
-            return json.loads(response[json_start : json_end + 1])
+    """解析行業分析 AI 的 JSON 輸出 — 使用穩健的多級降級提取。"""
+    from app.utils.json_extractor import extract_json
 
-    brace_start = response.find("{")
-    brace_end = response.rfind("}")
-    if brace_start >= 0 and brace_end > brace_start:
-        return json.loads(response[brace_start : brace_end + 1])
+    data = extract_json(response)
+    if data is not None:
+        return data
 
-    raise ValueError(f"無法從行業分析 AI 響應中提取 JSON: {response[:200]}")
+    raise ValueError(f"無法從行業分析 AI 響應中提取 JSON（已嘗試所有降級策略）: {response[:200]}")
