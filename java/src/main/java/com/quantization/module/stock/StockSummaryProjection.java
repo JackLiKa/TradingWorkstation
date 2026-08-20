@@ -7,6 +7,7 @@ import java.time.LocalDate;
 public record StockSummaryProjection(
         long totalRecords,
         long totalSymbols,
+        LocalDate earliestTradeDate,
         LocalDate latestTradeDate,
         Double averagePctChange,
         Double latestTurnover
@@ -14,6 +15,7 @@ public record StockSummaryProjection(
     public StockSummaryProjection(
             Long totalRecords,
             Long totalSymbols,
+            LocalDate earliestTradeDate,
             LocalDate latestTradeDate,
             BigDecimal averagePctChange,
             BigDecimal latestTurnover
@@ -21,6 +23,7 @@ public record StockSummaryProjection(
         this(
                 totalRecords == null ? 0L : totalRecords,
                 totalSymbols == null ? 0L : totalSymbols,
+                earliestTradeDate,
                 latestTradeDate,
                 averagePctChange == null ? null : averagePctChange.doubleValue(),
                 latestTurnover == null ? null : latestTurnover.doubleValue()

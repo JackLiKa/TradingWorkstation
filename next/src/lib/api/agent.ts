@@ -61,6 +61,10 @@ export const agentApi = {
   getCriteria: () => agentFetch<{ criteria: Record<string, unknown>; config: Record<string, unknown> }>(`/criteria`),
   updateCriteria: (criteria: Record<string, unknown>) =>
     agentPost<{ status: string; criteria: Record<string, unknown> }>(`/criteria`, { criteria }),
+  // ===== 回測配置管理 =====
+  updateConfig: (config: Record<string, unknown>) =>
+    agentPost<{ status: string; config: Record<string, unknown> }>(`/config`, { config }),
+  getDataRange: () => agentFetch<{ earliestTradeDate: string | null; latestTradeDate: string | null }>(`/data-range`),
   monitor: () => agentFetch<MonitorStatus>(`/monitor`),
   monitorAnalyze: () => agentFetch<MonitorAnalysis>(`/monitor/analyze`),
   resolveAlert: (alertId: string) =>

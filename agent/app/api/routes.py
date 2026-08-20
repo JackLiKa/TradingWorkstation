@@ -25,6 +25,39 @@ class UpdateCriteriaRequest(BaseModel):
     criteria: dict[str, Any]
 
 
+class UpdateConfigRequest(BaseModel):
+    """更新回測配置請求（支持手動調整回測日期區間等）。"""
+    config: dict[str, Any]
+
+
+def _validate_backtest_dates(
+    config: dict[str, Any],
+    earliest: str | None,
+    latest: str | None,
+) -> tuple[bool, str]:
+    """校驗回測日期區間是否在數據庫覆蓋範圍內。
+
+    Args:
+        config: 回測配置，需包含 startDate 和 endDate
+        earliest: 數據庫最早交易日（YYYY-MM-DD），None 表示無法獲取
+        latest: 數據庫最新交易日（YYYY-MM-DD），None 表示無法獲取
+
+    Returns:
+        tuple[bool, str]: (是否通過, 錯誤消息)，通過時錯誤消息為空字符串
+    """
+    start = config.get("startDate")
+    end = config.get("endDate")
+    if not start or not end:
+        return False, "回測配置必須包含 startDate 和 endDate"
+    if start > end:
+        return False, f"startDate ({start}) 不能晚於 endDate ({end})"
+    if earliest and start < earliest:
+        return False, f"startDate ({start}) 早於數據庫最早交易日 ({earliest})，請確保數據存在"
+    if latest and end > latest:
+        return False, f"endDate ({end}) 晚於數據庫最新交易日 ({latest})，請確保數據存在"
+    return True, ""
+
+
 @router.get("/health")
 async def health():
     """健康檢查 — 返回服務狀態、後端可用性、LLM 模型信息和 RAG 狀態。
@@ -98,10 +131,14 @@ async def start(req: StartRequest | None = None):
 
     Args:
         req: 可選的啟動請求，可攜帶用戶自定義的初始選股條件和回測配置；
-             為 None 時使用默認或數據庫最佳策略
+             為 None 時使用默認或數據庫最佳策略。
+             config 中的 startDate/endDate 會校驗是否在數據庫覆蓋範圍內。
 
     Returns:
-        dict: 啟動結果（started / already_running）及當前狀態快照
+        dict: 啟動結果（started / already_running / error）及當前狀態快照
+
+    Raises:
+        HTTPException: 400 — 回測日期區間不在數據庫覆蓋範圍內
     """
     if state.running:
         return {"status": "already_running", "state": state.to_dict()}
@@ -112,7 +149,14 @@ async def start(req: StartRequest | None = None):
         state.current_criteria = {**DEFAULT_CRITERIA, **req.criteria}
     if req and req.config:
         from app.agents.optimizer import DEFAULT_BACKTEST_CONFIG
-        state.current_config = {**DEFAULT_BACKTEST_CONFIG, **req.config}
+        merged_config = {**DEFAULT_BACKTEST_CONFIG, **req.config}
+        # 校驗回測日期區間是否在數據庫覆蓋範圍內
+        from app.services.backend_client import backend_client
+        earliest, latest = await backend_client.get_data_range()
+        ok, msg = _validate_backtest_dates(merged_config, earliest, latest)
+        if not ok:
+            raise HTTPException(status_code=400, detail=msg)
+        state.current_config = merged_config
 
     start_optimization()
     return {"status": "started", "state": state.to_dict()}
@@ -198,6 +242,50 @@ async def get_criteria():
         dict: 包含 criteria 和 config 兩個字段
     """
     return {"criteria": state.current_criteria, "config": state.current_config}
+
+
+@router.post("/config")
+async def update_config(req: UpdateConfigRequest):
+    """手動更新回測配置（支持調整回測日期區間、持倉數、調倉間隔等）。
+
+    日期區間會校驗是否在數據庫覆蓋範圍內，確保回測基於真實數據。
+
+    Args:
+        req: 包含新回測配置的請求體，需包含 startDate 和 endDate
+
+    Returns:
+        dict: 更新結果及合併後的完整回測配置
+
+    Raises:
+        HTTPException: 400 — 日期區間不在數據庫覆蓋範圍內
+    """
+    from app.agents.optimizer import DEFAULT_BACKTEST_CONFIG
+    from app.services.backend_client import backend_client
+    merged_config = {**DEFAULT_BACKTEST_CONFIG, **req.config}
+    # 校驗回測日期區間
+    earliest, latest = await backend_client.get_data_range()
+    ok, msg = _validate_backtest_dates(merged_config, earliest, latest)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    state.current_config = merged_config
+    return {"status": "updated", "config": state.current_config}
+
+
+@router.get("/data-range")
+async def get_data_range():
+    """獲取數據庫中已有數據的日期範圍（最早 + 最新交易日）。
+
+    用於前端回測日期選擇器的範圍限制，確保用戶選擇的日期區間有真實數據。
+
+    Returns:
+        dict: 包含 earliestTradeDate 和 latestTradeDate 兩個字段
+    """
+    from app.services.backend_client import backend_client
+    earliest, latest = await backend_client.get_data_range()
+    return {
+        "earliestTradeDate": earliest,
+        "latestTradeDate": latest,
+    }
 
 
 @router.post("/model/check")

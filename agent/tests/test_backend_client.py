@@ -147,3 +147,53 @@ class TestBackendClientHealth:
         client._client.get = mock_get
         result = asyncio.run(client.health())
         assert result is False
+
+
+class TestDataRange:
+    """測試 get_data_range 和 get_latest_trade_date。"""
+
+    def test_get_data_range_success(self):
+        """get_data_range 應該返回 (earliest, latest) 元組。"""
+        client = BackendClient()
+
+        mock_data = {
+            "success": True,
+            "data": {
+                "earliestTradeDate": "2021-01-04",
+                "latestTradeDate": "2026-08-20",
+            },
+        }
+
+        async def mock_request(*args, **kwargs):
+            return mock_data
+
+        client._request_with_retry = mock_request
+        earliest, latest = asyncio.run(client.get_data_range())
+        assert earliest == "2021-01-04"
+        assert latest == "2026-08-20"
+
+    def test_get_data_range_failure_returns_none(self):
+        """get_data_range 後端不可用時應返回 (None, None)。"""
+        client = BackendClient()
+
+        async def mock_request(*args, **kwargs):
+            raise httpx.ConnectError("refused")
+
+        client._request_with_retry = mock_request
+        earliest, latest = asyncio.run(client.get_data_range())
+        assert earliest is None
+        assert latest is None
+
+    def test_get_data_range_missing_fields(self):
+        """get_data_range 缺少字段時應返回 (None, None)。"""
+        client = BackendClient()
+
+        mock_data = {"success": True, "data": {}}
+
+        async def mock_request(*args, **kwargs):
+            return mock_data
+
+        client._request_with_retry = mock_request
+        earliest, latest = asyncio.run(client.get_data_range())
+        assert earliest is None
+        assert latest is None

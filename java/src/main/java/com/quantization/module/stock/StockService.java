@@ -44,7 +44,7 @@ public class StockService {
     @Cacheable(value = CacheConfig.SUMMARY_CACHE, key = "'summary'")
     public SummaryMetricsDto summaryMetrics() {
         StockSummaryProjection p = repository.summaryMetrics();
-        return new SummaryMetricsDto(p.totalRecords(), p.totalSymbols(), p.latestTradeDate(),
+        return new SummaryMetricsDto(p.totalRecords(), p.totalSymbols(), p.earliestTradeDate(), p.latestTradeDate(),
                 p.averagePctChange(), p.latestTurnover());
     }
 

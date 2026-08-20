@@ -48,12 +48,17 @@ public class StockDailyRepositoryImpl implements StockDailyRepositoryCustom {
      */
     @Override
     public StockSummaryProjection summaryMetrics() {
-        // 1. 最新交易日（快速，走 idx_date 索引）
+        // 1. 最早 + 最新交易日（快速，走 idx_date 索引）
         CriteriaBuilder cb = em.getCriteriaBuilder();
-        CriteriaQuery<LocalDate> dateQuery = cb.createQuery(LocalDate.class);
+        CriteriaQuery<Tuple> dateQuery = cb.createTupleQuery();
         Root<StockDailyEntity> dr = dateQuery.from(StockDailyEntity.class);
-        dateQuery.select(cb.function("max", LocalDate.class, dr.get("tradeDate")));
-        LocalDate latest = em.createQuery(dateQuery).getSingleResult();
+        dateQuery.multiselect(
+                cb.function("min", LocalDate.class, dr.get("tradeDate")).alias("earliest"),
+                cb.function("max", LocalDate.class, dr.get("tradeDate")).alias("latest")
+        );
+        Tuple dateTuple = em.createQuery(dateQuery).getSingleResult();
+        LocalDate earliest = dateTuple.get("earliest", LocalDate.class);
+        LocalDate latest = dateTuple.get("latest", LocalDate.class);
 
         // 2. 近似总行数（SHOW TABLE STATUS，瞬间返回，误差 <1%）
         long approxTotal = approxTableRowCount();
@@ -83,7 +88,7 @@ public class StockDailyRepositoryImpl implements StockDailyRepositoryCustom {
             turnover = toDouble(t2.get("turnover"));
         }
 
-        return new StockSummaryProjection(approxTotal, totalSymbols, latest, avgPct, turnover);
+        return new StockSummaryProjection(approxTotal, totalSymbols, earliest, latest, avgPct, turnover);
     }
 
     /** 使用 SHOW TABLE STATUS 获取近似行数（毫秒级，12.9M 行表无需全表扫描）。 */

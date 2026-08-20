@@ -114,9 +114,11 @@ public class DashboardService {
 
     private List<DashboardMetricDto> buildMetrics(SummaryMetricsDto summary) {
         String latestDateText = summary.latestTradeDate() == null ? "暂无数据" : summary.latestTradeDate().toString();
+        String earliestDateText = summary.earliestTradeDate() == null ? "暂无数据" : summary.earliestTradeDate().toString();
         return List.of(
                 new DashboardMetricDto("总记录数", String.format("%,d", summary.totalRecords()), "stock_daily 表总行数"),
                 new DashboardMetricDto("股票数量", String.format("%,d", summary.totalSymbols()), "去重证券代码数量"),
+                new DashboardMetricDto("最早交易日", earliestDateText, "数据库内最早行情日期"),
                 new DashboardMetricDto("最新交易日", latestDateText, "数据库内最新行情日期"),
                 new DashboardMetricDto("平均涨跌幅", FormatUtils.formatPercent(summary.averagePctChange()), "最新交易日，不复权口径"),
                 new DashboardMetricDto("最新成交额", FormatUtils.formatCurrency(summary.latestTurnover()), "最新交易日，不复权口径")

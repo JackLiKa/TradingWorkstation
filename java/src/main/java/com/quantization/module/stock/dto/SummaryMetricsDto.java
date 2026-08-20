@@ -8,6 +8,7 @@ import java.time.LocalDate;
 public record SummaryMetricsDto(
         long totalRecords,
         long totalSymbols,
+        LocalDate earliestTradeDate,
         LocalDate latestTradeDate,
         Double averagePctChange,
         Double latestTurnover

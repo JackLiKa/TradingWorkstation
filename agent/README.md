@@ -68,7 +68,7 @@ agent/
 │       ├── experience_store.py    # RAG 經驗存儲/檢索
 │       ├── vector_store.py        # Milvus Lite 向量數據庫
 │       └── market_data_client.py  # 市场数据客户端
-├── tests/                         # pytest 測試套件（114 個測試）
+├── tests/                         # pytest 測試套件（125 個測試）
 ├── requirements.txt
 ├── requirements-dev.txt           # 測試依賴
 ├── pytest.ini
@@ -146,10 +146,42 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8100
 | `/api/agent/status` | GET | 优化器当前状态 |
 | `/api/agent/history` | GET | 优化历史记录 |
 | `/api/agent/criteria` | GET | 当前选股条件 |
+| `/api/agent/criteria` | POST | 更新选股条件 |
+| `/api/agent/config` | POST | 更新回測配置（含日期區間校驗） |
+| `/api/agent/data-range` | GET | 獲取數據庫日期覆蓋範圍（最早+最新交易日） |
 | `/api/agent/monitor` | GET | 系统监控数据 |
-| `/api/agent/start` | POST | 启动优化循环 |
+| `/api/agent/start` | POST | 启动优化循环（可攜帶自定義 config，含日期校驗） |
 | `/api/agent/stop` | POST | 停止优化循环 |
 | `/api/agent/check-model` | POST | 手动触发模型检查 |
+| `/api/agent/providers` | GET | 可用 LLM 供應商列表 |
+| `/api/agent/providers/stage` | POST | 設置某階段供應商偏好 |
+| `/api/agent/metrics` | GET | Prometheus 指標端點 |
+
+### 手動調整回測日期區間
+
+用戶可通過前端 UI 或 API 手動指定回測的 `startDate` 和 `endDate`，系統會自動校驗日期是否在數據庫覆蓋範圍內：
+
+```bash
+# 獲取數據庫日期範圍
+curl http://localhost:8100/api/agent/data-range
+# 返回: {"earliestTradeDate":"2021-01-04","latestTradeDate":"2026-08-20"}
+
+# 啟動優化時指定回測日期區間
+curl -X POST http://localhost:8100/api/agent/start \
+  -H "Content-Type: application/json" \
+  -d '{"config":{"startDate":"2024-06-01","endDate":"2026-08-20","maxPositions":5}}'
+
+# 運行中更新回測配置（下一輪迭代生效）
+curl -X POST http://localhost:8100/api/agent/config \
+  -H "Content-Type: application/json" \
+  -d '{"config":{"startDate":"2024-06-01","endDate":"2026-08-20","rebalanceInterval":10}}'
+```
+
+日期校驗規則：
+- `startDate` 不能早於數據庫最早交易日
+- `endDate` 不能晚於數據庫最新交易日
+- `startDate` 不能晚於 `endDate`
+- 不符合時返回 HTTP 400 + 錯誤消息
 
 Swagger 文档：`http://localhost:8100/docs`
 

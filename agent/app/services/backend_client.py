@@ -201,6 +201,26 @@ class BackendClient:
             logger.warning(f"獲取最新交易日失敗: {e}")
             return None
 
+    async def get_data_range(self) -> tuple[str | None, str | None]:
+        """獲取數據庫中已有數據的最早和最新交易日。
+
+        用於校驗用戶手動指定的回測日期區間是否在數據庫覆蓋範圍內。
+        後端 /api/dashboard/summary 返回 earliestTradeDate 和 latestTradeDate 字段。
+
+        Returns:
+            tuple[str | None, str | None]: (最早交易日, 最新交易日)，後端不可用時返回 (None, None)
+        """
+        try:
+            data = await self.get_market_overview()
+            earliest = data.get("earliestTradeDate")
+            latest = data.get("latestTradeDate")
+            earliest_str = str(earliest)[:10] if earliest else None
+            latest_str = str(latest)[:10] if latest else None
+            return earliest_str, latest_str
+        except Exception as e:
+            logger.warning(f"獲取數據範圍失敗: {e}")
+            return None, None
+
     async def get_industries(self, code: str = None, industry: str = None) -> list[dict[str, Any]]:
         """查詢股票行業分類數據。"""
         params = {}

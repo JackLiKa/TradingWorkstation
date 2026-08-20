@@ -20,6 +20,7 @@ import { AgentMonitorPanel } from '@/components/agent/AgentMonitorPanel';
 import { AgentScoreTrend } from '@/components/agent/AgentScoreTrend';
 import { AgentModelCard } from '@/components/agent/AgentModelCard';
 import { AgentProviderSelector } from '@/components/agent/AgentProviderSelector';
+import { AgentBacktestConfig } from '@/components/agent/AgentBacktestConfig';
 
 /** Agent 狀態輪詢間隔（運行時 2 秒） */
 const STATUS_REFETCH_MS = 2000;
@@ -34,6 +35,7 @@ export default function AgentPage() {
   const [confirmStop, setConfirmStop] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checkingModel, setCheckingModel] = useState(false);
+  const [startConfig, setStartConfig] = useState<Record<string, unknown> | null>(null);
 
   // 輪詢 agent 狀態（運行時 2s，空閒時 10s）
   const { data: state, mutate: refreshState } = useSWR<AgentState>(
@@ -64,14 +66,14 @@ export default function AgentPage() {
     setStarting(true);
     setError(null);
     try {
-      await agentApi.start();
+      await agentApi.start(undefined, startConfig ?? undefined);
       await refreshState();
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setStarting(false);
     }
-  }, [refreshState]);
+  }, [refreshState, startConfig]);
 
   const handleStop = useCallback(async () => {
     setStopping(true);
@@ -129,6 +131,13 @@ export default function AgentPage() {
 
       {/* 每階段供應商選擇 */}
       <AgentProviderSelector />
+
+      {/* 回測配置（啟動前可調整日期區間，運行中可隨時更新） */}
+      <AgentBacktestConfig
+        state={state ?? null}
+        preStartMode={!isRunning}
+        onStartConfigChange={setStartConfig}
+      />
 
       {/* 控制面板 */}
       <Card>
