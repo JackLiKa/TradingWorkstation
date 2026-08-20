@@ -2,6 +2,10 @@ package com.quantization.module.stock;
 
 import com.quantization.config.CacheConfig;
 import com.quantization.module.stock.dto.HotSymbolDto;
+import com.quantization.module.stock.dto.IndexDailyDto;
+import com.quantization.module.stock.dto.IndexMetadataDto;
+import com.quantization.module.stock.dto.MarketBreadthDto;
+import com.quantization.module.stock.dto.RotationSignalDto;
 import com.quantization.module.stock.dto.SectorPerformanceDto;
 import com.quantization.module.stock.dto.SearchResultDto;
 import com.quantization.module.stock.dto.StockDailyDto;
@@ -12,7 +16,13 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 /**
  * 行情服务，封装股票日线的查询、汇总、K线加载和搜索建议等业务逻辑。
@@ -23,9 +33,16 @@ import java.util.List;
 public class StockService {
 
     private final StockDailyRepository repository;
+    private final IndexDailyRepository indexDailyRepository;
+    private final IndexMetadataRepository indexMetadataRepository;
 
-    public StockService(StockDailyRepository repository) {
+    public StockService(
+            StockDailyRepository repository,
+            IndexDailyRepository indexDailyRepository,
+            IndexMetadataRepository indexMetadataRepository) {
         this.repository = repository;
+        this.indexDailyRepository = indexDailyRepository;
+        this.indexMetadataRepository = indexMetadataRepository;
     }
 
     /**
@@ -122,11 +139,12 @@ public class StockService {
     }
 
     /**
-     * 多日板塊表現：最近 N 個交易日，每日各行業平均漲跌幅 + 領漲股。
+     * 多日板塊表現：最近 N 個交易日，每日各行業平均漲跌幅 + 領漲股（走緩存）。
      *
      * @param days 最近交易日天數
      * @return 板塊表現 DTO 列表
      */
+    @Cacheable(value = CacheConfig.SECTOR_PERFORMANCE_CACHE, key = "#days")
     @Transactional(readOnly = true)
     public List<SectorPerformanceDto> sectorPerformance(int days) {
         return repository.sectorPerformance(days).stream()
@@ -201,6 +219,141 @@ public class StockService {
         return repository.tradeDates(start, end, adjustflag);
     }
 
+    // ------------------------------------------------------------------------
+    // 多維指數分析（新增）
+    // ------------------------------------------------------------------------
+
+    /**
+     * 批量指數歷史查詢：一次查詢多個指數最近 N 日的日線。
+     * 用於 AI 多維市場分析（大盤 + 風格 + 行業）。
+     *
+     * @param codes 指數代碼列表
+     * @param days  最近天數
+     * @return 按指數代碼分組的歷史數據
+     */
+    public Map<String, List<IndexDailyDto>> batchIndexHistory(List<String> codes, int days) {
+        if (codes == null || codes.isEmpty()) {
+            return Map.of();
+        }
+        LocalDate end = LocalDate.now();
+        LocalDate start = end.minusDays(days + 10); // 多取幾天以防非交易日
+        List<IndexDailyEntity> entities = indexDailyRepository
+                .findByCodeInAndTradeDateBetweenOrderByTradeDateAsc(codes, start, end);
+
+        Map<String, List<IndexDailyEntity>> byCode = entities.stream()
+                .collect(Collectors.groupingBy(IndexDailyEntity::getCode, LinkedHashMap::new, Collectors.toList()));
+
+        Map<String, List<IndexDailyDto>> result = new LinkedHashMap<>();
+        for (String code : codes) {
+            List<IndexDailyEntity> list = byCode.getOrDefault(code, List.of());
+            // 只取最近 days 條
+            List<IndexDailyEntity> trimmed = list.size() > days ? list.subList(list.size() - days, list.size()) : list;
+            result.put(code, trimmed.stream().map(IndexDailyDto::from).toList());
+        }
+        return result;
+    }
+
+    /**
+     * 市場廣度分析：基於多類指數計算大盤/風格/行業的整體強弱（走緩存）。
+     *
+     * @param days 最近交易日天數
+     * @return 市場廣度 DTO
+     */
+    @Cacheable(value = CacheConfig.MARKET_BREADTH_CACHE, key = "#days")
+    public MarketBreadthDto marketBreadth(int days) {
+        List<IndexMetadataEntity> all = indexMetadataRepository.findAllByOrderByCategoryCodeAscCodeAsc();
+        List<String> codes = all.stream().map(IndexMetadataEntity::getCode).toList();
+        Map<String, List<IndexDailyDto>> history = batchIndexHistory(codes, days);
+
+        Map<String, Double> compositeBreadth = computeCategoryChange(all, history, "composite");
+        Map<String, Double> scaleBreadth = computeCategoryChange(all, history, "scale");
+        Map<String, Double> styleBreadth = computeCategoryChange(all, history, List.of("growth", "value"));
+
+        // 計算所有分類的累計漲幅，找出領漲/滯漲
+        Map<String, Double> allCategories = new LinkedHashMap<>();
+        for (String catCode : all.stream().map(IndexMetadataEntity::getCategoryCode).distinct().toList()) {
+            Map<String, Double> catMap = computeCategoryChange(all, history, catCode);
+            double avg = catMap.values().stream().filter(Objects::nonNull).mapToDouble(Double::doubleValue).average().orElse(0.0);
+            allCategories.put(catCode, avg);
+        }
+
+        List<Map.Entry<String, Double>> sorted = allCategories.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .toList();
+
+        Map<String, Double> leadingCategories = new LinkedHashMap<>();
+        Map<String, Double> laggingCategories = new LinkedHashMap<>();
+        int topN = Math.max(1, sorted.size() / 3);
+        for (int i = 0; i < sorted.size(); i++) {
+            if (i < topN) {
+                leadingCategories.put(sorted.get(i).getKey(), sorted.get(i).getValue());
+            } else if (i >= sorted.size() - topN) {
+                laggingCategories.put(sorted.get(i).getKey(), sorted.get(i).getValue());
+            }
+        }
+
+        String summary = String.format(
+                "最近 %d 日：綜合指數平均 %.2f%%，規模指數平均 %.2f%%，風格（成長-價值）差距 %.2f%%。",
+                days,
+                average(compositeBreadth.values()),
+                average(scaleBreadth.values()),
+                styleBreadth.getOrDefault("growth", 0.0) - styleBreadth.getOrDefault("value", 0.0)
+        );
+
+        return new MarketBreadthDto(days, compositeBreadth, scaleBreadth, styleBreadth,
+                leadingCategories, laggingCategories, summary);
+    }
+
+    /**
+     * 輪動信號分析：基於一級/二級行業指數和成長/價值指數計算輪動方向（走緩存）。
+     *
+     * @param days 最近交易日天數
+     * @return 輪動信號 DTO
+     */
+    @Cacheable(value = CacheConfig.ROTATION_SIGNAL_CACHE, key = "#days")
+    public RotationSignalDto rotationSignals(int days) {
+        List<IndexMetadataEntity> all = indexMetadataRepository.findAllByOrderByCategoryCodeAscCodeAsc();
+        List<String> codes = all.stream().map(IndexMetadataEntity::getCode).toList();
+        Map<String, List<IndexDailyDto>> history = batchIndexHistory(codes, days);
+
+        Map<String, Map<String, Double>> industryRotation = new LinkedHashMap<>();
+        industryRotation.put("industry_l1", computeCategoryChange(all, history, "industry_l1"));
+        industryRotation.put("industry_l2", computeCategoryChange(all, history, "industry_l2"));
+
+        Map<String, Double> styleRotation = computeCategoryChange(all, history, List.of("growth", "value", "scale"));
+
+        // 計算所有行業（一級+二級）的累計漲幅，排序
+        List<RotationSignalDto.RankEntryDto> industryRanks = all.stream()
+                .filter(e -> "industry_l1".equals(e.getCategoryCode()) || "industry_l2".equals(e.getCategoryCode()))
+                .map(e -> {
+                    List<IndexDailyDto> list = history.getOrDefault(e.getCode(), List.of());
+                    Double change = cumulativeChange(list);
+                    return new RotationSignalDto.RankEntryDto(e.getName() + "(" + e.getCode() + ")", change != null ? change : 0.0);
+                })
+                .sorted(Comparator.comparingDouble(RotationSignalDto.RankEntryDto::change).reversed())
+                .toList();
+
+        int topN = Math.max(3, industryRanks.size() / 5);
+        List<RotationSignalDto.RankEntryDto> leading = industryRanks.stream().limit(topN).toList();
+        List<RotationSignalDto.RankEntryDto> lagging = industryRanks.stream().skip(Math.max(0, industryRanks.size() - topN)).toList();
+
+        double rotationStrength = computeRotationStrength(industryRanks);
+
+        String summary = String.format(
+                "最近 %d 日：行業輪動強度 %.1f，領漲 %s，滯漲 %s。",
+                days,
+                rotationStrength,
+                leading.isEmpty() ? "無" : leading.get(0).name(),
+                lagging.isEmpty() ? "無" : lagging.get(0).name()
+        );
+
+        return new RotationSignalDto(days, industryRotation, styleRotation, leading, lagging, rotationStrength, summary);
+    }
+
+    // ------------------------------------------------------------------------
+    // 私有輔助方法
+    // ------------------------------------------------------------------------
+
     private static StockDailyDto toDto(StockDailyEntity e) {
         return new StockDailyDto(
                 e.getCode(), e.getTradeDate(),
@@ -212,5 +365,59 @@ public class StockService {
 
     private static Double d(java.math.BigDecimal v) {
         return v == null ? null : v.doubleValue();
+    }
+
+    private static double average(java.util.Collection<Double> values) {
+        return values.stream().filter(Objects::nonNull).mapToDouble(Double::doubleValue).average().orElse(0.0);
+    }
+
+    private Map<String, Double> computeCategoryChange(
+            List<IndexMetadataEntity> all,
+            Map<String, List<IndexDailyDto>> history,
+            String categoryCode) {
+        return computeCategoryChange(all, history, List.of(categoryCode));
+    }
+
+    private Map<String, Double> computeCategoryChange(
+            List<IndexMetadataEntity> all,
+            Map<String, List<IndexDailyDto>> history,
+            List<String> categoryCodes) {
+        Map<String, Double> result = new LinkedHashMap<>();
+        for (IndexMetadataEntity meta : all) {
+            if (!categoryCodes.contains(meta.getCategoryCode())) {
+                continue;
+            }
+            Double change = cumulativeChange(history.getOrDefault(meta.getCode(), List.of()));
+            if (change != null) {
+                result.put(meta.getName() + "(" + meta.getCode() + ")", change);
+            }
+        }
+        return result;
+    }
+
+    private static Double cumulativeChange(List<IndexDailyDto> list) {
+        if (list == null || list.size() < 2) {
+            return null;
+        }
+        Double first = list.get(0).closePrice();
+        Double last = list.get(list.size() - 1).closePrice();
+        if (first == null || last == null || first == 0.0) {
+            return null;
+        }
+        return (last - first) / first * 100.0;
+    }
+
+    private static double computeRotationStrength(List<RotationSignalDto.RankEntryDto> ranks) {
+        if (ranks == null || ranks.isEmpty()) {
+            return 0.0;
+        }
+        double[] values = ranks.stream().mapToDouble(RotationSignalDto.RankEntryDto::change).toArray();
+        double mean = java.util.Arrays.stream(values).average().orElse(0.0);
+        double variance = java.util.Arrays.stream(values)
+                .map(v -> Math.pow(v - mean, 2))
+                .average().orElse(0.0);
+        double std = Math.sqrt(variance);
+        // 標準差映射到 0-100：5% 對應 100
+        return Math.min(100.0, std * 20.0);
     }
 }

@@ -3,6 +3,10 @@ package com.quantization.module.stock;
 import com.quantization.common.api.ApiResponse;
 import com.quantization.module.stock.dto.HotSymbolDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
+import com.quantization.module.stock.dto.IndexHistoryBatchRequestDto;
+import com.quantization.module.stock.dto.IndexMetadataDto;
+import com.quantization.module.stock.dto.MarketBreadthDto;
+import com.quantization.module.stock.dto.RotationSignalDto;
 import com.quantization.module.stock.dto.SectorPerformanceDto;
 import com.quantization.module.stock.dto.SearchResultDto;
 import com.quantization.module.stock.dto.StockDailyDto;
@@ -13,15 +17,18 @@ import com.quantization.module.stock.dto.SummaryMetricsDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 /**
- * 行情 Controller，提供汇总指标、日线查询、波动榜、搜索建议和行业分类等接口。
+ * 行情 Controller，提供汇总指标、日线查询、波动榜、搜索建议、行业分类、指数分析等接口。
  */
 @Tag(name = "行情 stock")
 @RestController
@@ -31,14 +38,17 @@ public class StockController {
     private final StockService stockService;
     private final StockIndustryRepository industryRepository;
     private final IndexDailyRepository indexDailyRepository;
+    private final IndexMetadataRepository indexMetadataRepository;
 
     public StockController(
             StockService stockService,
             StockIndustryRepository industryRepository,
-            IndexDailyRepository indexDailyRepository) {
+            IndexDailyRepository indexDailyRepository,
+            IndexMetadataRepository indexMetadataRepository) {
         this.stockService = stockService;
         this.industryRepository = industryRepository;
         this.indexDailyRepository = indexDailyRepository;
+        this.indexMetadataRepository = indexMetadataRepository;
     }
 
     /**
@@ -89,7 +99,7 @@ public class StockController {
     }
 
     /**
-     * 搜索建議（自動補全），根據用戶輸入的部分代碼返回最新交易日匹配的股票。
+     * 搜索建議（自動補全），根據用戶輸入的部分代碼返回最新交易日的匹配股票。
      *
      * @param q     搜索关键词
      * @param limit 返回条数（默认 10）
@@ -108,7 +118,7 @@ public class StockController {
     /**
      * 查詢行業分類，支持按代碼或行業關鍵詞篩選，無參數時返回全部。
      *
-     * @param code     股票代碼（可選）
+     * @param code     股票代码（可選）
      * @param industry 行業關鍵詞（可選）
      * @return 行業分類列表
      */
@@ -145,7 +155,7 @@ public class StockController {
     /**
      * 查詢指數最近 N 日的歷史數據（用於市場形態識別）。
      *
-     * @param code   指數代碼（如 sh000001）
+     * @param code   指數代碼（如 sh.000001）
      * @param days   最近天數（默認 10）
      * @return 指數日線列表（按日期升序）
      */
@@ -166,6 +176,20 @@ public class StockController {
         return ApiResponse.ok(entities.stream().map(IndexDailyDto::from).toList());
     }
 
+    /**
+     * 批量查詢多個指數最近 N 日的歷史數據。
+     * 用於 AI 多維市場分析（大盤 + 風格 + 行業）。
+     *
+     * @param request 指數代碼列表 + 天數
+     * @return 按指數代碼分組的歷史數據
+     */
+    @Operation(summary = "批量指數最近N日歷史")
+    @PostMapping("/index-history/batch")
+    public ApiResponse<Map<String, List<IndexDailyDto>>> indexHistoryBatch(
+            @RequestBody IndexHistoryBatchRequestDto request) {
+        return ApiResponse.ok(stockService.batchIndexHistory(request.codes(), request.days()));
+    }
+
     // ===== 多日板塊表現（10日行情分析）=====
 
     /**
@@ -180,5 +204,55 @@ public class StockController {
     public ApiResponse<List<SectorPerformanceDto>> sectorPerformance(
             @RequestParam(required = false, defaultValue = "10") int days) {
         return ApiResponse.ok(stockService.sectorPerformance(days));
+    }
+
+    // ===== 多維市場分析（廣度 + 輪動）=====
+
+    /**
+     * 市場廣度分析：基於綜合/規模/成長/價值/主題/行業指數，判斷市場整體強弱與一致性。
+     *
+     * @param days 最近交易日天數（默認 10）
+     * @return 市場廣度 DTO
+     */
+    @Operation(summary = "市場廣度分析（多維指數）")
+    @GetMapping("/market-breadth")
+    public ApiResponse<MarketBreadthDto> marketBreadth(
+            @RequestParam(required = false, defaultValue = "10") int days) {
+        return ApiResponse.ok(stockService.marketBreadth(days));
+    }
+
+    /**
+     * 輪動信號分析：基於一級/二級行業指數和成長/價值指數，計算風格與行業輪動方向。
+     *
+     * @param days 最近交易日天數（默認 10）
+     * @return 輪動信號 DTO
+     */
+    @Operation(summary = "輪動信號分析（行業與風格輪動）")
+    @GetMapping("/rotation")
+    public ApiResponse<RotationSignalDto> rotationSignals(
+            @RequestParam(required = false, defaultValue = "10") int days) {
+        return ApiResponse.ok(stockService.rotationSignals(days));
+    }
+
+    // ===== 指數元數據（10 大類別 ~80 個指數）=====
+
+    /**
+     * 查詢全部指數元數據列表（代碼/名稱/分類）。
+     * 數據來源：ingestion/index_list.json → index_metadata 表。
+     *
+     * @param categoryCode 可選，按分類英文代碼過濾（composite/scale/industry_l1/industry_l2/strategy/growth/value/theme/fund/bond）
+     * @return 指數元數據列表
+     */
+    @Operation(summary = "指數元數據列表（10 大類別）")
+    @GetMapping("/index-list")
+    public ApiResponse<List<IndexMetadataDto>> indexList(
+            @RequestParam(required = false) String categoryCode) {
+        List<IndexMetadataEntity> entities;
+        if (categoryCode != null && !categoryCode.isBlank()) {
+            entities = indexMetadataRepository.findByCategoryCodeOrderByCodeAsc(categoryCode);
+        } else {
+            entities = indexMetadataRepository.findAllByOrderByCategoryCodeAscCodeAsc();
+        }
+        return ApiResponse.ok(entities.stream().map(IndexMetadataDto::from).toList());
     }
 }

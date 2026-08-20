@@ -10,6 +10,7 @@ import logging
 
 from app.agents.few_shot import get_few_shot
 from app.agents.stages.base import BaseStage
+from app.agents.stages.market_news import _format_market_breadth, _format_rotation
 from app.services.market_data_client import market_data_client
 
 logger = logging.getLogger("agent.stage.market")
@@ -43,6 +44,10 @@ PROMPT_TEMPLATE = """請分析當前 A 股市場環境，識別市場形態並�
 
 ## 多日市場形態（最近{regime_days}日）
 {regime_text}
+
+## 市場廣度與輪動（最近10日）
+{breadth_text}
+{rotation_text}
 
 ## 歷史優化記錄
 {history_text}
@@ -95,6 +100,12 @@ class MarketAnalysisStage(BaseStage):
         regime_text = _format_regime(regime)
         regime_days = regime.get("metrics", {}).get("days_analyzed", 0)
 
+        # 獲取市場廣度與輪動信號（market_news 已調用過，可復用緩存）
+        market_breadth = await market_data_client._get_market_breadth(10)
+        rotation = await market_data_client._get_rotation_signals(10)
+        breadth_text = _format_market_breadth(market_breadth)
+        rotation_text = _format_rotation(rotation)
+
         # 構建歷史摘要
         history_text = ""
         for h in history[-3:]:
@@ -109,6 +120,8 @@ class MarketAnalysisStage(BaseStage):
             market_data=json.dumps(market_data, ensure_ascii=False, indent=2, default=str),
             regime_text=regime_text,
             regime_days=regime_days,
+            breadth_text=breadth_text,
+            rotation_text=rotation_text,
             history_text=history_text if history_text else "無（首輪）",
             prev_reflection=prev_reflection if prev_reflection else "無（首輪）",
             few_shot=get_few_shot("market_analysis"),

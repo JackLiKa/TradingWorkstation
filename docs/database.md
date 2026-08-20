@@ -124,6 +124,27 @@ CREATE TABLE IF NOT EXISTS index_daily (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
+## 表結構 `index_metadata`
+
+指數元數據表（來自 `ingestion/index_list.json`）：代碼、名稱、分類、數據來源。
+支持 10 大類別 ~80 個指數：綜合（composite）、規模（scale）、一級行業（industry_l1）、二級行業（industry_l2）、策略（strategy）、成長（growth）、價值（value）、主題（theme）、基金（fund）、債券（bond）。
+
+```sql
+CREATE TABLE IF NOT EXISTS index_metadata (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  code VARCHAR(16) NOT NULL COMMENT '指數代碼（sh.000001 / sz.399001）',
+  name VARCHAR(64) NOT NULL COMMENT '指數名稱',
+  category VARCHAR(32) NOT NULL COMMENT '分類中文名',
+  category_code VARCHAR(32) NOT NULL COMMENT '分類英文代碼',
+  source VARCHAR(32) NOT NULL DEFAULT 'baostock' COMMENT '數據來源',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_index_metadata_code (code),
+  KEY idx_index_metadata_category (category_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='指數元數據';
+```
+
 ## 表結構 `backtest_strategy`
 
 AI 優化策略存儲表（Agent 服務每輪優化後持久化）。

@@ -72,6 +72,12 @@ PROMPT_TEMPLATE = """請分析最近10個交易日的市場數據，進行深度
 ## 多日市場形態（最近{regime_days}日）
 {regime_text}
 
+## 市場廣度分析（最近10日，基於10大類別~80個指數）
+{breadth_text}
+
+## 輪動信號分析（行業與風格輪動）
+{rotation_text}
+
 ## 多日板塊表現（最近10個交易日，每日各行業漲跌幅）
 {sector_text}
 
@@ -203,6 +209,10 @@ class MarketNewsStage(BaseStage):
         regime_text = _format_regime(regime)
         regime_days = regime.get("metrics", {}).get("days_analyzed", 0)
 
+        # 格式化市場廣度與輪動信號
+        breadth_text = _format_market_breadth(market_data.get("market_breadth", {}))
+        rotation_text = _format_rotation(market_data.get("rotation", {}))
+
         # 格式化多日板塊表現
         sector_perf = market_data.get("sector_performance", [])
         sector_text = _format_sector_performance(sector_perf)
@@ -227,6 +237,8 @@ class MarketNewsStage(BaseStage):
             db_stats=db_stats_text,
             regime_text=regime_text,
             regime_days=regime_days,
+            breadth_text=breadth_text,
+            rotation_text=rotation_text,
             sector_text=sector_text,
             news_text=news_text,
             keyword_news_text=keyword_news_text,
@@ -273,6 +285,84 @@ def _format_regime(regime: dict) -> str:
             pct = d.get("pct_chg", 0)
             arrow = "↑" if pct > 0 else "↓" if pct < 0 else "→"
             lines.append(f"  {date}: 收盤{close} {arrow} {pct}%")
+
+    return "\n".join(lines)
+
+
+def _format_market_breadth(breadth: dict) -> str:
+    """格式化市場廣度數據為 prompt 可讀文本。"""
+    if not breadth or not breadth.get("summary"):
+        return "無市場廣度數據（後端可能不可用）"
+
+    lines = []
+    lines.append(f"摘要: {breadth.get('summary', '')}")
+
+    composite = breadth.get("compositeBreadth", {})
+    if composite:
+        lines.append("\n綜合指數:")
+        for name, change in composite.items():
+            lines.append(f"  {name}: {change:+.2f}%")
+
+    scale = breadth.get("scaleBreadth", {})
+    if scale:
+        lines.append("\n規模指數:")
+        for name, change in scale.items():
+            lines.append(f"  {name}: {change:+.2f}%")
+
+    style = breadth.get("styleBreadth", {})
+    if style:
+        lines.append("\n風格指數:")
+        for name, change in style.items():
+            lines.append(f"  {name}: {change:+.2f}%")
+
+    leading = breadth.get("leadingCategories", {})
+    if leading:
+        lines.append("\n領漲分類:")
+        for cat, change in leading.items():
+            lines.append(f"  {cat}: {change:+.2f}%")
+
+    lagging = breadth.get("laggingCategories", {})
+    if lagging:
+        lines.append("\n滯漲分類:")
+        for cat, change in lagging.items():
+            lines.append(f"  {cat}: {change:+.2f}%")
+
+    return "\n".join(lines)
+
+
+def _format_rotation(rotation: dict) -> str:
+    """格式化輪動信號數據為 prompt 可讀文本。"""
+    if not rotation or not rotation.get("summary"):
+        return "無輪動信號數據（後端可能不可用）"
+
+    lines = []
+    lines.append(f"摘要: {rotation.get('summary', '')}")
+    lines.append(f"輪動強度: {rotation.get('rotationStrength', 0):.1f}")
+
+    industry = rotation.get("industryRotation", {})
+    for cat_code, items in industry.items():
+        if items:
+            lines.append(f"\n{cat_code} 輪動:")
+            for name, change in items.items():
+                lines.append(f"  {name}: {change:+.2f}%")
+
+    style = rotation.get("styleRotation", {})
+    if style:
+        lines.append("\n風格輪動:")
+        for name, change in style.items():
+            lines.append(f"  {name}: {change:+.2f}%")
+
+    leading = rotation.get("leadingIndustries", [])
+    if leading:
+        lines.append("\n領漲行業:")
+        for item in leading[:5]:
+            lines.append(f"  {item.get('name', '')}: {item.get('change', 0):+.2f}%")
+
+    lagging = rotation.get("laggingIndustries", [])
+    if lagging:
+        lines.append("\n滯漲行業:")
+        for item in lagging[-5:]:
+            lines.append(f"  {item.get('name', '')}: {item.get('change', 0):+.2f}%")
 
     return "\n".join(lines)
 

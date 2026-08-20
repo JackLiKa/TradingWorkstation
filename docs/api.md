@@ -26,6 +26,12 @@
 | GET | `/stock/suggest` | 股票代码模糊建议（下拉框），query: q, limit |
 | GET | `/stock/industries` | 行业分类查询，query: code, industry, limit |
 | GET | `/stock/industries/list` | 所有不同行业名称列表 |
+| GET | `/stock/index-history` | 指數最近 N 日歷史，query: code, days（默認 10） |
+| POST | `/stock/index-history/batch` | 批量指數最近 N 日歷史，body: `{codes, days}` |
+| GET | `/stock/index-list` | 指數元數據列表（10 大類別 ~80 個指數），query: categoryCode（可選） |
+| GET | `/stock/market-breadth` | 市場廣度分析（綜合/規模/風格/行業），query: days（默認 10） |
+| GET | `/stock/rotation` | 輪動信號分析（行業/風格輪動），query: days（默認 10） |
+| GET | `/stock/sector-performance` | 多日板塊表現，query: days（默認 10） |
 
 ## K 线 chart
 

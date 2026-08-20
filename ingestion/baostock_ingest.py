@@ -106,14 +106,66 @@ def _load_stock_list() -> list[str]:
 
 
 def _load_index_list() -> list[str]:
-    """從 index_list.json 載入指數清單，沒有則用預設清單。"""
+    """從 index_list.json 載入指數清單，沒有則用預設清單。
+
+    支持兩種格式：
+    1. 舊格式（list[str]）：["sh.000001", "sz.399001", ...]
+    2. 新格式（dict with categories）：
+       {"categories": [{"category": "綜合指數", "indices": [{"code": "sh.000001", "name": "上證綜指"}, ...]}]}
+    """
     list_path = Path(__file__).resolve().parent / "index_list.json"
     if not list_path.exists():
         return DEFAULT_INDEX_CODES
     data = json.loads(list_path.read_text(encoding="utf-8"))
     if isinstance(data, list):
         return data
+    # 新格式：從 categories 中提取所有代碼
+    if "categories" in data:
+        codes = []
+        for cat in data["categories"]:
+            for idx in cat.get("indices", []):
+                codes.append(idx["code"])
+        return codes if codes else DEFAULT_INDEX_CODES
     return data.get("indexes", data.get("indices", DEFAULT_INDEX_CODES))
+
+
+def _sync_index_metadata(conn) -> int:
+    """從 index_list.json 同步指數元數據到 index_metadata 表。
+
+    新格式的 index_list.json 包含分類信息，此函數將其寫入數據庫，
+    供 Java 後端 /api/stock/index-list 端點查詢。
+
+    Returns:
+        int: 寫入/更新的元數據條數
+    """
+    list_path = Path(__file__).resolve().parent / "index_list.json"
+    if not list_path.exists():
+        return 0
+    data = json.loads(list_path.read_text(encoding="utf-8"))
+    if "categories" not in data:
+        return 0  # 舊格式無元數據
+
+    rows = []
+    for cat in data["categories"]:
+        category = cat["category"]
+        category_code = cat["category_code"]
+        for idx in cat.get("indices", []):
+            rows.append((idx["code"], idx["name"], category, category_code, "baostock"))
+
+    if not rows:
+        return 0
+
+    with conn.cursor() as cursor:
+        sql = (
+            "INSERT INTO index_metadata (code, name, category, category_code, source) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON DUPLICATE KEY UPDATE name=VALUES(name), category=VALUES(category), "
+            "category_code=VALUES(category_code), source=VALUES(source)"
+        )
+        cursor.executemany(sql, rows)
+        conn.commit()
+        print(f"[done] 指數元數據已同步 {len(rows)} 條（10 大類別）")
+        return len(rows)
 
 
 # ============================================================================
@@ -521,10 +573,14 @@ def _run_cli(args) -> int:
     print(f"[info] 日期範圍: {start_date} ~ {end_date}")
     print(f"[info] 復權類型: {[ADJUSTFLAG_MAP[af] for af in adjustflags]}")
     if index_codes:
-        print(f"[info] 指數清單: {len(index_codes)} 個指數")
+        print(f"[info] 指數清單: {len(index_codes)} 個指數（10 大類別）")
 
     conn = _connect()
     try:
+        # 同步指數元數據（分類/名稱）到 index_metadata 表
+        if args.index:
+            _sync_index_metadata(conn)
+
         grand_total = 0
         for af in adjustflags:
             print(f"\n{'=' * 60}")
@@ -536,7 +592,7 @@ def _run_cli(args) -> int:
 
         if index_codes:
             print(f"\n{'=' * 60}")
-            print(f"開始同步指數日線數據")
+            print(f"開始同步指數日線數據（{len(index_codes)} 個指數）")
             print(f"{'=' * 60}")
             grand_total += _sync_indexes(conn, index_codes, start_date, end_date, incremental)
 
@@ -674,6 +730,9 @@ def _run_interactive() -> int:
 
         # 指數同步
         if do_index:
+            # 先同步指數元數據（分類/名稱）到 index_metadata 表
+            _sync_index_metadata(conn)
+
             if incremental:
                 index_codes = _get_existing_indexes(conn, "d")
                 if not index_codes:
@@ -682,7 +741,7 @@ def _run_interactive() -> int:
                 index_codes = _load_index_list()
 
             print(f"\n{'=' * 60}")
-            print(f"開始同步指數日線數據（{len(index_codes)} 個指數）")
+            print(f"開始同步指數日線數據（{len(index_codes)} 個指數，10 大類別）")
             print(f"{'=' * 60}")
             grand_total += _sync_indexes(conn, index_codes, start_date, end_date, incremental)
 

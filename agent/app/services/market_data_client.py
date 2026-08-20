@@ -41,13 +41,15 @@ class MarketDataClient:
     """
 
     async def get_market_overview(self) -> dict[str, Any]:
-        """獲取全市場概覽：大盤指數 + 後端統計 + 多日形態 + 多日板塊表現 + 新聞。
+        """獲取全市場概覽：大盤指數 + 後端統計 + 市場形態 + 廣度/輪動 + 板塊 + 新聞。
 
         Returns:
             {
                 "indices": [{"name": "上證指數", "code": "sh000001", "price": 3990.3, "change_pct": 0.19}, ...],
                 "db_stats": {...},  # 來自後端 dashboard
                 "regime": {...},    # 市場形態識別結果
+                "market_breadth": {...},  # 綜合/規模/風格廣度（10大類指數）
+                "rotation": {...},  # 行業與風格輪動信號
                 "sector_performance": [...],  # 多日板塊表現（10日）
                 "news": [...],  # 財經新聞列表
                 "timestamp": "2026-08-18 22:30:00",
@@ -64,8 +66,12 @@ class MarketDataClient:
         except Exception as e:
             logger.warning(f"後端 dashboard 數據獲取失敗: {e}")
 
-        # 獲取多日指數歷史 + 計算市場形態
+        # 獲取多日指數歷史 + 計算市場形態（一次批量調用）
         regime = await self._compute_market_regime()
+
+        # 獲取市場廣度與輪動信號（後端緩存）
+        market_breadth = await self._get_market_breadth(10)
+        rotation = await self._get_rotation_signals(10)
 
         # 獲取多日板塊表現（10日）
         sector_performance = await self._get_sector_performance_multi_day(10)
@@ -77,6 +83,8 @@ class MarketDataClient:
             "indices": indices,
             "db_stats": db_stats,
             "regime": regime,
+            "market_breadth": market_breadth,
+            "rotation": rotation,
             "sector_performance": sector_performance,
             "news": news,
             "timestamp": _now_str(),
@@ -99,21 +107,35 @@ class MarketDataClient:
         try:
             from app.services.backend_client import backend_client
 
-            # 獲取指數最近 10 日歷史（多指數 fallback）
+            # 獲取多個指數最近 10 日歷史（批量調用，減少 API 請求）
             # 數據庫中指數代碼格式為 sh.000001（帶點）
-            # 優先用上證指數，失敗時依次嘗試深證成指、滬深300
-            fallback_codes = ["sh.000001", "sz.399001", "sh.000300"]
+            primary_codes = ["sh.000001", "sz.399001", "sh.000300"]
+            batch = await backend_client.get_index_history_batch(primary_codes, days=10)
             history = []
             used_code = ""
-            for code in fallback_codes:
-                history = await backend_client.get_index_history(code, days=10)
-                if len(history) >= 3:
+            for code in primary_codes:
+                h = batch.get(code, [])
+                if len(h) >= 3:
+                    history = h
                     used_code = code
                     break
-                logger.warning(f"指數 {code} 歷史數據不足 ({len(history)} 條)，嘗試下一個")
+                logger.warning(f"指數 {code} 歷史數據不足 ({len(h)} 條)，嘗試下一個")
+
+            # 主力指數都失敗時，從 index_metadata 表獲取更多指數嘗試
+            if len(history) < 3:
+                logger.info("主力指數數據不足，從 index_metadata 獲取更多指數嘗試")
+                metadata = await backend_client.get_index_list("scale")
+                fallback_codes = [item.get("code", "") for item in metadata if item.get("code") not in primary_codes]
+                fallback_batch = await backend_client.get_index_history_batch(fallback_codes[:20], days=10)
+                for code, h in fallback_batch.items():
+                    if len(h) >= 3:
+                        used_code = code
+                        history = h
+                        logger.info(f"從 metadata 找到可用指數: {code}")
+                        break
 
             if len(history) < 3:
-                logger.warning("所有 fallback 指數都數據不足，無法計算市場形態")
+                logger.warning("所有指數都數據不足，無法計算市場形態")
                 return {"regime_type": "unknown", "description": "歷史數據不足（所有指數均無足夠數據）", "multi_day_data": []}
 
             logger.info(f"使用指數 {used_code} 計算市場形態（{len(history)} 條歷史數據）")
@@ -326,6 +348,48 @@ class MarketDataClient:
         except Exception as e:
             logger.warning(f"多日板塊表現獲取失敗: {e}")
             return []
+
+    async def _get_market_breadth(self, days: int = 10) -> dict[str, Any]:
+        """從後端獲取市場廣度分析（綜合/規模/風格/行業）。
+
+        基於 index_metadata 中 10 大類別 ~80 個指數計算，走後端 Caffeine 緩存。
+
+        Args:
+            days: 最近交易日天數
+
+        Returns:
+            dict: 市場廣度 DTO
+        """
+        try:
+            from app.services.backend_client import backend_client
+
+            data = await backend_client.get_market_breadth(days)
+            logger.info(f"獲取市場廣度（{days}日）: {data.get('summary', '')[:60]}...")
+            return data
+        except Exception as e:
+            logger.warning(f"市場廣度獲取失敗: {e}")
+            return {}
+
+    async def _get_rotation_signals(self, days: int = 10) -> dict[str, Any]:
+        """從後端獲取輪動信號分析（行業與風格輪動）。
+
+        基於一級/二級行業指數和成長/價值指數計算，走後端 Caffeine 緩存。
+
+        Args:
+            days: 最近交易日天數
+
+        Returns:
+            dict: 輪動信號 DTO
+        """
+        try:
+            from app.services.backend_client import backend_client
+
+            data = await backend_client.get_rotation_signals(days)
+            logger.info(f"獲取輪動信號（{days}日）: rotationStrength={data.get('rotationStrength', 0)}")
+            return data
+        except Exception as e:
+            logger.warning(f"輪動信號獲取失敗: {e}")
+            return {}
 
     async def _get_market_news(self, page_size: int = 20) -> list[dict[str, Any]]:
         """從東方財經抓取最新財經新聞（A股市場要聞）。

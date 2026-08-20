@@ -21,7 +21,7 @@
 └──────────────┬──────────────┘
                │
         ┌──────▼──────┐
-        │   MySQL      │  stock_daily / stock_industry / index_daily
+        │   MySQL      │  stock_daily / stock_industry / index_daily / index_metadata
         └──────────────┘
                ▲
         ┌──────┴──────┐
@@ -68,9 +68,9 @@ controller → service → repository / indicator引擎
 | `agents/monitor.py` | 節點生命周期監控 + 異常檢測（AOP） |
 | `agents/monitor_ai.py` | 監測 AI（LLM 分析系統健康 + 建議） |
 | `agents/stages/base.py` | AI 節點基類（pre/execute/judge/retry/post 生命週期） |
-| `agents/stages/market_news.py` | AI 0：行情新聞分析（實時指數 + 市場情緒） |
+| `agents/stages/market_news.py` | AI 0：行情新聞分析（實時指數 + 10日市場廣度/輪動 + 市場情緒） |
 | `agents/stages/industry_analysis.py` | AI 0.5：行業篩選（利好行業 + 候選股票） |
-| `agents/stages/market_analysis.py` | AI 1：行情分析（趨勢判斷 + 波動率 + 策略類型） |
+| `agents/stages/market_analysis.py` | AI 1：行情分析（趨勢判斷 + 廣度/輪動 + 波動率 + 策略類型） |
 | `agents/stages/strategy_generation.py` | AI 2：策略生成（選股條件 JSON） |
 | `agents/stages/backtest_reflection.py` | AI 3：回測反思（績效分析 + 改進建議） |
 | `agents/stages/prompt_generation.py` | AI 4：提示詞生成（下一輪優化方向） |

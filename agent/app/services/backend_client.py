@@ -241,6 +241,104 @@ class BackendClient:
             logger.warning(f"獲取板塊表現失敗: {e}")
             return []
 
+    async def get_index_list(self, category_code: str | None = None) -> list[dict[str, Any]]:
+        """獲取指數元數據列表（代碼/名稱/分類）。
+
+        數據來源：ingestion/index_list.json → index_metadata 表。
+        共 10 大類別 ~80 個指數（綜合/規模/一級行業/二級行業/策略/成長/價值/主題/基金/債券）。
+
+        Args:
+            category_code: 可選，按分類英文代碼過濾
+                (composite/scale/industry_l1/industry_l2/strategy/growth/value/theme/fund/bond)
+
+        Returns:
+            list[dict]: 指數元數據列表，每項含 code/name/category/categoryCode
+        """
+        try:
+            params = {"categoryCode": category_code} if category_code else {}
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/stock/index-list",
+                params=params,
+                timeout=15,
+            )
+            return data.get("data", [])
+        except Exception as e:
+            logger.warning(f"獲取指數元數據列表失敗: {e}")
+            return []
+
+    async def get_index_history_batch(self, codes: list[str], days: int = 10) -> dict[str, list[dict[str, Any]]]:
+        """批量獲取多個指數最近 N 日的歷史數據（一次後端調用）。
+
+        用於 AI 多維市場分析，減少多次單指數 API 調用的開銷。
+
+        Args:
+            codes: 指數代碼列表（如 ["sh.000001", "sz.399001", "sh.000300"])
+            days: 最近天數（默認 10）
+
+        Returns:
+            dict[str, list[dict]]: 按指數代碼分組的歷史數據
+        """
+        if not codes:
+            return {}
+        try:
+            data = await self._request_with_retry(
+                "POST",
+                f"{self._base_url}/api/stock/index-history/batch",
+                json_data={"codes": codes, "days": days},
+                timeout=30,
+            )
+            return data.get("data", {})
+        except Exception as e:
+            logger.warning(f"批量獲取指數歷史失敗: {e}")
+            return {}
+
+    async def get_market_breadth(self, days: int = 10) -> dict[str, Any]:
+        """獲取市場廣度分析（綜合/規模/風格/行業）。
+
+        基於 index_metadata 中 10 大類別 ~80 個指數計算。
+
+        Args:
+            days: 最近交易日天數（默認 10）
+
+        Returns:
+            dict: 市場廣度 DTO，含 compositeBreadth/scaleBreadth/styleBreadth/leading/lagging/summary
+        """
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/stock/market-breadth",
+                params={"days": days},
+                timeout=30,
+            )
+            return data.get("data", {})
+        except Exception as e:
+            logger.warning(f"獲取市場廣度失敗: {e}")
+            return {}
+
+    async def get_rotation_signals(self, days: int = 10) -> dict[str, Any]:
+        """獲取輪動信號分析（行業與風格輪動）。
+
+        基於一級/二級行業指數和成長/價值指數計算。
+
+        Args:
+            days: 最近交易日天數（默認 10）
+
+        Returns:
+            dict: 輪動信號 DTO，含 industryRotation/styleRotation/leading/lagging/rotationStrength/summary
+        """
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/stock/rotation",
+                params={"days": days},
+                timeout=30,
+            )
+            return data.get("data", {})
+        except Exception as e:
+            logger.warning(f"獲取輪動信號失敗: {e}")
+            return {}
+
     async def get_latest_trade_date(self) -> str | None:
         """獲取數據庫中已有數據的最新交易日。
 

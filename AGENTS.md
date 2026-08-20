@@ -61,7 +61,7 @@ cd agent && pip install -r requirements.txt
 ### 数据同步配置
 
 - `ingestion/stock_list.json` — 股票清單（3354 隻 A 股，靜態文件）
-- `ingestion/index_list.json`（可選）— 指數清單，不存在時用內置 8 個指數
+- `ingestion/index_list.json` — 指數清單（10 大類別 ~80 個指數，含代碼/名稱/分類），不存在時用內置 8 個指數
 - `.env` 中 `SYNC_*` 配置項控制後端同步行為
 
 ## 完整启动流程
@@ -398,8 +398,12 @@ java -version  # 确认显示 21.x.x
 
 | 缓存名              | TTL（秒）           | 缓存内容          | 清除触发条件         |
 |---------------------|---------------------|-------------------|----------------------|
-| `dashboardSummary`  | `CACHE_SUMMARY_TTL_SECONDS`（默认 60） | 仪表盘汇总数据    | TTL 过期自动清除     |
-| `dashboardMetrics`  | `CACHE_METRICS_TTL_SECONDS`（默认 30） | 仪表盘指标        | TTL 过期自动清除     |
+| `dashboardSummary`    | `CACHE_SUMMARY_TTL_SECONDS`（默认 60）   | 仪表盘汇总数据       | TTL 过期自动清除     |
+| `dashboardMetrics`    | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 仪表盘指标           | TTL 过期自动清除     |
+| `indexMetadata`       | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 指數元數據           | TTL 过期自动清除     |
+| `marketBreadth`       | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 市場廣度分析         | TTL 过期自动清除     |
+| `rotationSignal`      | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 輪動信號分析         | TTL 过期自动清除     |
+| `sectorPerformance`   | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 多日板塊表現         | TTL 过期自动清除     |
 
 **缓存可能导致的错误现象：**
 

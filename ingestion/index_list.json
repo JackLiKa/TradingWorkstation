@@ -1,0 +1,146 @@
+{
+  "_comment": "Baostock 指數清單 — 10 大類別，共 ~100 個指數。代碼格式 sh.XXXXXX / sz.XXXXXX。",
+  "_source": "https://www.baostock.com/mainContent?file=indexData.md",
+  "_updated": "2026-08-20",
+  "categories": [
+    {
+      "category": "综合指数",
+      "category_code": "composite",
+      "indices": [
+        {"code": "sh.000001", "name": "上证综指"},
+        {"code": "sh.000002", "name": "上证A股指数"},
+        {"code": "sh.000003", "name": "上证B股指数"},
+        {"code": "sh.000010", "name": "上证180指数"},
+        {"code": "sz.399106", "name": "深证综指"},
+        {"code": "sz.399107", "name": "深证A股指数"},
+        {"code": "sz.399108", "name": "深证B股指数"},
+        {"code": "sz.399311", "name": "国证2000"}
+      ]
+    },
+    {
+      "category": "规模指数",
+      "category_code": "scale",
+      "indices": [
+        {"code": "sh.000016", "name": "上证50"},
+        {"code": "sh.000300", "name": "沪深300"},
+        {"code": "sh.000852", "name": "中证1000"},
+        {"code": "sh.000905", "name": "中证500"},
+        {"code": "sz.399001", "name": "深证成指"},
+        {"code": "sz.399005", "name": "中小100"},
+        {"code": "sz.399006", "name": "创业板指"},
+        {"code": "sz.399303", "name": "国证200"},
+        {"code": "sz.399305", "name": "国证1000"},
+        {"code": "sz.399673", "name": "创业板50"}
+      ]
+    },
+    {
+      "category": "一级行业指数",
+      "category_code": "industry_l1",
+      "indices": [
+        {"code": "sh.000037", "name": "上证医药"},
+        {"code": "sh.000038", "name": "上证消费"},
+        {"code": "sh.000040", "name": "上证制造"},
+        {"code": "sh.000041", "name": "上证公用"},
+        {"code": "sh.000042", "name": "上证金融"},
+        {"code": "sh.000043", "name": "上证能源"},
+        {"code": "sh.000044", "name": "上证材料"},
+        {"code": "sh.000045", "name": "上证信息"},
+        {"code": "sh.000046", "name": "上证电信"},
+        {"code": "sz.399433", "name": "国证交运"},
+        {"code": "sz.399438", "name": "国证公用"},
+        {"code": "sz.399439", "name": "国证金融"},
+        {"code": "sz.399440", "name": "国证工业"},
+        {"code": "sz.399441", "name": "国证信息"},
+        {"code": "sz.399442", "name": "国证医药"},
+        {"code": "sz.399443", "name": "国证服务"},
+        {"code": "sz.399444", "name": "国证商业"},
+        {"code": "sz.399445", "name": "国证地产"},
+        {"code": "sz.399446", "name": "国证能源"},
+        {"code": "sz.399447", "name": "国证材料"}
+      ]
+    },
+    {
+      "category": "二级行业指数",
+      "category_code": "industry_l2",
+      "indices": [
+        {"code": "sh.000952", "name": "300地产"},
+        {"code": "sz.399951", "name": "300银行"},
+        {"code": "sh.000953", "name": "300能源"},
+        {"code": "sh.000954", "name": "300材料"},
+        {"code": "sh.000955", "name": "300工业"},
+        {"code": "sh.000956", "name": "300可选"},
+        {"code": "sh.000957", "name": "300消费"},
+        {"code": "sh.000958", "name": "300医药"},
+        {"code": "sh.000959", "name": "300金融"},
+        {"code": "sh.000960", "name": "300信息"},
+        {"code": "sh.000961", "name": "300电信"},
+        {"code": "sh.000962", "name": "300公用"}
+      ]
+    },
+    {
+      "category": "策略指数",
+      "category_code": "strategy",
+      "indices": [
+        {"code": "sh.000050", "name": "50等权"},
+        {"code": "sh.000982", "name": "500等权"},
+        {"code": "sh.000983", "name": "300等权"},
+        {"code": "sh.000849", "name": "上证非周期"},
+        {"code": "sh.000850", "name": "上证周期"}
+      ]
+    },
+    {
+      "category": "成长指数",
+      "category_code": "growth",
+      "indices": [
+        {"code": "sz.399376", "name": "小盘成长"},
+        {"code": "sz.399377", "name": "中盘成长"},
+        {"code": "sz.399378", "name": "大盘成长"},
+        {"code": "sh.000052", "name": "50成长"}
+      ]
+    },
+    {
+      "category": "价值指数",
+      "category_code": "value",
+      "indices": [
+        {"code": "sh.000029", "name": "180价值"},
+        {"code": "sh.000030", "name": "180成长"},
+        {"code": "sh.000051", "name": "50价值"},
+        {"code": "sz.399379", "name": "小盘价值"},
+        {"code": "sz.399380", "name": "中盘价值"},
+        {"code": "sz.399381", "name": "大盘价值"}
+      ]
+    },
+    {
+      "category": "主题指数",
+      "category_code": "theme",
+      "indices": [
+        {"code": "sh.000015", "name": "红利指数"},
+        {"code": "sh.000063", "name": "上证周期"},
+        {"code": "sh.000064", "name": "上证非周期"},
+        {"code": "sh.000065", "name": "上证民营"},
+        {"code": "sh.000066", "name": "上证国企"},
+        {"code": "sh.000067", "name": "上证新兴"},
+        {"code": "sh.000068", "name": "上证资源"},
+        {"code": "sh.000069", "name": "上证消费"},
+        {"code": "sh.000070", "name": "上证能源"}
+      ]
+    },
+    {
+      "category": "基金指数",
+      "category_code": "fund",
+      "indices": [
+        {"code": "sh.000011", "name": "上证基金指数"}
+      ]
+    },
+    {
+      "category": "债券指数",
+      "category_code": "bond",
+      "indices": [
+        {"code": "sh.000012", "name": "上证国债指数"},
+        {"code": "sh.000013", "name": "上证企业债指数"},
+        {"code": "sh.000017", "name": "上证新综指"},
+        {"code": "sh.000019", "name": "上证转债指数"}
+      ]
+    }
+  ]
+}
