@@ -13,6 +13,8 @@ import type {
   AvailableProvider,
   SetStageProviderRequest,
   ProvidersResponse,
+  NodeEvent,
+  TimelineData,
 } from './types';
 
 const AGENT_BASE = process.env.NEXT_PUBLIC_AGENT_API_BASE || 'http://localhost:8100';
@@ -66,6 +68,9 @@ export const agentApi = {
     agentPost<{ status: string; config: Record<string, unknown> }>(`/config`, { config }),
   getDataRange: () => agentFetch<{ earliestTradeDate: string | null; latestTradeDate: string | null }>(`/data-range`),
   monitor: () => agentFetch<MonitorStatus>(`/monitor`),
+  monitorEvents: (limit?: number) =>
+    agentFetch<{ events: NodeEvent[]; total: number }>(`/monitor/events${limit ? `?limit=${limit}` : ''}`),
+  monitorTimeline: () => agentFetch<TimelineData>(`/monitor/timeline`),
   monitorAnalyze: () => agentFetch<MonitorAnalysis>(`/monitor/analyze`),
   resolveAlert: (alertId: string) =>
     agentPost<{ status: string; alert_id: string }>(`/monitor/alerts/${alertId}/resolve`),

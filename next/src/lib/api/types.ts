@@ -542,6 +542,43 @@ export interface MonitorAnalysis {
   suggestions: string[];
 }
 
+// ===== 時間軸可視化類型 =====
+
+/** 時間軸中的單個節點執行記錄 */
+export interface TimelineNode {
+  node_id: string;
+  node_type: string;
+  timestamp: string;
+  duration_ms: number;
+  status: string;
+  judge_score: number;
+  judge_passed: boolean;
+  attempts: number;
+  error: string | null;
+}
+
+/** 單次迭代的時間軸數據 */
+export interface TimelineIteration {
+  iteration: number;
+  nodes: TimelineNode[];
+}
+
+/** 節點定義（元數據） */
+export interface NodeDefinition {
+  id: string;
+  label: string;
+  type: string;
+  order: number;
+}
+
+/** 時間軸 API 返回數據 */
+export interface TimelineData {
+  iterations: TimelineIteration[];
+  node_definitions: NodeDefinition[];
+  total_iterations: number;
+  run_id: string;
+}
+
 // ===== AI 調用日誌（Agent Dashboard）=====
 
 /** AI 調用日誌記錄 — 對應後端 ai_call_log 表 */

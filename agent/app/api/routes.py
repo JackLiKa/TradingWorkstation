@@ -413,6 +413,33 @@ async def get_monitor_status():
     return node_monitor.get_status()
 
 
+@router.get("/monitor/events")
+async def get_all_events(limit: int = 500):
+    """獲取全部節點事件（用於時間軸可視化）。
+
+    Args:
+        limit: 最多返回的事件數（默認 500）
+
+    Returns:
+        dict: 全部節點事件列表
+    """
+    from app.agents.monitor import node_monitor
+
+    return {"events": node_monitor.get_all_events(limit), "total": len(node_monitor._events)}
+
+
+@router.get("/monitor/timeline")
+async def get_timeline():
+    """獲取結構化時間軸數據（按迭代分組，用於 Gantt 圖可視化）。
+
+    Returns:
+        dict: 按迭代分組的節點執行時間軸 + 節點定義
+    """
+    from app.agents.monitor import node_monitor
+
+    return node_monitor.get_timeline()
+
+
 @router.get("/monitor/analyze")
 async def analyze_monitor():
     """監測 AI 分析當前系統狀態 — 調用 LLM 分析異常並給出建議。

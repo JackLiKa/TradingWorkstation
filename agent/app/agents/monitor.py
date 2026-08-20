@@ -371,6 +371,88 @@ class NodeMonitor:
             "score_history": self._score_history[-20:],
         }
 
+    def get_all_events(self, limit: int = 500) -> list[dict[str, Any]]:
+        """獲取全部節點事件（用於時間軸可視化）。
+
+        Args:
+            limit: 最多返回的事件數（從最新開始倒序）
+        """
+        return [e.to_dict() for e in self._events[-limit:]]
+
+    def get_timeline(self) -> dict[str, Any]:
+        """獲取結構化時間軸數據（按迭代分組，用於 Gantt 圖）。
+
+        返回格式:
+        {
+            "iterations": [
+                {
+                    "iteration": 1,
+                    "nodes": [
+                        {
+                            "node_id": "market_news",
+                            "node_type": "ai",
+                            "start_time": "2026-08-20T10:00:00",
+                            "end_time": "2026-08-20T10:00:05",
+                            "duration_ms": 5000,
+                            "status": "passed",
+                            "judge_score": 75.0,
+                            "attempts": 1,
+                        },
+                        ...
+                    ]
+                },
+                ...
+            ],
+            "node_definitions": [...],  # 節點元數據
+        }
+        """
+        # 按迭代分組
+        iterations_map: dict[int, list[dict[str, Any]]] = {}
+        for event in self._events:
+            if event.status in (
+                NodeStatus.PASSED.value,
+                NodeStatus.FAILED.value,
+                NodeStatus.RETRYING.value,
+                NodeStatus.TIMEOUT.value,
+                NodeStatus.CANCELLED.value,
+            ):
+                it = event.iteration
+                if it not in iterations_map:
+                    iterations_map[it] = []
+                iterations_map[it].append(
+                    {
+                        "node_id": event.node_id,
+                        "node_type": event.node_type,
+                        "timestamp": event.timestamp,
+                        "duration_ms": event.duration_ms,
+                        "status": event.status,
+                        "judge_score": event.judge_score,
+                        "judge_passed": event.judge_passed,
+                        "attempts": event.attempts,
+                        "error": event.error,
+                    }
+                )
+
+        iterations = [{"iteration": it, "nodes": nodes} for it, nodes in sorted(iterations_map.items())]
+
+        # 節點定義（順序固定）
+        node_defs = [
+            {"id": "market_news", "label": "行情新聞", "type": "ai", "order": 0},
+            {"id": "industry_analysis", "label": "行業篩選", "type": "ai", "order": 1},
+            {"id": "market_analysis", "label": "行情分析", "type": "ai", "order": 2},
+            {"id": "strategy_generation", "label": "策略生成", "type": "ai", "order": 3},
+            {"id": "backtest", "label": "回測運行", "type": "backtest", "order": 4},
+            {"id": "backtest_reflection", "label": "回測反思", "type": "ai", "order": 5},
+            {"id": "prompt_generation", "label": "提示詞生成", "type": "ai", "order": 6},
+        ]
+
+        return {
+            "iterations": iterations,
+            "node_definitions": node_defs,
+            "total_iterations": len(iterations),
+            "run_id": self._run_id,
+        }
+
     def _compute_node_stats(self) -> dict[str, dict]:
         """計算各節點的統計信息。"""
         stats: dict[str, dict] = {}

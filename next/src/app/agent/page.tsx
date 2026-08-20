@@ -17,6 +17,7 @@ import { AgentStatusPanel } from '@/components/agent/AgentStatusPanel';
 import { AgentIterationFlow } from '@/components/agent/AgentIterationFlow';
 import { AgentWorkflowGraph } from '@/components/agent/AgentWorkflowGraph';
 import { AgentMonitorPanel } from '@/components/agent/AgentMonitorPanel';
+import { AgentNodeTimeline } from '@/components/agent/AgentNodeTimeline';
 import { AgentScoreTrend } from '@/components/agent/AgentScoreTrend';
 import { AgentModelCard } from '@/components/agent/AgentModelCard';
 import { AgentProviderSelector } from '@/components/agent/AgentProviderSelector';
@@ -200,13 +201,14 @@ export default function AgentPage() {
           {/* 迭代階段流程指示器（運行時顯示） */}
           <AgentIterationFlow state={state ?? null} />
 
-          {/* AI 工作流圖譜（運行時顯示，展示各節點狀態和評委結果） */}
-          {isRunning && (
-            <AgentWorkflowGraph
-              state={state ?? null}
-              currentStageResults={state?.current_stage_results}
-            />
-          )}
+          {/* AI 工作流圖譜（始終顯示，展示各節點狀態和評委結果） */}
+          <AgentWorkflowGraph
+            state={state ?? null}
+            currentStageResults={state?.current_stage_results}
+          />
+
+          {/* 節點執行時間軸（始終顯示，按迭代展示各節點耗時和狀態） */}
+          <AgentNodeTimeline />
 
           {/* 系統監控面板（始終顯示，展示節點統計、告警、AI 診斷） */}
           <AgentMonitorPanel />
