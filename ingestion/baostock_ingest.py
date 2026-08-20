@@ -261,8 +261,34 @@ def _upsert_industry_batch(cursor, rows: list[tuple]) -> None:
     cursor.executemany(sql, rows)
 
 
-def _sync_industry(conn) -> int:
-    """同步行業分類數據（全量 upsert，baostock 每週一更新，數據量小）。"""
+def _get_industry_last_update_date(conn):
+    """獲取 stock_industry 表中最新的 update_date。"""
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT MAX(update_date) FROM stock_industry")
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else None
+
+
+def _sync_industry(conn, *, force: bool = False) -> int:
+    """同步行業分類數據（baostock 每週一更新，數據量小）。
+
+    Args:
+        conn: 資料庫連接。
+        force: True 時強制全量拉取（忽略新鮮度檢查）；
+               False 時若 DB 最新 update_date 距今天 ≤7 天則跳過拉取，
+               避免每次運行都重複下載 5542 行未變化的數據。
+    """
+    if not force:
+        last_update = _get_industry_last_update_date(conn)
+        if last_update is not None:
+            age_days = (date.today() - last_update).days
+            if age_days < 7:
+                print(
+                    f"[skip] 行業數據已是最新（update_date={last_update}, 距今 {age_days} 天），"
+                    f"baostock 每週一更新，跳過本次拉取（使用 --force-industry 可強制刷新）"
+                )
+                return 0
+
     _ensure_login()
     rs = bs.query_stock_industry()
     if rs.error_code != "0":
@@ -469,23 +495,25 @@ def _run_cli(args) -> int:
     start_date = args.start or os.getenv("SYNC_DEFAULT_START_DATE", "2021-01-01")
     incremental = args.mode == "incremental"
 
-    # 確定股票清單
-    if args.codes:
-        codes = [c.strip() for c in args.codes.split(",") if c.strip()]
-    elif incremental:
-        # 增量模式：用資料庫中已有的股票
-        conn = _connect()
-        try:
-            codes = _get_existing_stocks(conn, adjustflags[0])
-        finally:
-            conn.close()
-        if not codes:
-            # 資料庫沒有數據，用靜態清單
+    # 確定股票清單（僅當需要同步股票日線時才載入）
+    codes: list[str] = []
+    if adjustflags:
+        if args.codes:
+            codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+        elif incremental:
+            # 增量模式：用資料庫中已有的股票
+            conn = _connect()
+            try:
+                codes = _get_existing_stocks(conn, adjustflags[0])
+            finally:
+                conn.close()
+            if not codes:
+                # 資料庫沒有數據，用靜態清單
+                codes = _load_stock_list()
+            print(f"[info] 增量更新模式：從資料庫獲取 {len(codes)} 隻股票")
+        else:
             codes = _load_stock_list()
-        print(f"[info] 增量更新模式：從資料庫獲取 {len(codes)} 隻股票")
-    else:
-        codes = _load_stock_list()
-        print(f"[info] 範圍模式：從清單載入 {len(codes)} 隻股票")
+            print(f"[info] 範圍模式：從清單載入 {len(codes)} 隻股票")
 
     # 確定指數清單
     index_codes = _load_index_list() if args.index else []
@@ -516,7 +544,7 @@ def _run_cli(args) -> int:
             print(f"\n{'=' * 60}")
             print(f"開始同步行業分類數據")
             print(f"{'=' * 60}")
-            grand_total += _sync_industry(conn)
+            grand_total += _sync_industry(conn, force=args.force_industry)
 
         print(f"\n{'=' * 60}")
         print(f"全部完成！共寫入 {grand_total} 條記錄")
@@ -663,7 +691,7 @@ def _run_interactive() -> int:
             print(f"\n{'=' * 60}")
             print(f"開始同步行業分類數據")
             print(f"{'=' * 60}")
-            grand_total += _sync_industry(conn)
+            grand_total += _sync_industry(conn, force=False)
 
         print(f"\n{'=' * 60}")
         print(f"全部完成！共寫入 {grand_total} 條記錄")
@@ -701,6 +729,8 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=int(os.getenv("SYNC_BATCH_SIZE", "1000")))
     parser.add_argument("--index", action="store_true", help="同時同步指數數據到 index_daily 表")
     parser.add_argument("--industry", action="store_true", help="同時同步行業分類數據到 stock_industry 表")
+    parser.add_argument("--force-industry", action="store_true",
+                        help="強制全量拉取行業數據（忽略 7 天新鮮度檢查）")
     args = parser.parse_args()
 
     return _run_cli(args)
