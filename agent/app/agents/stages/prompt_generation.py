@@ -4,11 +4,11 @@
 輸出: 精準指引文本（2-3 句話）
 範式: 自然語言，包含應調整的參數、避免的策略、追求的目標
 """
-import logging
-from typing import Any
 
-from app.agents.stages.base import BaseStage
+import logging
+
 from app.agents.few_shot import get_few_shot
+from app.agents.stages.base import BaseStage
 
 logger = logging.getLogger("agent.stage.prompt")
 
@@ -68,7 +68,7 @@ class PromptGenerationStage(BaseStage):
             history: list[IterationResult] — 歷史記錄
         """
         reflection = kwargs.get("reflection", "")
-        stats = kwargs.get("stats", {})
+        kwargs.get("stats", {})
         composite_score = kwargs.get("composite_score", 0)
         history = kwargs.get("history", [])
 

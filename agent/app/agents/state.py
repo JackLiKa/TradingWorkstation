@@ -4,13 +4,14 @@
 - iterations 列表自動截斷（保留最近 100 輪），防止內存洩漏
 - 提供 checkpoint/restore 方法，支持狀態持久化到磁盤
 """
+
 import json
 import logging
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from app.core.llm_client import llm_client
 
@@ -77,10 +78,10 @@ def build_default_backtest_config(latest_trade_date: str | None = None) -> dict[
     return config
 
 
-
 @dataclass
 class StageResult:
     """單個 AI 節點的執行結果。"""
+
     stage_name: str  # 節點名稱（如 "market_news"）
     output: str  # AI 原始輸出文本
     judge_score: float = 0.0  # 評委給出的分數（0-100）
@@ -88,7 +89,7 @@ class StageResult:
     judge_feedback: str = ""  # 評委反饋意見
     attempts: int = 1  # 嘗試次數（含重試）
     duration_ms: int = 0  # 執行耗時（毫秒）
-    error: Optional[str] = None  # 異常信息，無異常時為 None
+    error: str | None = None  # 異常信息，無異常時為 None
 
     def to_dict(self) -> dict:
         """將結果序列化為字典，用於 API 返回和 JSON 存儲。"""
@@ -102,6 +103,7 @@ class IterationResult:
     記錄一輪完整優化循環（AI0→AI0.5→AI1→AI2→回測→AI3→AI4）的全部產出，
     用於歷史追溯和前端可視化。
     """
+
     iteration: int  # 迭代輪次（從 1 開始遞增）
     timestamp: str  # ISO 格式時間戳
     criteria: dict[str, Any]  # 本輪使用的選股條件
@@ -120,7 +122,7 @@ class IterationResult:
     next_criteria: dict[str, Any] = field(default_factory=dict)  # 下一輪建議的選股條件
     # 各階段評委結果
     stage_results: list[dict] = field(default_factory=list)  # 各階段的 StageResult 序列化列表
-    error: Optional[str] = None  # 異常信息，正常完成時為 None
+    error: str | None = None  # 異常信息，正常完成時為 None
 
     def to_dict(self) -> dict:
         """將迭代結果序列化為字典，用於 API 返回和歷史存儲。"""
@@ -134,12 +136,13 @@ class OptimizerState:
     既保存歷史迭代記錄，也保存當前進行中的中間狀態，
     供 API 層實時查詢和前端可視化。
     """
+
     running: bool = False  # 優化循環是否正在運行
     current_iteration: int = 0  # 當前迭代輪次
     iterations: list[IterationResult] = field(default_factory=list)  # 歷史迭代結果列表
     best_score: float = -999  # 歷史最高綜合評分
     best_iteration: int = 0  # 取得最高評分的迭代輪次
-    best_strategy_id: Optional[int] = None  # 最高分策略在後端的 ID
+    best_strategy_id: int | None = None  # 最高分策略在後端的 ID
     best_criteria: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_CRITERIA))  # 歷史最優策略的選股條件
     best_config: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_BACKTEST_CONFIG))  # 歷史最優策略的回測配置
     current_criteria: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_CRITERIA))  # 當前選股條件
@@ -157,8 +160,8 @@ class OptimizerState:
     # 當前迭代的各階段結果（增量更新，用於實時可視化）
     current_stage_results: list[dict] = field(default_factory=list)
     status_message: str = "idle"  # 人類可讀的狀態描述
-    started_at: Optional[str] = None  # 啟動時間（ISO 格式）
-    stopped_at: Optional[str] = None  # 停止時間（ISO 格式）
+    started_at: str | None = None  # 啟動時間（ISO 格式）
+    stopped_at: str | None = None  # 停止時間（ISO 格式）
 
     def to_dict(self) -> dict:
         """將運行狀態序列化為字典，供 /status 等 API 端點返回。
@@ -274,7 +277,7 @@ class OptimizerState:
             return False
 
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
 
             self.current_iteration = data.get("current_iteration", 0)
@@ -291,15 +294,17 @@ class OptimizerState:
             # 恢復最近迭代摘要（不完整恢復，只供歷史參考）
             recent = data.get("recent_iterations", [])
             for r in recent:
-                self.iterations.append(IterationResult(
-                    iteration=r.get("iteration", 0),
-                    timestamp="",
-                    criteria=r.get("criteria", {}),
-                    config={},
-                    screener_summary="",
-                    backtest_statistics=r.get("backtest_statistics", {}),
-                    composite_score=r.get("composite_score", 0),
-                ))
+                self.iterations.append(
+                    IterationResult(
+                        iteration=r.get("iteration", 0),
+                        timestamp="",
+                        criteria=r.get("criteria", {}),
+                        config={},
+                        screener_summary="",
+                        backtest_statistics=r.get("backtest_statistics", {}),
+                        composite_score=r.get("composite_score", 0),
+                    )
+                )
 
             logger.info(
                 f"狀態已從 checkpoint 恢復: iteration={self.current_iteration}, "

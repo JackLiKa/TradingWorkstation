@@ -15,17 +15,17 @@ JSON 標準化（多重約束）:
 - 記錄每個階段的開始/結束時間、耗時、嘗試次數、評委結果、供應商、降級信息
 - 通過 stage_name 和 status 追蹤節點狀態
 """
+
 import json
 import logging
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Optional
 
-from app.agents.state import StageResult
-from app.agents.monitor import node_monitor
 from app.agents.charter import get_charter
-from app.core.llm_client import llm_client, LLMResponse
+from app.agents.monitor import node_monitor
+from app.agents.state import StageResult
+from app.core.llm_client import LLMResponse, llm_client
 
 logger = logging.getLogger("agent.stage")
 
@@ -83,6 +83,7 @@ class BaseStage(ABC):
         """
         from app.core.config import settings
         from app.core.providers import get_default_provider_for_stage
+
         user_pref = settings.stage_providers.get(self.stage_name, "")
         if user_pref:
             return user_pref
@@ -105,7 +106,7 @@ class BaseStage(ABC):
         judge_score = 0.0
         judge_passed = True
         judge_feedback = ""
-        last_llm_response: Optional[LLMResponse] = None
+        last_llm_response: LLMResponse | None = None
         last_input_json = ""
         self._last_llm_response = None  # 供 _call_llm 緩存
         self._current_iteration = state.current_iteration + 1  # 供 _call_llm 注入憲章
@@ -279,12 +280,13 @@ class BaseStage(ABC):
         judge_feedback: str,
         attempts: int,
         duration_ms: int,
-        error: Optional[str],
-        llm_response: Optional[LLMResponse],
+        error: str | None,
+        llm_response: LLMResponse | None,
     ):
         """將本次調用寫入後端 ai_call_log 表。"""
         try:
             from app.services.backend_client import backend_client
+
             iteration = state.current_iteration + 1
             provider = llm_response.provider if llm_response else "unknown"
             model_name = llm_response.model_name if llm_response else "unknown"

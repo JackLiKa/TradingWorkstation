@@ -7,12 +7,13 @@
 輸出: JSON { reasoning, favorable_industries, filtered_codes }
 範式: JSON，包含利好行業列表和篩選後的股票代碼
 """
+
 import json
 import logging
 from typing import Any
 
-from app.agents.stages.base import BaseStage
 from app.agents.few_shot import get_few_shot
+from app.agents.stages.base import BaseStage
 from app.services.backend_client import backend_client
 
 logger = logging.getLogger("agent.stage.industry")
@@ -126,11 +127,11 @@ def parse_industry_output(response: str) -> dict[str, Any]:
         json_start = response.find("{", json_start)
         json_end = response.rfind("}")
         if json_start >= 0 and json_end > json_start:
-            return json.loads(response[json_start:json_end + 1])
+            return json.loads(response[json_start : json_end + 1])
 
     brace_start = response.find("{")
     brace_end = response.rfind("}")
     if brace_start >= 0 and brace_end > brace_start:
-        return json.loads(response[brace_start:brace_end + 1])
+        return json.loads(response[brace_start : brace_end + 1])
 
     raise ValueError(f"無法從行業分析 AI 響應中提取 JSON: {response[:200]}")

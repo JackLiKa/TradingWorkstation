@@ -1,4 +1,4 @@
-# CI/CD — 全棧自動構建 + 測試
+# CI/CD — 全棧自動構建 + 測試 + 安全掃描
 # 觸發: push to main/master, PR to main/master
 name: CI
 
@@ -9,9 +9,51 @@ on:
     branches: [main, master]
 
 jobs:
-  # ===== Agent 服務測試 =====
+  # ===== 密鑰洩露掃描 =====
+  security-scan:
+    name: Security Scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整歷史才能掃描所有 commit
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: true
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+          GITLEAKS_CONFIG: .github/gitleaks.toml
+
+  # ===== Agent 服務：Lint + 測試 =====
+  agent-lint:
+    name: Agent Lint (ruff)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: agent/requirements-dev.txt
+
+      - name: Install ruff
+        run: pip install ruff>=0.5.0,<0.10.0
+
+      - name: Run ruff check
+        run: ruff check app/ tests/
+
+      - name: Run ruff format check
+        run: ruff format --check app/ tests/
+
   agent-test:
-    name: Agent Tests (Python)
+    name: Agent Tests (pytest)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -38,9 +80,9 @@ jobs:
           QODER_PERSONAL_ACCESS_TOKEN: "ci-test-token"
           LOG_LEVEL: "WARNING"
 
-  # ===== Java 後端構建 =====
+  # ===== Java 後端：編譯 + 測試 =====
   java-build:
-    name: Java Build (Maven)
+    name: Java Build + Test (Maven)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -55,12 +97,16 @@ jobs:
           distribution: "temurin"
           cache: "maven"
 
-      - name: Build with Maven
+      - name: Compile
         run: mvn -B -DskipTests compile
 
-  # ===== Next.js 前端構建 =====
+      - name: Run tests (if any)
+        run: mvn -B test
+        continue-on-error: true  # 測試待補，先不阻塞 CI
+
+  # ===== Next.js 前端：Lint + 類型檢查 + 構建 =====
   next-build:
-    name: Next.js Build
+    name: Next.js Lint + Build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -77,6 +123,13 @@ jobs:
 
       - name: Install dependencies
         run: npm install --legacy-peer-deps
+
+      - name: ESLint
+        run: npx eslint src/
+        continue-on-error: true  # 部分警告待修，先不阻塞 CI
+
+      - name: Type check
+        run: npx tsc --noEmit
 
       - name: Build
         run: npm run build

@@ -1,18 +1,19 @@
 """測試評委 AI — 多維度評分系統。"""
+
 import asyncio
 import json
 
 import pytest
 
 from app.agents.judge import (
-    JudgeAI,
-    _check_length,
-    _check_json_valid,
-    _check_data_density,
-    _check_structure,
-    _check_required_keywords,
-    STAGE_RUBRICS,
     STAGE_EXPECTATIONS,
+    STAGE_RUBRICS,
+    JudgeAI,
+    _check_data_density,
+    _check_json_valid,
+    _check_length,
+    _check_required_keywords,
+    _check_structure,
 )
 
 
@@ -130,18 +131,18 @@ class TestJudgeEvaluation:
 
     def test_valid_strategy_json(self, judge):
         """有效 strategy JSON 應該通過。"""
-        output = json.dumps({
-            "reasoning": "市場震盪上行，新增換手率下限1.5%篩選活躍股",
-            "criteria": {"minTurn": 1.5, "minReturn20": 3.0},
-        })
+        output = json.dumps(
+            {
+                "reasoning": "市場震盪上行，新增換手率下限1.5%篩選活躍股",
+                "criteria": {"minTurn": 1.5, "minReturn20": 3.0},
+            }
+        )
         score, passed, feedback = asyncio.run(judge.evaluate("strategy_generation", output))
         assert score > 50, f"有效 JSON 應 >50，得到 {score}"
 
     def test_invalid_strategy_json(self, judge):
         """無效 strategy JSON 應該低分。"""
-        score, passed, feedback = asyncio.run(
-            judge.evaluate("strategy_generation", "我建議調整一些參數")
-        )
+        score, passed, feedback = asyncio.run(judge.evaluate("strategy_generation", "我建議調整一些參數"))
         assert score < 40, f"無效 JSON 應 <40，得到 {score}"
         assert passed is False
 
@@ -150,7 +151,10 @@ class TestJudgeEvaluation:
         scores = []
         outputs = [
             ("market_news", "市場好"),  # 極差
-            ("market_news", "### 市場情緒\n上證上漲0.85%\n### 利好\n半導體漲2.8%\n### 利空\n房地產跌0.8%\n### 選股\n關注半導體"),  # 中等
+            (
+                "market_news",
+                "### 市場情緒\n上證上漲0.85%\n### 利好\n半導體漲2.8%\n### 利空\n房地產跌0.8%\n### 選股\n關注半導體",
+            ),  # 中等
         ]
         for stage, output in outputs:
             s, _, _ = asyncio.run(judge.evaluate(stage, output))
@@ -161,7 +165,9 @@ class TestJudgeEvaluation:
     def test_feedback_contains_dimensions(self, judge):
         """反饋應該包含各維度評分詳情。"""
         # 用中等長度輸入觸發維度評分（非極短快速判斷）
-        score, passed, feedback = asyncio.run(judge.evaluate("market_news", "市場情緒偏多，利好半導體，利空房地產，選股建議關注龍頭股，漲幅2.8%"))
+        score, passed, feedback = asyncio.run(
+            judge.evaluate("market_news", "市場情緒偏多，利好半導體，利空房地產，選股建議關注龍頭股，漲幅2.8%")
+        )
         assert "總分" in feedback
         assert "長度" in feedback or "數據" in feedback or "結構" in feedback
 

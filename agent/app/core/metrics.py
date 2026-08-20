@@ -16,9 +16,8 @@
 
 指標端點: GET /metrics（Prometheus 格式）
 """
+
 import logging
-import time
-from typing import Any
 
 logger = logging.getLogger("agent.metrics")
 
@@ -66,8 +65,8 @@ def _parse_key(key: str) -> tuple[str, dict[str, str]]:
     """解析指標鍵為名稱和標籤。"""
     if "{" not in key:
         return key, {}
-    name = key[:key.index("{")]
-    label_str = key[key.index("{") + 1:key.index("}")]
+    name = key[: key.index("{")]
+    label_str = key[key.index("{") + 1 : key.index("}")]
     labels = {}
     for pair in label_str.split(","):
         if "=" in pair:
@@ -142,9 +141,9 @@ def render_prometheus_metrics() -> str:
             # 計算桶累積
             for bucket in DURATION_BUCKETS:
                 count = sum(1 for v in values if v <= bucket)
-                lines.append(f"{name}_bucket{bucket_prefix}\"{bucket}\"}} {count}")
+                lines.append(f'{name}_bucket{bucket_prefix}"{bucket}"}} {count}')
             count = sum(1 for v in values if v <= float("inf"))
-            lines.append(f"{name}_bucket{bucket_prefix}\"+Inf\"}} {count}")
+            lines.append(f'{name}_bucket{bucket_prefix}"+Inf"}} {count}')
             lines.append(f"{name}_count{label_str} {len(values)}")
             lines.append(f"{name}_sum{label_str} {sum(values)}")
 
@@ -152,6 +151,7 @@ def render_prometheus_metrics() -> str:
 
 
 # ===== 便捷函數 =====
+
 
 def record_iteration_complete(iteration: int, score: float):
     """記錄一輪優化完成。"""

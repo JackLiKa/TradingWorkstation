@@ -1,15 +1,16 @@
 """測試配置管理和 Prometheus 指標。"""
+
 import pytest
 
 from app.core.config import Settings, settings
 from app.core.metrics import (
     inc_counter,
-    set_gauge,
     observe_histogram,
-    render_prometheus_metrics,
+    record_backend_call,
     record_iteration_complete,
     record_llm_call,
-    record_backend_call,
+    render_prometheus_metrics,
+    set_gauge,
 )
 
 

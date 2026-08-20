@@ -7,12 +7,12 @@
 輸出: 行業情緒總結（利好行業、利空行業、政策聲明）
 範式: 自然語言，包含各行業利好利空分析
 """
+
 import json
 import logging
-from typing import Any
 
-from app.agents.stages.base import BaseStage
 from app.agents.few_shot import get_few_shot
+from app.agents.stages.base import BaseStage
 from app.services.market_data_client import market_data_client
 
 logger = logging.getLogger("agent.stage.market_news")

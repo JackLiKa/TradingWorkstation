@@ -1,8 +1,7 @@
 """測試速率限制器。"""
+
 import asyncio
 import time
-
-import pytest
 
 from app.core.rate_limiter import TokenBucket, acquire, get_status
 

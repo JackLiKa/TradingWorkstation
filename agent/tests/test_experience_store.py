@@ -1,10 +1,9 @@
 """測試 RAG 經驗存儲 — 格式化和降級。"""
-import pytest
 
 from app.services.experience_store import (
     format_experiences_for_prompt,
-    is_rag_available,
     get_rag_status,
+    is_rag_available,
 )
 
 
@@ -18,15 +17,17 @@ class TestFormatExperiences:
 
     def test_single_experience(self):
         """單條經驗格式化。"""
-        experiences = [{
-            "iteration": 3,
-            "similarity": 0.85,
-            "composite_score": 68.5,
-            "market_context": "震盪上行，波動率18%",
-            "criteria": {"minTurn": 1.5, "minReturn20": 3.0},
-            "stats": {"totalReturn": 5.2, "maxDrawdown": 6.8, "sharpe": 1.05},
-            "reflection": "回撤偏高，建議增加止損",
-        }]
+        experiences = [
+            {
+                "iteration": 3,
+                "similarity": 0.85,
+                "composite_score": 68.5,
+                "market_context": "震盪上行，波動率18%",
+                "criteria": {"minTurn": 1.5, "minReturn20": 3.0},
+                "stats": {"totalReturn": 5.2, "maxDrawdown": 6.8, "sharpe": 1.05},
+                "reflection": "回撤偏高，建議增加止損",
+            }
+        ]
         result = format_experiences_for_prompt(experiences)
         assert "第3輪" in result
         assert "相似度0.85" in result
@@ -65,15 +66,17 @@ class TestFormatExperiences:
 
     def test_empty_fields_handled(self):
         """空字段不應該導致格式化失敗。"""
-        experiences = [{
-            "iteration": 1,
-            "similarity": 0.5,
-            "composite_score": 0,
-            "market_context": "",
-            "criteria": {},
-            "stats": {},
-            "reflection": "",
-        }]
+        experiences = [
+            {
+                "iteration": 1,
+                "similarity": 0.5,
+                "composite_score": 0,
+                "market_context": "",
+                "criteria": {},
+                "stats": {},
+                "reflection": "",
+            }
+        ]
         result = format_experiences_for_prompt(experiences)
         assert "第1輪" in result
         # 不應該崩潰
@@ -82,15 +85,17 @@ class TestFormatExperiences:
         """長文本應該被截斷。"""
         long_market = "市場環境" * 500
         long_reflection = "反思" * 500
-        experiences = [{
-            "iteration": 1,
-            "similarity": 0.9,
-            "composite_score": 70,
-            "market_context": long_market,
-            "criteria": {},
-            "stats": {},
-            "reflection": long_reflection,
-        }]
+        experiences = [
+            {
+                "iteration": 1,
+                "similarity": 0.9,
+                "composite_score": 70,
+                "market_context": long_market,
+                "criteria": {},
+                "stats": {},
+                "reflection": long_reflection,
+            }
+        ]
         result = format_experiences_for_prompt(experiences)
         # 市場環境截斷到 150 字
         assert len(result) < len(long_market) + len(long_reflection)

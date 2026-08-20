@@ -1,16 +1,15 @@
 """測試 Agent 憲章和 few-shot。"""
-import pytest
 
 from app.agents.charter import FULL_CHARTER, RECALL_SUMMARY, get_charter
 from app.agents.few_shot import (
-    get_few_shot,
-    MARKET_NEWS_EXAMPLE,
-    INDUSTRY_ANALYSIS_EXAMPLE,
-    MARKET_ANALYSIS_EXAMPLE,
-    STRATEGY_GENERATION_EXAMPLE,
     BACKTEST_REFLECTION_EXAMPLE,
-    PROMPT_GENERATION_EXAMPLE,
+    INDUSTRY_ANALYSIS_EXAMPLE,
     JUDGE_EXAMPLE,
+    MARKET_ANALYSIS_EXAMPLE,
+    MARKET_NEWS_EXAMPLE,
+    PROMPT_GENERATION_EXAMPLE,
+    STRATEGY_GENERATION_EXAMPLE,
+    get_few_shot,
 )
 
 # 所有已定義的 few-shot 示例
@@ -71,8 +70,15 @@ class TestFewShot:
 
     def test_all_stages_have_examples(self):
         """所有核心階段都應該有 few-shot。"""
-        required = ["market_news", "industry_analysis", "market_analysis",
-                    "strategy_generation", "backtest_reflection", "prompt_generation", "judge"]
+        required = [
+            "market_news",
+            "industry_analysis",
+            "market_analysis",
+            "strategy_generation",
+            "backtest_reflection",
+            "prompt_generation",
+            "judge",
+        ]
         for stage in required:
             assert stage in ALL_EXAMPLES, f"{stage} 缺少 few-shot 定義"
             assert ALL_EXAMPLES[stage], f"{stage} few-shot 為空"

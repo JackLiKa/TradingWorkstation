@@ -1,5 +1,5 @@
 """Agent 服務入口 — FastAPI 應用。"""
-import logging
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.core.config import settings
-from app.core.logging import setup_logging, logger
+from app.core.logging import logger, setup_logging
 from app.services.model_checker import model_checker
 
 
@@ -31,6 +31,7 @@ async def lifespan(app: FastAPI):
     await model_checker.stop()
     # 關閉後端連接池
     from app.services.backend_client import backend_client
+
     await backend_client.aclose()
     logger.info("Agent 服務已關閉")
 
@@ -67,6 +68,7 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",

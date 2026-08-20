@@ -6,6 +6,7 @@
 - 格式化經驗為 prompt 可注入的文本
 - 自動降級：RAG 不可用時返回空列表，不影響優化循環
 """
+
 import logging
 from typing import Any
 
@@ -83,12 +84,10 @@ def format_experiences_for_prompt(experiences: list[dict[str, Any]]) -> str:
 
         # 策略條件（只顯示激活的）
         criteria = exp.get("criteria", {})
-        active = {
-            k: v for k, v in criteria.items()
-            if v is not None and v != False and v != "any" and v != 0
-        }
+        active = {k: v for k, v in criteria.items() if v is not None and v is not False and v != "any" and v != 0}
         if active:
             import json
+
             lines.append(f"- 策略條件: {json.dumps(active, ensure_ascii=False)}")
 
         # 回測結果

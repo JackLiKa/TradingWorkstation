@@ -24,13 +24,14 @@
 - 規則優先 → 確定性評分，LLM 只補充語義判斷
 - 可解釋 → 每個維度的通過/不通過都有理由
 """
+
 import json
 import logging
 import re
 from typing import Any
 
-from app.core.llm_client import llm_client
 from app.agents.few_shot import get_few_shot
+from app.core.llm_client import llm_client
 
 logger = logging.getLogger("agent.judge")
 
@@ -39,6 +40,7 @@ logger = logging.getLogger("agent.judge")
 # 每個維度：weight（權重）, type（rule/llm）, check（規則驗證函數或 LLM 描述）
 # rule 類型：用代碼驗證，確定性，無 bias
 # llm 類型：用 LLM 判斷，強制 binary（通過/不通過）
+
 
 def _check_length(output: str, threshold: int) -> tuple[float, str]:
     """長度維度 — 連續評分（0-1），超過 threshold 為 1.0。"""
@@ -60,14 +62,14 @@ def _check_json_valid(output: str, required_fields: list[str]) -> tuple[float, s
             json_start = text.find("{", json_start)
             json_end = text.rfind("}")
             if json_start >= 0 and json_end > json_start:
-                data = json.loads(text[json_start:json_end + 1])
+                data = json.loads(text[json_start : json_end + 1])
             else:
                 return 0.0, "無法提取 JSON"
         else:
             brace_start = text.find("{")
             brace_end = text.rfind("}")
             if brace_start >= 0 and brace_end > brace_start:
-                data = json.loads(text[brace_start:brace_end + 1])
+                data = json.loads(text[brace_start : brace_end + 1])
             else:
                 return 0.0, "無 JSON 結構"
 
@@ -83,7 +85,7 @@ def _check_json_valid(output: str, required_fields: list[str]) -> tuple[float, s
 def _check_data_density(output: str) -> tuple[float, str]:
     """數據引用密度維度 — 連續評分，基於數字/百分比出現頻率。"""
     text = output.strip()
-    numbers = re.findall(r'\d+\.?\d*%?', text)
+    numbers = re.findall(r"\d+\.?\d*%?", text)
     # 每 100 字 1 個數據引用 = 0.5，2 個 = 0.8，3+ 個 = 1.0
     density = len(numbers) / max(len(text) / 100, 1)
     if density >= 3:
@@ -98,7 +100,7 @@ def _check_data_density(output: str) -> tuple[float, str]:
 def _check_structure(output: str, markers: list[str] = None) -> tuple[float, str]:
     """結構完整性維度 — 連續評分，基於標題/列表/分段標記。"""
     if markers is None:
-        markers = ['###', '##', '-', '1.', '2.', '3.', '4.', '•']
+        markers = ["###", "##", "-", "1.", "2.", "3.", "4.", "•"]
     text = output.strip()
     found = sum(1 for m in markers if m in text)
     if found >= 4:
@@ -130,50 +132,137 @@ STAGE_RUBRICS: dict[str, list[dict]] = {
         {"name": "長度充分", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
         {"name": "數據引用", "weight": 0.25, "type": "rule", "check": lambda o, e: _check_data_density(o)},
         {"name": "結構完整", "weight": 0.20, "type": "rule", "check": lambda o, e: _check_structure(o)},
-        {"name": "必要內容", "weight": 0.25, "type": "rule", "check": lambda o, e: _check_required_keywords(o, ["市場情緒", "利好", "利空", "選股"])},
-        {"name": "內容實質", "weight": 0.15, "type": "llm", "check": "輸出是否包含具體的行業分析（非空洞套話），是否引用了具體的漲跌幅數據"},
+        {
+            "name": "必要內容",
+            "weight": 0.25,
+            "type": "rule",
+            "check": lambda o, e: _check_required_keywords(o, ["市場情緒", "利好", "利空", "選股"]),
+        },
+        {
+            "name": "內容實質",
+            "weight": 0.15,
+            "type": "llm",
+            "check": "輸出是否包含具體的行業分析（非空洞套話），是否引用了具體的漲跌幅數據",
+        },
     ],
     "industry_analysis": [
-        {"name": "JSON格式", "weight": 0.30, "type": "rule", "check": lambda o, e: _check_json_valid(o, e.get("required_fields", []))},
+        {
+            "name": "JSON格式",
+            "weight": 0.30,
+            "type": "rule",
+            "check": lambda o, e: _check_json_valid(o, e.get("required_fields", [])),
+        },
         {"name": "長度充分", "weight": 0.10, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
         {"name": "數據引用", "weight": 0.20, "type": "rule", "check": lambda o, e: _check_data_density(o)},
-        {"name": "必要字段", "weight": 0.25, "type": "rule", "check": lambda o, e: _check_required_keywords(o, ["reasoning", "favorable_industries", "filtered_codes"])},
-        {"name": "匹配質量", "weight": 0.15, "type": "llm", "check": "行業關鍵詞與數據庫行業分類的匹配是否合理，filtered_codes 是否確實屬於利好行業"},
+        {
+            "name": "必要字段",
+            "weight": 0.25,
+            "type": "rule",
+            "check": lambda o, e: _check_required_keywords(o, ["reasoning", "favorable_industries", "filtered_codes"]),
+        },
+        {
+            "name": "匹配質量",
+            "weight": 0.15,
+            "type": "llm",
+            "check": "行業關鍵詞與數據庫行業分類的匹配是否合理，filtered_codes 是否確實屬於利好行業",
+        },
     ],
     "market_analysis": [
         {"name": "長度充分", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
         {"name": "數據引用", "weight": 0.30, "type": "rule", "check": lambda o, e: _check_data_density(o)},
-        {"name": "必要內容", "weight": 0.30, "type": "rule", "check": lambda o, e: _check_required_keywords(o, ["趨勢", "波動", "策略"])},
-        {"name": "內容實質", "weight": 0.25, "type": "llm", "check": "市場趨勢判斷是否有邏輯依據，策略類型推薦是否與市場環境匹配"},
+        {
+            "name": "必要內容",
+            "weight": 0.30,
+            "type": "rule",
+            "check": lambda o, e: _check_required_keywords(o, ["趨勢", "波動", "策略"]),
+        },
+        {
+            "name": "內容實質",
+            "weight": 0.25,
+            "type": "llm",
+            "check": "市場趨勢判斷是否有邏輯依據，策略類型推薦是否與市場環境匹配",
+        },
     ],
     "strategy_generation": [
-        {"name": "JSON格式", "weight": 0.30, "type": "rule", "check": lambda o, e: _check_json_valid(o, e.get("required_fields", []))},
-        {"name": "必要字段", "weight": 0.25, "type": "rule", "check": lambda o, e: _check_required_keywords(o, ["reasoning", "criteria"])},
+        {
+            "name": "JSON格式",
+            "weight": 0.30,
+            "type": "rule",
+            "check": lambda o, e: _check_json_valid(o, e.get("required_fields", [])),
+        },
+        {
+            "name": "必要字段",
+            "weight": 0.25,
+            "type": "rule",
+            "check": lambda o, e: _check_required_keywords(o, ["reasoning", "criteria"]),
+        },
         {"name": "數據引用", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_data_density(o)},
-        {"name": "推理質量", "weight": 0.20, "type": "llm", "check": "reasoning 是否說明了調整參數的具體原因和預期效果（非泛泛而談）"},
-        {"name": "參數合理", "weight": 0.10, "type": "llm", "check": "criteria 中的參數值是否在合理範圍內（如 minTurn 0.5-5.0），是否有明顯錯誤值"},
+        {
+            "name": "推理質量",
+            "weight": 0.20,
+            "type": "llm",
+            "check": "reasoning 是否說明了調整參數的具體原因和預期效果（非泛泛而談）",
+        },
+        {
+            "name": "參數合理",
+            "weight": 0.10,
+            "type": "llm",
+            "check": "criteria 中的參數值是否在合理範圍內（如 minTurn 0.5-5.0），是否有明顯錯誤值",
+        },
     ],
     "backtest_reflection": [
         {"name": "長度充分", "weight": 0.10, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
         {"name": "數據引用", "weight": 0.30, "type": "rule", "check": lambda o, e: _check_data_density(o)},
         {"name": "結構完整", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_structure(o)},
-        {"name": "必要內容", "weight": 0.25, "type": "rule", "check": lambda o, e: _check_required_keywords(o, ["優點", "不足", "收益", "回撤", "改進"])},
-        {"name": "改進質量", "weight": 0.20, "type": "llm", "check": "改進方向是否具體可操作（包含參數名+調整方向），而非籠統建議"},
+        {
+            "name": "必要內容",
+            "weight": 0.25,
+            "type": "rule",
+            "check": lambda o, e: _check_required_keywords(o, ["優點", "不足", "收益", "回撤", "改進"]),
+        },
+        {
+            "name": "改進質量",
+            "weight": 0.20,
+            "type": "llm",
+            "check": "改進方向是否具體可操作（包含參數名+調整方向），而非籠統建議",
+        },
     ],
     "prompt_generation": [
         {"name": "長度充分", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
-        {"name": "必要內容", "weight": 0.35, "type": "rule", "check": lambda o, e: _check_required_keywords(o, ["調整", "避免", "目標"])},
+        {
+            "name": "必要內容",
+            "weight": 0.35,
+            "type": "rule",
+            "check": lambda o, e: _check_required_keywords(o, ["調整", "避免", "目標"]),
+        },
         {"name": "數據引用", "weight": 0.20, "type": "rule", "check": lambda o, e: _check_data_density(o)},
-        {"name": "指引精準", "weight": 0.30, "type": "llm", "check": "指引是否包含具體參數名（如 minTurn、stopLossPct），而非籠統的「優化策略」"},
+        {
+            "name": "指引精準",
+            "weight": 0.30,
+            "type": "llm",
+            "check": "指引是否包含具體參數名（如 minTurn、stopLossPct），而非籠統的「優化策略」",
+        },
     ],
 }
 
 # 各階段的基本期望（保留向後兼容）
 STAGE_EXPECTATIONS = {
     "market_news": {"format": "自然語言", "required_content": "市場情緒+利好+利空+選股建議", "min_length": 100},
-    "industry_analysis": {"format": "JSON", "required_content": "reasoning+favorable_industries+filtered_codes", "min_length": 80, "must_be_json": True, "required_fields": ["reasoning", "favorable_industries"]},
+    "industry_analysis": {
+        "format": "JSON",
+        "required_content": "reasoning+favorable_industries+filtered_codes",
+        "min_length": 80,
+        "must_be_json": True,
+        "required_fields": ["reasoning", "favorable_industries"],
+    },
     "market_analysis": {"format": "自然語言", "required_content": "趨勢+波動率+策略類型", "min_length": 50},
-    "strategy_generation": {"format": "JSON", "required_content": "reasoning+criteria", "min_length": 100, "must_be_json": True, "required_fields": ["reasoning", "criteria"]},
+    "strategy_generation": {
+        "format": "JSON",
+        "required_content": "reasoning+criteria",
+        "min_length": 100,
+        "must_be_json": True,
+        "required_fields": ["reasoning", "criteria"],
+    },
     "backtest_reflection": {"format": "自然語言", "required_content": "優缺點+收益來源+風險+改進", "min_length": 100},
     "prompt_generation": {"format": "自然語言", "required_content": "調整參數+避免策略+追求目標", "min_length": 30},
 }
@@ -250,13 +339,15 @@ class JudgeAI:
             if dim["type"] == "rule":
                 # 規則評分（確定性）
                 score_01, reason = dim["check"](output, expectation)
-                dimension_scores.append({
-                    "name": dim["name"],
-                    "weight": dim["weight"],
-                    "score": score_01,  # 0-1 連續分
-                    "reason": reason,
-                    "type": "rule",
-                })
+                dimension_scores.append(
+                    {
+                        "name": dim["name"],
+                        "weight": dim["weight"],
+                        "score": score_01,  # 0-1 連續分
+                        "reason": reason,
+                        "type": "rule",
+                    }
+                )
             else:
                 # LLM 評分（延遲批量執行）
                 llm_dimensions.append(dim)
@@ -264,16 +355,20 @@ class JudgeAI:
         # === LLM 維度批量評分 ===
         if llm_dimensions:
             llm_results = await self._llm_evaluate_dimensions(
-                output, llm_dimensions, stage_name,
+                output,
+                llm_dimensions,
+                stage_name,
             )
-            for dim, result in zip(llm_dimensions, llm_results):
-                dimension_scores.append({
-                    "name": dim["name"],
-                    "weight": dim["weight"],
-                    "score": 1.0 if result["passed"] else 0.0,  # binary → 0/1
-                    "reason": result["reason"],
-                    "type": "llm",
-                })
+            for dim, result in zip(llm_dimensions, llm_results, strict=False):
+                dimension_scores.append(
+                    {
+                        "name": dim["name"],
+                        "weight": dim["weight"],
+                        "score": 1.0 if result["passed"] else 0.0,  # binary → 0/1
+                        "reason": result["reason"],
+                        "type": "llm",
+                    }
+                )
 
         # === 加權求和 ===
         total_score = sum(d["score"] * d["weight"] for d in dimension_scores) * 100
@@ -284,9 +379,7 @@ class JudgeAI:
         feedback_lines = []
         for d in dimension_scores:
             status = "[PASS]" if d["score"] >= 0.6 else "[FAIL]" if d["score"] < 0.3 else "[WEAK]"
-            feedback_lines.append(
-                f"  {status} {d['name']}({d['weight']*100:.0f}%): {d['reason']}"
-            )
+            feedback_lines.append(f"  {status} {d['name']}({d['weight'] * 100:.0f}%): {d['reason']}")
         feedback = f"總分 {total_score}/100\n" + "\n".join(feedback_lines)
 
         logger.info(f"[評委] {stage_name}: score={total_score}, passed={passed}")
@@ -332,7 +425,7 @@ class JudgeAI:
 請嚴格按以下 JSON 格式返回所有維度的判斷（不要加 markdown 代碼塊標記）：
 {{
   "dimensions": [
-    {{"name": "{dimensions[0]['name']}", "passed": true, "reason": "一句話理由"}},
+    {{"name": "{dimensions[0]["name"]}", "passed": true, "reason": "一句話理由"}},
     ...
   ]
 }}"""
@@ -342,10 +435,7 @@ class JudgeAI:
             return self._parse_batch_dimension_response(response.text, dimensions)
         except Exception as e:
             logger.warning(f"LLM 批量維度評分失敗: {e}，所有 LLM 維度使用中性通過")
-            return [
-                {"passed": True, "reason": f"LLM 不可用，中性通過（{e}）"}
-                for _ in dimensions
-            ]
+            return [{"passed": True, "reason": f"LLM 不可用，中性通過（{e}）"} for _ in dimensions]
 
     def _parse_batch_dimension_response(
         self,
@@ -358,17 +448,19 @@ class JudgeAI:
             json_start = text.find("{")
             json_end = text.rfind("}")
             if json_start >= 0 and json_end > json_start:
-                data = json.loads(text[json_start:json_end + 1])
+                data = json.loads(text[json_start : json_end + 1])
                 dim_results = data.get("dimensions", [])
                 # 確保返回數量與輸入一致
                 results = []
-                for i, dim in enumerate(dimensions):
+                for i, _dim in enumerate(dimensions):
                     if i < len(dim_results):
                         r = dim_results[i]
-                        results.append({
-                            "passed": bool(r.get("passed", False)),
-                            "reason": r.get("reason", ""),
-                        })
+                        results.append(
+                            {
+                                "passed": bool(r.get("passed", False)),
+                                "reason": r.get("reason", ""),
+                            }
+                        )
                     else:
                         results.append({"passed": True, "reason": "LLM 未返回該維度，保守通過"})
                 return results
@@ -384,10 +476,7 @@ class JudgeAI:
     ) -> list[dict[str, Any]]:
         """批量解析失敗時的 fallback — 逐維度保守通過。"""
         logger.warning(f"批量維度響應解析失敗，使用保守通過: {response[:100]}")
-        return [
-            {"passed": True, "reason": "LLM 響應解析失敗，保守通過"}
-            for _ in dimensions
-        ]
+        return [{"passed": True, "reason": "LLM 響應解析失敗，保守通過"} for _ in dimensions]
 
     def _parse_dimension_response(self, response: str) -> dict[str, Any]:
         """解析 LLM 的單維度判斷響應。"""
@@ -397,7 +486,7 @@ class JudgeAI:
             json_start = text.find("{")
             json_end = text.rfind("}")
             if json_start >= 0 and json_end > json_start:
-                data = json.loads(text[json_start:json_end + 1])
+                data = json.loads(text[json_start : json_end + 1])
                 passed = bool(data.get("passed", False))
                 reason = data.get("reason", "")
                 return {"passed": passed, "reason": reason}
@@ -424,12 +513,12 @@ class JudgeAI:
         min_len = expectation.get("min_length", 50)
         if len(text) >= min_len * 2:
             score += 10
-        numbers = re.findall(r'\d+\.?\d*%?', text)
+        numbers = re.findall(r"\d+\.?\d*%?", text)
         if len(numbers) >= 5:
             score += 8
         elif len(numbers) >= 3:
             score += 4
-        structure = sum(1 for m in ['###', '##', '-', '1.'] if m in text)
+        structure = sum(1 for m in ["###", "##", "-", "1."] if m in text)
         if structure >= 3:
             score += 5
         score = min(score, 85.0)

@@ -1,11 +1,12 @@
 """FastAPI 路由層 — 對外 REST 接口。"""
+
 import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from app.agents.optimizer import state, start_optimization, stop_optimization
+from app.agents.optimizer import start_optimization, state, stop_optimization
 from app.core.llm_client import llm_client
 from app.core.metrics import render_prometheus_metrics
 
@@ -16,17 +17,20 @@ router = APIRouter()
 
 class StartRequest(BaseModel):
     """啟動優化請求。"""
+
     criteria: dict[str, Any] | None = None
     config: dict[str, Any] | None = None
 
 
 class UpdateCriteriaRequest(BaseModel):
     """更新選股條件請求。"""
+
     criteria: dict[str, Any]
 
 
 class UpdateConfigRequest(BaseModel):
     """更新回測配置請求（支持手動調整回測日期區間等）。"""
+
     config: dict[str, Any]
 
 
@@ -69,9 +73,10 @@ async def health():
               models: 全部供應商的檢查結果列表
               rag: RAG 向量數據庫狀態
     """
+    import asyncio
+
     from app.services.backend_client import backend_client
     from app.services.experience_store import get_rag_status
-    import asyncio
 
     # 帶超時的後端健康檢查（防止掛起）
     try:
@@ -84,10 +89,12 @@ async def health():
 
     # 速率限制狀態
     from app.core.rate_limiter import get_status as get_rate_limit_status
+
     rate_limit_status = get_rate_limit_status()
 
     # 配置概覽
     from app.core.config import settings
+
     config_overview = settings.to_dict()
 
     return {
@@ -146,12 +153,15 @@ async def start(req: StartRequest | None = None):
     # 可選：使用用戶提供的初始條件（與默認值合併，用戶值優先）
     if req and req.criteria:
         from app.agents.optimizer import DEFAULT_CRITERIA
+
         state.current_criteria = {**DEFAULT_CRITERIA, **req.criteria}
     if req and req.config:
         from app.agents.optimizer import DEFAULT_BACKTEST_CONFIG
+
         merged_config = {**DEFAULT_BACKTEST_CONFIG, **req.config}
         # 校驗回測日期區間是否在數據庫覆蓋範圍內
         from app.services.backend_client import backend_client
+
         earliest, latest = await backend_client.get_data_range()
         ok, msg = _validate_backtest_dates(merged_config, earliest, latest)
         if not ok:
@@ -230,6 +240,7 @@ async def update_criteria(req: UpdateCriteriaRequest):
         dict: 更新結果及合併後的完整選股條件
     """
     from app.agents.optimizer import DEFAULT_CRITERIA
+
     state.current_criteria = {**DEFAULT_CRITERIA, **req.criteria}
     return {"status": "updated", "criteria": state.current_criteria}
 
@@ -261,6 +272,7 @@ async def update_config(req: UpdateConfigRequest):
     """
     from app.agents.optimizer import DEFAULT_BACKTEST_CONFIG
     from app.services.backend_client import backend_client
+
     merged_config = {**DEFAULT_BACKTEST_CONFIG, **req.config}
     # 校驗回測日期區間
     earliest, latest = await backend_client.get_data_range()
@@ -281,6 +293,7 @@ async def get_data_range():
         dict: 包含 earliestTradeDate 和 latestTradeDate 兩個字段
     """
     from app.services.backend_client import backend_client
+
     earliest, latest = await backend_client.get_data_range()
     return {
         "earliestTradeDate": earliest,
@@ -316,7 +329,8 @@ async def get_providers():
         dict: 包含 providers 列表、當前每階段的供應商偏好設置、默認路由
     """
     from app.core.config import settings
-    from app.core.providers import STAGE_DEFAULT_PROVIDERS, PROVIDERS
+    from app.core.providers import PROVIDERS, STAGE_DEFAULT_PROVIDERS
+
     return {
         "providers": llm_client.get_available_providers(),
         "stage_preferences": settings.stage_providers,
@@ -337,6 +351,7 @@ async def get_providers():
 
 class SetStageProviderRequest(BaseModel):
     """設置某個 AI 階段的供應商偏好。"""
+
     stage_name: str = ""
     provider: str = ""
 
@@ -360,6 +375,7 @@ async def set_stage_provider(req: SetStageProviderRequest):
     """
     from app.core.config import settings
     from app.core.providers import PROVIDERS
+
     valid_providers = list(PROVIDERS.keys()) + [""]
     if req.provider and req.provider not in valid_providers:
         raise HTTPException(
@@ -377,11 +393,13 @@ async def set_stage_provider(req: SetStageProviderRequest):
 async def reset_stage_providers():
     """重置所有階段的供應商偏好為自動選擇。"""
     from app.core.config import settings
+
     settings.stage_providers = {}
     return {"status": "reset", "stage_preferences": settings.stage_providers}
 
 
 # ===== 監控端點 =====
+
 
 @router.get("/monitor")
 async def get_monitor_status():
@@ -391,6 +409,7 @@ async def get_monitor_status():
         dict: 監控器狀態摘要，含事件列表、告警列表和節點統計
     """
     from app.agents.monitor import node_monitor
+
     return node_monitor.get_status()
 
 
@@ -402,6 +421,7 @@ async def analyze_monitor():
         dict: 包含 analysis（AI 分析文本）、health（健康狀態）、suggestions（建議列表）
     """
     from app.agents.monitor_ai import monitor_ai
+
     return await monitor_ai.analyze()
 
 
@@ -416,5 +436,6 @@ async def resolve_alert(alert_id: str):
         dict: 解決結果確認
     """
     from app.agents.monitor import node_monitor
+
     node_monitor.resolve_alert(alert_id)
     return {"status": "resolved", "alert_id": alert_id}

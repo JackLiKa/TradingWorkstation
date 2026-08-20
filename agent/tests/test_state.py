@@ -1,14 +1,12 @@
 """測試狀態管理 — 持久化、截斷、序列化。"""
-import os
-import tempfile
 
-import pytest
+import os
 
 from app.agents.state import (
-    OptimizerState,
-    IterationResult,
-    StageResult,
     MAX_IN_MEMORY_ITERATIONS,
+    IterationResult,
+    OptimizerState,
+    StageResult,
 )
 
 
@@ -117,15 +115,17 @@ class TestOptimizerStateTruncation:
         """超過上限時應該截斷舊記錄。"""
         s = OptimizerState()
         for i in range(MAX_IN_MEMORY_ITERATIONS + 20):
-            s.add_iteration(IterationResult(
-                iteration=i + 1,
-                timestamp="2026-01-01",
-                criteria={},
-                config={},
-                screener_summary="",
-                backtest_statistics={},
-                composite_score=60.0 + i * 0.1,
-            ))
+            s.add_iteration(
+                IterationResult(
+                    iteration=i + 1,
+                    timestamp="2026-01-01",
+                    criteria={},
+                    config={},
+                    screener_summary="",
+                    backtest_statistics={},
+                    composite_score=60.0 + i * 0.1,
+                )
+            )
         assert len(s.iterations) == MAX_IN_MEMORY_ITERATIONS
         # 保留的應該是最新的
         assert s.iterations[-1].iteration == MAX_IN_MEMORY_ITERATIONS + 20
@@ -136,15 +136,17 @@ class TestOptimizerStateTruncation:
         """未超過上限時不應截斷。"""
         s = OptimizerState()
         for i in range(10):
-            s.add_iteration(IterationResult(
-                iteration=i + 1,
-                timestamp="2026-01-01",
-                criteria={},
-                config={},
-                screener_summary="",
-                backtest_statistics={},
-                composite_score=60.0,
-            ))
+            s.add_iteration(
+                IterationResult(
+                    iteration=i + 1,
+                    timestamp="2026-01-01",
+                    criteria={},
+                    config={},
+                    screener_summary="",
+                    backtest_statistics={},
+                    composite_score=60.0,
+                )
+            )
         assert len(s.iterations) == 10
 
 

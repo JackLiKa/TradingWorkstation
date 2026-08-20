@@ -1,4 +1,5 @@
 """評分計算 — 綜合評分和評委評分邏輯。"""
+
 from typing import Any
 
 

@@ -506,3 +506,171 @@ python ingestion/baostock_ingest.py --codes sh.600000 --start 2026-08-01 --end 2
 - 原 `Quantization/database.md` 与 `.env.example` 中的明文密码不应复制到新实现
 - 建议轮换已暴露的数据库密码
 - `DEVIN_API_KEY` 与 `QODER_PERSONAL_ACCESS_TOKEN` 为敏感凭证，禁止写入代码、日志、提交信息
+
+---
+
+## 工程標準（Engineering Standards）
+
+> 以下章節參考 ECC（Everything Claude Code）項目的工程規範，結合本項目技術棧落地。
+
+### 核心原則
+
+1. **計劃先行** — 複雜功能先規劃再實作，識別依賴和風險，拆分為可驗證的階段
+2. **測試驅動** — 新功能先寫測試（RED），再寫最小實現（GREEN），最後重構（IMPROVE）
+3. **安全至上** — 永不硬編碼密鑰；所有外部輸入必須校驗；提交前執行安全 checklist
+4. **不可變優先** — 優先創建新對象而非修改共享狀態，減少副作用
+5. **高內聚低耦合** — 按功能/領域組織文件，而非按類型；模組邊界清晰
+
+### 編碼風格
+
+**文件組織**：多個小文件優於少數大文件。單文件 200-400 行為宜，不超過 800 行。按功能/領域組織，高內聚低耦合。
+
+**函數規範**：
+- 函數體 < 50 行
+- 嵌套不超過 4 層
+- 命名清晰可讀，避免縮寫
+- 無硬編碼值（用配置或常量）
+
+**錯誤處理**：
+- 每一層都要處理錯誤，不可靜默吞掉
+- UI 層提供用戶友好消息
+- 服務端記錄詳細上下文日誌
+- 系統邊界（API 入口）必須校驗輸入，fail fast
+
+**語言特定規範**：
+
+| 語言 | 規範 | Lint 工具 |
+|------|------|-----------|
+| Java | Google Java Style Guide + Lombok | Maven compiler warnings |
+| TypeScript | ESLint + 函數式組件 + Hooks | `npx eslint src/` |
+| Python | PEP 8 + 類型注解 | `ruff check` |
+
+### 測試要求
+
+**最低覆蓋率目標：80%**（逐步達成，新代碼必須有測試）
+
+測試類型（全部需要）：
+
+| 類型 | 範圍 | 工具 | 運行命令 |
+|------|------|------|----------|
+| 單元測試 | 函數、工具類、組件 | pytest / JUnit / Jest | 見下方 |
+| 整合測試 | API 端點、數據庫操作 | pytest / Testcontainers | 見下方 |
+| E2E 測試 | 關鍵用戶流程 | 手動 / Playwright（未來） | — |
+
+```bash
+# Agent 單元 + 整合測試
+cd agent && python -m pytest tests/ -v --tb=short
+
+# Java 編譯驗證（測試待補）
+cd java && mvn -B -DskipTests compile
+
+# 前端類型檢查 + lint + 構建
+cd next && npx tsc --noEmit && npx eslint src/ && npm run build
+```
+
+**TDD 工作流（新功能必須遵循）**：
+1. **RED** — 先寫測試，測試應該失敗
+2. **GREEN** — 寫最小實現讓測試通過
+3. **IMPROVE** — 重構，確認覆蓋率 ≥ 80%
+
+測試失敗排查順序：檢查測試隔離 → 驗證 mock → 修復實現（除非測試本身有誤）。
+
+### 開發工作流
+
+```
+1. 計劃  → 識別依賴和風險，拆分為階段
+2. TDD   → 先寫測試，再實作，最後重構
+3. 審查  → 自審 CRITICAL/HIGH 問題，參考 RULES.md checklist
+4. 文檔  → 更新相關文檔（API/架構/數據庫），不重複已有信息
+5. 提交  → Conventional Commits 格式，PR 附測試計劃
+```
+
+### Git 工作流
+
+**提交格式**：`<type>(<scope>): <description>`
+
+類型：`feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`
+
+**PR 流程**：
+1. 分析完整 commit 歷史
+2. 撰寫全面摘要（Summary + Test plan）
+3. 使用 `git push -u origin <branch>` 推送
+
+**分支策略**：
+- `main` — 主分支，保持可運行狀態
+- `feat/<name>` — 新功能分支
+- `fix/<name>` — Bug 修復分支
+- `docs/<name>` — 文檔分支
+
+### 架構模式
+
+**API 響應格式**：統一信封 `ApiResponse<T>` = `{success, code, message, data}`
+
+**Repository 模式**：數據訪問封裝在 Repository 層（`findAll`, `findById`, `create`, `update`, `delete`），業務邏輯依賴抽象接口而非存儲機制。
+
+**服務分層**：
+```
+Controller（API 邊界，輸入校驗）
+    ↓
+Service（業務邏輯，事務管理）
+    ↓
+Repository（數據訪問，持久化）
+    ↓
+Entity / DTO（數據模型）
+```
+
+**Agent 編排模式**：
+```
+Optimizer（循環編排）
+    ↓
+Stage Base（階段基類，供應商路由 + JSON mode）
+    ↓
+LLM Client（多模型路由 + 自動降級）
+    ↓
+Backend Client（REST API 調用 + 重試 + 速率限制）
+```
+
+### 安全規範
+
+**提交前必須檢查**（完整 checklist 見 `RULES.md`）：
+- 無硬編碼密鑰（API Key、密碼、Token）
+- 所有用戶輸入已校驗
+- SQL 使用參數化查詢（JPA 已內建）
+- 錯誤消息不洩露敏感信息
+- `.env` / `agent/.env` 不在暫存區
+
+**密鑰管理**：
+- 永不硬編碼密鑰，使用環境變量
+- 啟動時校驗必需密鑰是否存在
+- 已暴露的密鑰必須立即輪換
+
+**發現安全問題時**：
+```
+停止 → 評估影響 → 修復 CRITICAL 問題 → 輪換已暴露密鑰 → 排查類似問題
+```
+
+### 性能與上下文管理
+
+- 數據庫查詢避免 N+1，用 `@EntityGraph` 或 JOIN FETCH
+- Caffeine 緩存 TTL 根據數據更新頻率配置
+- Agent LLM 調用使用速率限制器（令牌桶）防止壓垮後端
+- 前端 SWR 輪詢間隔根據頁面活躍度調整（運行時 2s，空閒 10s）
+
+### 項目結構
+
+```
+java/           — Java 21 + Spring Boot 後端
+next/           — Next.js 15 前端
+agent/          — FastAPI AI 優化服務
+ingestion/      — Baostock 數據採集
+docs/           — 架構 / API / 數據庫文檔
+.github/        — CI/CD + Issue/PR 模板
+```
+
+### 成功指標
+
+- 所有測試通過，覆蓋率 ≥ 80%
+- 無安全漏洞（gitleaks 掃描通過）
+- 代碼可讀、可維護
+- 性能可接受（API 響應 < 500ms，回測 < 30s）
+- 用戶需求已滿足

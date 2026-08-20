@@ -1,5 +1,7 @@
 """模型可用性定時檢查 — 使用 APScheduler 定期檢查 LLM 提供者可用性。"""
+
 import logging
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.config import settings
@@ -42,8 +44,7 @@ class ModelChecker:
         try:
             status = await llm_client.check_models()
             logger.info(
-                f"模型狀態: provider={status.provider}, model={status.model_name}, "
-                f"available={status.available}"
+                f"模型狀態: provider={status.provider}, model={status.model_name}, available={status.available}"
             )
         except Exception as e:
             logger.error(f"模型檢查異常: {e}")

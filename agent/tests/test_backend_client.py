@@ -1,11 +1,12 @@
 """測試 backend_client — 重試邏輯和連接池。"""
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from app.services.backend_client import BackendClient, MAX_RETRIES, RETRY_BASE_DELAY
+from app.services.backend_client import MAX_RETRIES, BackendClient
 
 
 class TestBackendClientInit:

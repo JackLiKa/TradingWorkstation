@@ -22,6 +22,7 @@ next/yarn-debug.log*
 next/yarn-error.log*
 next/.pnp
 next/.pnp.js
+next/tsconfig.tsbuildinfo
 
 # ===== Python (ingestion + agent) =====
 ingestion/__pycache__/
@@ -32,6 +33,14 @@ agent/**/__pycache__/
 agent/.venv/
 agent/**/*.pyc
 agent/.pytest_cache/
+
+# ===== Agent 運行時數據（不入庫）=====
+agent/data/
+agent/logs/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
 
 # ===== 通用 =====
 .DS_Store

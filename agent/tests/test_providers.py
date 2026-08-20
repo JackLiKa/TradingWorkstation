@@ -1,15 +1,13 @@
 """測試多模型路由架構 — providers 註冊表 + 路由邏輯。"""
-import os
-import pytest
 
 from app.core.providers import (
     PROVIDERS,
     STAGE_DEFAULT_PROVIDERS,
-    get_provider_info,
     get_all_provider_ids,
-    get_default_provider_for_stage,
-    is_openai_compatible,
     get_api_key,
+    get_default_provider_for_stage,
+    get_provider_info,
+    is_openai_compatible,
 )
 
 
@@ -19,9 +17,13 @@ class TestProviderRegistry:
     def test_all_providers_defined(self):
         """應該有 7 個供應商。"""
         expected = {
-            "deepseek-pro", "deepseek-flash",
-            "glm-5.2", "glm-flash",
-            "qwen", "qoder", "devin",
+            "deepseek-pro",
+            "deepseek-flash",
+            "glm-5.2",
+            "glm-flash",
+            "qwen",
+            "qoder",
+            "devin",
         }
         assert set(PROVIDERS.keys()) == expected
 
@@ -87,9 +89,14 @@ class TestStageRouting:
     def test_all_stages_have_default(self):
         """所有核心階段都應該有默認供應商。"""
         required = [
-            "market_news", "industry_analysis", "market_analysis",
-            "strategy_generation", "backtest_reflection", "prompt_generation",
-            "judge", "monitor",
+            "market_news",
+            "industry_analysis",
+            "market_analysis",
+            "strategy_generation",
+            "backtest_reflection",
+            "prompt_generation",
+            "judge",
+            "monitor",
         ]
         for stage in required:
             assert stage in STAGE_DEFAULT_PROVIDERS, f"{stage} 缺少默認供應商"

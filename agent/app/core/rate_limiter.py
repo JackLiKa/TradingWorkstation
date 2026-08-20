@@ -11,10 +11,11 @@
 - screener: 中等計算，中等限制（每 5 秒 1 次）
 - 其他讀操作: 輕量，寬鬆限制（每秒 5 次）
 """
+
 import asyncio
 import logging
+import os
 import time
-from typing import Optional
 
 logger = logging.getLogger("agent.ratelimit")
 
@@ -71,10 +72,9 @@ class TokenBucket:
 _buckets: dict[str, TokenBucket] = {}
 
 # 速率配置（可通過環境變量調整）
-import os
 BACKTEST_RATE = float(os.environ.get("RATE_LIMIT_BACKTEST", "0.033"))  # 每 30 秒 1 次
-SCREENER_RATE = float(os.environ.get("RATE_LIMIT_SCREENER", "0.2"))    # 每 5 秒 1 次
-READ_RATE = float(os.environ.get("RATE_LIMIT_READ", "5.0"))            # 每秒 5 次
+SCREENER_RATE = float(os.environ.get("RATE_LIMIT_SCREENER", "0.2"))  # 每 5 秒 1 次
+READ_RATE = float(os.environ.get("RATE_LIMIT_READ", "5.0"))  # 每秒 5 次
 
 
 def _get_bucket(endpoint: str) -> TokenBucket:

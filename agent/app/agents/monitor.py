@@ -18,18 +18,20 @@ AOP 設計:
 - 優化循環長時間無進展 → STALL_DETECTED
 - 異步任務被取消 → TASK_CANCELLED
 """
+
 import logging
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("agent.monitor")
 
 
 class NodeStatus(str, Enum):
     """節點狀態。"""
+
     PENDING = "pending"
     RUNNING = "running"
     JUDGING = "judging"
@@ -42,6 +44,7 @@ class NodeStatus(str, Enum):
 
 class AlertLevel(str, Enum):
     """告警級別。"""
+
     INFO = "info"
     WARNING = "warning"
     CRITICAL = "critical"
@@ -50,6 +53,7 @@ class AlertLevel(str, Enum):
 @dataclass
 class NodeEvent:
     """單個節點的生命周期事件。"""
+
     run_id: str  # 優化運行 ID（每次 start_optimization 生成一個）
     iteration: int  # 迭代輪次
     node_id: str  # 節點 ID（如 "market_news"）
@@ -60,7 +64,7 @@ class NodeEvent:
     attempts: int = 1  # 嘗試次數
     judge_score: float = 0.0  # 評委分數
     judge_passed: bool = True  # 評委是否通過
-    error: Optional[str] = None  # 錯誤信息
+    error: str | None = None  # 錯誤信息
     metadata: dict[str, Any] = field(default_factory=dict)  # 額外元數據
 
     def to_dict(self) -> dict:
@@ -70,6 +74,7 @@ class NodeEvent:
 @dataclass
 class Alert:
     """異常告警。"""
+
     alert_id: str  # 唯一 ID
     level: str  # AlertLevel 值
     category: str  # 異常類別（如 "timeout", "failure", "stall"）
@@ -136,7 +141,9 @@ class NodeMonitor:
 
     def end_run(self):
         """結束當前運行。"""
-        logger.info(f"[Monitor] 運行結束: run_id={self._run_id}, 事件數={len(self._events)}, 告警數={len(self._alerts)}")
+        logger.info(
+            f"[Monitor] 運行結束: run_id={self._run_id}, 事件數={len(self._events)}, 告警數={len(self._alerts)}"
+        )
         self._run_id = ""
 
     def set_iteration(self, iteration: int):
@@ -180,11 +187,13 @@ class NodeMonitor:
         attempts: int = 1,
         judge_score: float = 0.0,
         judge_passed: bool = True,
-        error: Optional[str] = None,
+        error: str | None = None,
     ):
         """記錄節點執行結束。"""
-        status = NodeStatus.FAILED.value if error else (
-            NodeStatus.PASSED.value if judge_passed else NodeStatus.RETRYING.value
+        status = (
+            NodeStatus.FAILED.value
+            if error
+            else (NodeStatus.PASSED.value if judge_passed else NodeStatus.RETRYING.value)
         )
         event = NodeEvent(
             run_id=self._run_id,
@@ -250,7 +259,7 @@ class NodeMonitor:
                 level=AlertLevel.CRITICAL,
                 category="timeout",
                 node_id=node_id,
-                message=f"節點 {node_id} 執行時間 {duration_ms/1000:.1f}s 超過臨界閾值 {self.TIMEOUT_CRITICAL_MS/1000:.0f}s",
+                message=f"節點 {node_id} 執行時間 {duration_ms / 1000:.1f}s 超過臨界閾值 {self.TIMEOUT_CRITICAL_MS / 1000:.0f}s",
                 suggestion="檢查 LLM 響應時間、網絡連接、或考慮降低 prompt 長度",
             )
         elif duration_ms >= self.TIMEOUT_WARNING_MS:
@@ -258,11 +267,11 @@ class NodeMonitor:
                 level=AlertLevel.WARNING,
                 category="timeout",
                 node_id=node_id,
-                message=f"節點 {node_id} 執行時間 {duration_ms/1000:.1f}s 超過警告閾值 {self.TIMEOUT_WARNING_MS/1000:.0f}s",
+                message=f"節點 {node_id} 執行時間 {duration_ms / 1000:.1f}s 超過警告閾值 {self.TIMEOUT_WARNING_MS / 1000:.0f}s",
                 suggestion="監控是否持續變慢，可能需要優化 prompt",
             )
 
-    def _detect_failure(self, node_id: str, error: Optional[str]):
+    def _detect_failure(self, node_id: str, error: str | None):
         """檢測節點失敗。"""
         if error:
             self._add_alert(
@@ -289,7 +298,7 @@ class NodeMonitor:
         """檢測優化無進展。"""
         if len(self._score_history) < self.STALL_ITERATIONS:
             return
-        recent = self._score_history[-self.STALL_ITERATIONS:]
+        recent = self._score_history[-self.STALL_ITERATIONS :]
         if max(recent) - min(recent) < 1.0:  # 5 輪內評分變化 < 1 分
             self._add_alert(
                 level=AlertLevel.WARNING,

@@ -1,0 +1,28 @@
+# Ruff 配置 — Python linter + formatter
+# https://docs.astral.sh/ruff/configuration/
+
+target-version = "py310"
+line-length = 120
+
+[lint]
+# 啟用的規則集
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (未使用 import、未定義變量等)
+    "I",    # isort (import 排序)
+    "UP",   # pyupgrade (現代語法)
+    "B",    # flake8-bugbear (常見 bug 模式)
+]
+# 忽略的規則（本項目特定）
+ignore = [
+    "E501",   # 行長度由 formatter 管理，不硬性報錯
+    "B008",   # 函數默認值中調用函數（FastAPI Depends 常用模式）
+]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

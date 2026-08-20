@@ -1,12 +1,11 @@
 """測試 LLM 客戶端 — 多模型路由 + 降級邏輯。"""
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
-from app.core.llm_client import LLMClient, LLMResponse
-from app.core.providers import PROVIDERS
+from app.core.llm_client import LLMClient
 
 
 class TestLLMClientInit:
@@ -105,6 +104,7 @@ class TestAnalyzeRouting:
         client._provider_status = {"deepseek-flash": True, "glm-flash": True}
 
         call_count = 0
+
         async def mock_call(provider_id, *args, **kwargs):
             nonlocal call_count
             call_count += 1
@@ -134,9 +134,7 @@ class TestOpenAICompatibleCall:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value={
-            "choices": [{"message": {"content": "test output"}}]
-        })
+        mock_response.json = MagicMock(return_value={"choices": [{"message": {"content": "test output"}}]})
 
         async def mock_post(*args, **kwargs):
             return mock_response
@@ -148,9 +146,7 @@ class TestOpenAICompatibleCall:
             mock_client.post = mock_post
             mock_client_class.return_value = mock_client
 
-            result = asyncio.run(client._call_provider(
-                "deepseek-flash", "test prompt", "system", json_mode=False
-            ))
+            result = asyncio.run(client._call_provider("deepseek-flash", "test prompt", "system", json_mode=False))
             assert result == "test output"
 
     def test_call_with_json_mode(self, client, monkeypatch):
@@ -161,9 +157,7 @@ class TestOpenAICompatibleCall:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value={
-            "choices": [{"message": {"content": '{"key": "value"}'}}]
-        })
+        mock_response.json = MagicMock(return_value={"choices": [{"message": {"content": '{"key": "value"}'}}]})
 
         async def mock_post(url, headers=None, json=None):
             captured_body.update(json or {})
@@ -176,9 +170,7 @@ class TestOpenAICompatibleCall:
             mock_client.post = mock_post
             mock_client_class.return_value = mock_client
 
-            result = asyncio.run(client._call_provider(
-                "deepseek-flash", "test", "system", json_mode=True
-            ))
+            asyncio.run(client._call_provider("deepseek-flash", "test", "system", json_mode=True))
             assert "response_format" in captured_body
             assert captured_body["response_format"]["type"] == "json_object"
 

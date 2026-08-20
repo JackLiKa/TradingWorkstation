@@ -1,5 +1,4 @@
 """測試評分計算 — 綜合評分邏輯。"""
-import pytest
 
 from app.agents.scoring import compute_composite_score
 

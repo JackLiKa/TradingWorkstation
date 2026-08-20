@@ -7,14 +7,14 @@
 - 可選 mutable default：stage_providers 用 default_factory
 - 配置導出：to_dict() 供 /health 端點展示（隱藏敏感字段）
 """
+
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from pydantic_settings import BaseSettings
 from pydantic import field_validator
+from pydantic_settings import BaseSettings
 
 # 加載 agent/.env
 _env_path = Path(__file__).resolve().parent.parent.parent / ".env"

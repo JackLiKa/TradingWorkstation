@@ -4,12 +4,13 @@
 輸出: JSON { reasoning, criteria }
 範式: 必須是有效 JSON，包含 reasoning 和 criteria 字段
 """
+
 import json
 import logging
 from typing import Any
 
-from app.agents.stages.base import BaseStage
 from app.agents.few_shot import get_few_shot
+from app.agents.stages.base import BaseStage
 
 logger = logging.getLogger("agent.stage.strategy")
 
@@ -151,7 +152,9 @@ class StrategyGenerationStage(BaseStage):
         history_text = ""
         for h in history[-5:]:
             stats = h.backtest_statistics
-            active_filters = {k: v for k, v in h.criteria.items() if v is not None and v != False and v != "any" and v != 0}
+            active_filters = {
+                k: v for k, v in h.criteria.items() if v is not None and v is not False and v != "any" and v != 0
+            }
             history_text += (
                 f"  第{h.iteration}輪: 評分={h.composite_score}, 收益={stats.get('totalReturn', 0)}%, "
                 f"回撤={stats.get('maxDrawdown', 0)}%, 夏普={stats.get('sharpe', 0)}, "
@@ -159,6 +162,7 @@ class StrategyGenerationStage(BaseStage):
             )
 
         from datetime import datetime
+
         asof_date = current_criteria.get("asOfDate", datetime.now().strftime("%Y-%m-%d"))
         adjustflag = current_criteria.get("adjustflag", 3)
 
@@ -187,11 +191,11 @@ def parse_strategy_output(response: str) -> dict[str, Any]:
         json_start = response.find("{", json_start)
         json_end = response.rfind("}")
         if json_start >= 0 and json_end > json_start:
-            return json.loads(response[json_start:json_end + 1])
+            return json.loads(response[json_start : json_end + 1])
 
     brace_start = response.find("{")
     brace_end = response.rfind("}")
     if brace_start >= 0 and brace_end > brace_start:
-        return json.loads(response[brace_start:brace_end + 1])
+        return json.loads(response[brace_start : brace_end + 1])
 
     raise ValueError(f"無法從 LLM 響應中提取 JSON: {response[:200]}")

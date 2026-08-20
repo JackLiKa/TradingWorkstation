@@ -10,11 +10,12 @@
 - BAAI/bge-small-zh-v1.5 中文 embedding 模型（95MB，本地運行，無 API 成本）
 - 自動降級：Milvus/embedding 不可時靜默跳過，不影響優化循環
 """
+
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("agent.rag")
 
@@ -23,17 +24,26 @@ _milvus = None
 _embedding_model = None
 _init_attempted = False
 _init_error = ""
+_init_fail_count = 0
+_MAX_INIT_RETRIES = 3  # 最多重試 3 次，避免永久放棄
 
 
 def _try_init():
-    """延遲初始化 Milvus 和 embedding 模型（首次使用時）。"""
-    global _milvus, _embedding_model, _init_attempted, _init_error
-    if _init_attempted:
-        return
+    """延遲初始化 Milvus 和 embedding 模型（首次使用時）。
+
+    若初始化失敗，允許重試最多 _MAX_INIT_RETRIES 次，
+    避免因冷啟動時依賴未就緒而永久不可用。
+    """
+    global _milvus, _embedding_model, _init_attempted, _init_error, _init_fail_count
+    if _init_attempted and _init_fail_count >= _MAX_INIT_RETRIES:
+        return  # 已重試達上限，不再嘗試
+    if _init_attempted and _milvus is not None and _embedding_model is not None:
+        return  # 已成功初始化
     _init_attempted = True
 
     try:
         from pymilvus import MilvusClient
+
         # 數據存儲路徑（agent/data/milvus_lite.db）
         data_dir = Path(__file__).resolve().parent.parent.parent / "data"
         data_dir.mkdir(exist_ok=True)
@@ -42,18 +52,22 @@ def _try_init():
         _milvus = MilvusClient(db_path)
         logger.info(f"Milvus Lite 初始化成功: {db_path}")
     except Exception as e:
-        _init_error = f"Milvus 初始化失敗: {e}"
+        _init_fail_count += 1
+        _init_error = f"Milvus 初始化失敗 (第{_init_fail_count}次): {e}"
         logger.warning(_init_error)
         return
 
     try:
         from sentence_transformers import SentenceTransformer
+
         # bge-small-zh-v1.5: 95MB, 512 維, 中文優化, 本地運行
         model_name = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
         _embedding_model = SentenceTransformer(model_name)
         logger.info(f"Embedding 模型載入成功: {model_name}")
+        _init_fail_count = 0  # 成功則重置計數
     except Exception as e:
-        _init_error = f"Embedding 模型載入失敗: {e}"
+        _init_fail_count += 1
+        _init_error = f"Embedding 模型載入失敗 (第{_init_fail_count}次): {e}"
         logger.warning(_init_error)
         _milvus = None  # 沒有 embedding 就無法使用 RAG
 
@@ -68,6 +82,7 @@ def _ensure_collection():
         return False
     try:
         from pymilvus import DataType
+
         if _milvus.has_collection(COLLECTION_NAME):
             return True
         # 創建 collection schema
@@ -96,7 +111,7 @@ def _ensure_collection():
         return False
 
 
-def _embed(text: str) -> Optional[list[float]]:
+def _embed(text: str) -> list[float] | None:
     """將文本轉為向量。"""
     if not _embedding_model:
         return None
@@ -116,10 +131,7 @@ def _build_experience_text(
 ) -> str:
     """構建用於 embedding 的經驗文本（語義豐富的描述）。"""
     # 提取關鍵策略特徵
-    active_filters = {
-        k: v for k, v in criteria.items()
-        if v is not None and v != False and v != "any" and v != 0
-    }
+    active_filters = {k: v for k, v in criteria.items() if v is not None and v is not False and v != "any" and v != 0}
     # 提取回測結果摘要
     total_return = stats.get("totalReturn", 0)
     max_drawdown = stats.get("maxDrawdown", 0)
@@ -179,18 +191,21 @@ def store_experience(
 
         # 截斷字段以適應 Milvus VARCHAR 限制
         from datetime import datetime
+
         _milvus.insert(
             collection_name=COLLECTION_NAME,
-            data=[{
-                "embedding": embedding,
-                "iteration": iteration,
-                "market_context": market_context[:2000],
-                "criteria_json": json.dumps(criteria, ensure_ascii=False)[:4000],
-                "result_json": json.dumps(stats, ensure_ascii=False)[:2000],
-                "reflection": reflection[:2000],
-                "composite_score": composite_score,
-                "timestamp": timestamp or datetime.now().isoformat(),
-            }],
+            data=[
+                {
+                    "embedding": embedding,
+                    "iteration": iteration,
+                    "market_context": market_context[:2000],
+                    "criteria_json": json.dumps(criteria, ensure_ascii=False)[:4000],
+                    "result_json": json.dumps(stats, ensure_ascii=False)[:2000],
+                    "reflection": reflection[:2000],
+                    "composite_score": composite_score,
+                    "timestamp": timestamp or datetime.now().isoformat(),
+                }
+            ],
         )
         logger.info(f"RAG: 已存儲第 {iteration} 輪經驗 (score={composite_score})")
         return True
@@ -226,13 +241,9 @@ def search_similar_experiences(
     try:
         # 構建查詢文本（市場環境 + 當前策略特徵）
         active_filters = {
-            k: v for k, v in current_criteria.items()
-            if v is not None and v != False and v != "any" and v != 0
+            k: v for k, v in current_criteria.items() if v is not None and v is not False and v != "any" and v != 0
         }
-        query_text = (
-            f"市場環境: {market_context[:300]}\n"
-            f"策略條件: {json.dumps(active_filters, ensure_ascii=False)}"
-        )
+        query_text = f"市場環境: {market_context[:300]}\n策略條件: {json.dumps(active_filters, ensure_ascii=False)}"
         query_embedding = _embed(query_text)
         if query_embedding is None:
             return []
@@ -243,8 +254,13 @@ def search_similar_experiences(
             data=[query_embedding],
             limit=top_k,
             output_fields=[
-                "iteration", "market_context", "criteria_json",
-                "result_json", "reflection", "composite_score", "timestamp",
+                "iteration",
+                "market_context",
+                "criteria_json",
+                "result_json",
+                "reflection",
+                "composite_score",
+                "timestamp",
             ],
             search_params={"metric_type": "COSINE", "params": {"radius": min_score}},
         )
@@ -263,15 +279,17 @@ def search_similar_experiences(
                 stats = json.loads(entity.get("result_json", "{}"))
             except (json.JSONDecodeError, TypeError):
                 continue
-            experiences.append({
-                "iteration": entity.get("iteration", 0),
-                "similarity": round(score, 3),
-                "market_context": entity.get("market_context", ""),
-                "criteria": criteria,
-                "stats": stats,
-                "reflection": entity.get("reflection", ""),
-                "composite_score": entity.get("composite_score", 0),
-            })
+            experiences.append(
+                {
+                    "iteration": entity.get("iteration", 0),
+                    "similarity": round(score, 3),
+                    "market_context": entity.get("market_context", ""),
+                    "criteria": criteria,
+                    "stats": stats,
+                    "reflection": entity.get("reflection", ""),
+                    "composite_score": entity.get("composite_score", 0),
+                }
+            )
 
         logger.info(f"RAG: 搜索到 {len(experiences)} 條相似經驗 (top_k={top_k})")
         return experiences

@@ -1,0 +1,47 @@
+# gitleaks 配置 — 密鑰洩露掃描
+# https://github.com/gitleaks/gitleaks#configuration
+
+title = "Trading Workstation 密鑰掃描"
+
+[allowlist]
+  description = "允許列表 — 這些路徑/模式不觸發告警"
+  paths = [
+    '''\.env\.example$''',
+    '''\.gitignore$''',
+    '''package-lock\.json$''',
+    '''yarn\.lock$''',
+    '''uv\.lock$''',
+  ]
+  # 允許的佔位符值（非真實密鑰）
+  regexes = [
+    '''your-api-key-here''',
+    '''ci-test-key''',
+    '''ci-test-token''',
+    '''your-password-here''',
+    '''CHANGE_ME''',
+    '''xxx''',
+  ]
+
+[[rules]]
+  id = "api-key-generic"
+  description = "通用 API Key（32+ 字符的 key/token 模式）"
+  regex = '''(?i)(api[_-]?key|token|secret|password)\s*[=:]\s*["']?[A-Za-z0-9]{32,}["']?'''
+  tags = ["key", "token", "secret"]
+
+[[rules]]
+  id = "database-password"
+  description = "數據庫密碼"
+  regex = '''(?i)(db[_-]?password|database[_-]?password)\s*[=:]\s*["']?[^\s"']{8,}["']?'''
+  tags = ["database", "password"]
+
+[[rules]]
+  id = "jwt-secret"
+  description = "JWT 密鑰"
+  regex = '''(?i)jwt[_-]?secret\s*[=:]\s*["']?[A-Za-z0-9]{16,}["']?'''
+  tags = ["jwt", "secret"]
+
+[[rules]]
+  id = "private-key"
+  description = "私鑰文件內容"
+  regex = '''-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'''
+  tags = ["private-key"]

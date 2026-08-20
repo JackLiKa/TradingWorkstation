@@ -13,44 +13,41 @@
 
 每次更優策略寫入數據庫，f0 從 DB 最高分策略開始。
 """
+
 import asyncio
-import json
 import logging
 import time
 from datetime import datetime
-from typing import Any, Optional
 
-from app.agents.state import (
-    OptimizerState,
-    IterationResult,
-    StageResult,
-    DEFAULT_CRITERIA,
-    DEFAULT_BACKTEST_CONFIG,
-    build_default_criteria,
-    build_default_backtest_config,
-)
-from app.agents.scoring import compute_composite_score
 from app.agents.judge import JudgeAI
 from app.agents.monitor import node_monitor
-from app.agents.monitor_ai import monitor_ai
-from app.agents.stages.market_news import MarketNewsStage
+from app.agents.scoring import compute_composite_score
+from app.agents.stages.backtest_reflection import BacktestReflectionStage
 from app.agents.stages.industry_analysis import IndustryAnalysisStage, parse_industry_output
 from app.agents.stages.market_analysis import MarketAnalysisStage
-from app.agents.stages.strategy_generation import StrategyGenerationStage, parse_strategy_output
-from app.agents.stages.backtest_reflection import BacktestReflectionStage
+from app.agents.stages.market_news import MarketNewsStage
 from app.agents.stages.prompt_generation import PromptGenerationStage
-from app.core.llm_client import llm_client
-from app.services.backend_client import backend_client
-from app.services.experience_store import (
-    store_iteration_experience,
-    retrieve_relevant_experiences,
-    format_experiences_for_prompt,
-    is_rag_available,
+from app.agents.stages.strategy_generation import StrategyGenerationStage, parse_strategy_output
+from app.agents.state import (
+    DEFAULT_BACKTEST_CONFIG,
+    DEFAULT_CRITERIA,
+    IterationResult,
+    OptimizerState,
+    StageResult,
+    build_default_backtest_config,
+    build_default_criteria,
 )
+from app.core.llm_client import llm_client
 from app.core.metrics import (
     record_iteration_complete,
-    record_stage_duration,
     record_rag_operation,
+)
+from app.services.backend_client import backend_client
+from app.services.experience_store import (
+    format_experiences_for_prompt,
+    is_rag_available,
+    retrieve_relevant_experiences,
+    store_iteration_experience,
 )
 
 logger = logging.getLogger("agent.optimizer")
@@ -58,7 +55,7 @@ logger = logging.getLogger("agent.optimizer")
 # 全局狀態
 state = OptimizerState()
 _stop_event = asyncio.Event()
-_current_task: Optional[asyncio.Task] = None
+_current_task: asyncio.Task | None = None
 
 # 初始化各 AI 節點和評委
 _market_news_stage = MarketNewsStage()
@@ -70,7 +67,7 @@ _prompt_stage = PromptGenerationStage()
 _judge = JudgeAI(pass_threshold=60.0)
 
 
-async def _load_best_strategy_from_db(latest_trade_date: str | None = None) -> tuple[dict, dict, float, Optional[int]]:
+async def _load_best_strategy_from_db(latest_trade_date: str | None = None) -> tuple[dict, dict, float, int | None]:
     """從數據庫讀取評分最高的策略作為 f0。
 
     評分從策略的 result.statistics 計算（而非名稱解析），確保可靠性。
@@ -201,11 +198,11 @@ async def run_optimization_loop():
         state.current_stage_results = []  # 重置當前迭代的階段結果
         node_monitor.set_iteration(iteration)  # 設置監控的當前迭代
 
-        def _add_stage_result(sr: StageResult):
+        def _add_stage_result(sr: StageResult, _results: list[dict] = stage_results):
             """記錄階段結果到本地列表和全局狀態（用於實時可視化）。"""
             d = sr.to_dict()
-            stage_results.append(d)
-            state.current_stage_results = list(stage_results)  # 同步到狀態
+            _results.append(d)
+            state.current_stage_results = list(_results)  # 同步到狀態
 
         try:
             # === AI 0: 行情新聞分析（+ 評委） ===
@@ -303,15 +300,15 @@ async def run_optimization_loop():
             node_monitor.record_start("backtest", node_type="backtest")
             logger.info(f"第 {iteration} 輪：運行回測")
             backtest_start = time.time()
-            backtest_result = await backend_client.run_backtest(
-                new_criteria, state.current_config
-            )
+            backtest_result = await backend_client.run_backtest(new_criteria, state.current_config)
             backtest_duration_ms = int((time.time() - backtest_start) * 1000)
             stats = backtest_result.get("statistics", {})
             composite_score = compute_composite_score(stats)
             state.current_stage_status = "passed"
             node_monitor.record_end(
-                "backtest", node_type="backtest", duration_ms=backtest_duration_ms,
+                "backtest",
+                node_type="backtest",
+                duration_ms=backtest_duration_ms,
                 judge_passed=True,
             )
 
@@ -386,6 +383,7 @@ async def run_optimization_loop():
             state.iterations.append(result)
             # 截斷舊記錄防止內存洩漏（保留最近 100 輪）
             from app.agents.state import MAX_IN_MEMORY_ITERATIONS
+
             if len(state.iterations) > MAX_IN_MEMORY_ITERATIONS:
                 removed = len(state.iterations) - MAX_IN_MEMORY_ITERATIONS
                 state.iterations = state.iterations[removed:]
@@ -469,16 +467,18 @@ async def run_optimization_loop():
         except Exception as e:
             logger.error(f"第 {iteration} 輪異常: {e}", exc_info=True)
             state.status_message = f"第 {iteration} 輪錯誤: {e}"
-            state.iterations.append(IterationResult(
-                iteration=iteration,
-                timestamp=datetime.now().isoformat(),
-                criteria=dict(state.current_criteria),
-                config=dict(state.current_config),
-                screener_summary="",
-                backtest_statistics={},
-                composite_score=0,
-                error=str(e),
-            ))
+            state.iterations.append(
+                IterationResult(
+                    iteration=iteration,
+                    timestamp=datetime.now().isoformat(),
+                    criteria=dict(state.current_criteria),
+                    config=dict(state.current_config),
+                    screener_summary="",
+                    backtest_statistics={},
+                    composite_score=0,
+                    error=str(e),
+                )
+            )
             state.current_iteration = iteration
             try:
                 await asyncio.wait_for(_stop_event.wait(), timeout=30)

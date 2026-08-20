@@ -4,12 +4,12 @@
 輸出: 市場趨勢分析文本（2-4 句話）
 範式: 自然語言，包含市場趨勢、波動率、適合策略類型
 """
+
 import json
 import logging
-from typing import Any
 
-from app.agents.stages.base import BaseStage
 from app.agents.few_shot import get_few_shot
+from app.agents.stages.base import BaseStage
 
 logger = logging.getLogger("agent.stage.market")
 

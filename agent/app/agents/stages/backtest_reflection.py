@@ -4,12 +4,12 @@
 輸出: 結構化分析文本
 範式: 自然語言，包含策略優缺點、收益來源、風險控制、改進方向
 """
+
 import json
 import logging
-from typing import Any
 
-from app.agents.stages.base import BaseStage
 from app.agents.few_shot import get_few_shot
+from app.agents.stages.base import BaseStage
 
 logger = logging.getLogger("agent.stage.reflection")
 
@@ -90,7 +90,9 @@ class BacktestReflectionStage(BaseStage):
                 f"回撤={s.get('maxDrawdown', 0)}%, 夏普={s.get('sharpe', 0)}\n"
             )
 
-        active_filters = {k: v for k, v in criteria.items() if v is not None and v != False and v != "any" and v != 0}
+        active_filters = {
+            k: v for k, v in criteria.items() if v is not None and v is not False and v != "any" and v != 0
+        }
         # 截斷市場環境文本，避免 prompt 過長
         if len(market_context) > 500:
             market_context = market_context[:500] + "..."

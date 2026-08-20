@@ -7,13 +7,11 @@
 
 所有數據源都是公共免費 API，無需 API Key。
 """
+
 import logging
-import re
 from typing import Any
 
 import httpx
-
-from app.core.config import settings
 
 logger = logging.getLogger("agent.market_data")
 
@@ -56,6 +54,7 @@ class MarketDataClient:
         db_stats = {}
         try:
             from app.services.backend_client import backend_client
+
             db_stats = await backend_client.get_market_overview()
         except Exception as e:
             logger.warning(f"後端 dashboard 數據獲取失敗: {e}")
@@ -97,13 +96,15 @@ class MarketDataClient:
                     preclose = _safe_float(fields[2])
                     current = _safe_float(fields[3])
                     change_pct = ((current - preclose) / preclose * 100) if preclose else 0
-                    indices.append({
-                        "name": name,
-                        "code": code_part,
-                        "price": current,
-                        "preclose": preclose,
-                        "change_pct": round(change_pct, 2),
-                    })
+                    indices.append(
+                        {
+                            "name": name,
+                            "code": code_part,
+                            "price": current,
+                            "preclose": preclose,
+                            "change_pct": round(change_pct, 2),
+                        }
+                    )
                 logger.info(f"獲取 {len(indices)} 個指數行情")
                 return indices
         except Exception as e:
@@ -127,11 +128,13 @@ class MarketDataClient:
                 data = resp.json()
                 sectors = []
                 for item in data.get("data", {}).get("rankBK", [])[:20]:
-                    sectors.append({
-                        "sector": item.get("name", ""),
-                        "change_pct": _safe_float(item.get("changePct", 0)),
-                        "leader": item.get("leaderName", ""),
-                    })
+                    sectors.append(
+                        {
+                            "sector": item.get("name", ""),
+                            "change_pct": _safe_float(item.get("changePct", 0)),
+                            "leader": item.get("leaderName", ""),
+                        }
+                    )
                 logger.info(f"獲取 {len(sectors)} 個行業板塊")
                 return sectors
         except Exception as e:
@@ -161,6 +164,7 @@ def _now_str() -> str:
         str: 當前本地時間字符串
     """
     from datetime import datetime
+
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 

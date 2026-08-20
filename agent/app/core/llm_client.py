@@ -15,26 +15,21 @@
 - preferred_provider 參數可臨時指定供應商
 - 主供應商失敗時自動降級到備用供應商
 """
-import json
+
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 import httpx
 
-from app.core.config import settings
+from app.core.metrics import record_llm_call
 from app.core.providers import (
     PROVIDERS,
-    STAGE_DEFAULT_PROVIDERS,
-    get_provider_info,
     get_api_key,
     is_openai_compatible,
-    get_default_provider_for_stage,
 )
-from app.core.metrics import record_llm_call
 
 logger = logging.getLogger("agent.llm")
 
@@ -42,6 +37,7 @@ logger = logging.getLogger("agent.llm")
 @dataclass
 class LLMResponse:
     """LLM 調用結果 — 包含文本輸出和可觀測性元數據。"""
+
     text: str
     provider: str
     model_name: str
@@ -53,6 +49,7 @@ class LLMResponse:
 @dataclass
 class ModelStatus:
     """當前可用模型狀態。"""
+
     provider: str = "unknown"
     model_name: str = "unknown"
     available: bool = False
@@ -74,7 +71,7 @@ class LLMClient:
     def __init__(self):
         self._model_status = ModelStatus()
         self._provider_status: dict[str, bool] = {}  # provider_id -> available
-        self._devin_org_id: Optional[str] = None
+        self._devin_org_id: str | None = None
 
     @property
     def model_status(self) -> ModelStatus:
@@ -106,8 +103,10 @@ class LLMClient:
             logger.info(f"默認供應商: {info.display_name}")
         else:
             self._model_status = ModelStatus(
-                provider="none", model_name="none",
-                available=False, is_free=False,
+                provider="none",
+                model_name="none",
+                available=False,
+                is_free=False,
                 last_check=datetime.now().isoformat(),
                 error="所有供應商不可用",
             )
@@ -119,13 +118,13 @@ class LLMClient:
         """選擇最佳可用供應商（優先免費 + OpenAI-compatible）。"""
         # 優先級：免費的 OpenAI-compatible > 付費的 OpenAI-compatible > agent SDK
         priority_order = [
-            "glm-flash",       # 免費 + JSON 穩定
+            "glm-flash",  # 免費 + JSON 穩定
             "deepseek-flash",  # 便宜 + 快
-            "qwen",            # 中文最佳
-            "glm-5.2",         # JSON 最穩定
-            "deepseek-pro",    # 推理最強
-            "qoder",           # 免費 SDK
-            "devin",           # 免費 session（延遲高）
+            "qwen",  # 中文最佳
+            "glm-5.2",  # JSON 最穩定
+            "deepseek-pro",  # 推理最強
+            "qoder",  # 免費 SDK
+            "devin",  # 免費 session（延遲高）
         ]
         for pid in priority_order:
             if self._provider_status.get(pid):
@@ -147,6 +146,7 @@ class LLMClient:
         if provider_id == "qoder":
             try:
                 from qoder_agent_sdk import QoderAgentOptions  # noqa: F401
+
                 os.environ["QODER_PERSONAL_ACCESS_TOKEN"] = api_key
                 return True
             except ImportError:
@@ -188,13 +188,15 @@ class LLMClient:
         providers = []
         for pid, info in PROVIDERS.items():
             available = self._provider_status.get(pid, False)
-            providers.append({
-                "provider": pid,
-                "display_name": info.display_name,
-                "model": info.model_id,
-                "available": available,
-                "is_free": info.is_free,
-            })
+            providers.append(
+                {
+                    "provider": pid,
+                    "display_name": info.display_name,
+                    "model": info.model_id,
+                    "available": available,
+                    "is_free": info.is_free,
+                }
+            )
         # 按可用性 + 免費優先排序
         providers.sort(key=lambda p: (not p["available"], not p["is_free"]))
         return providers
@@ -216,17 +218,19 @@ class LLMClient:
                     error = "Devin API 不可達"
                 else:
                     error = "API key 已配置但檢查失敗"
-            result.append({
-                "provider": pid,
-                "display_name": info.display_name,
-                "model_name": info.model_id,
-                "available": available,
-                "is_free": info.is_free,
-                "last_check": last_check,
-                "error": error,
-                "supports_json_mode": info.supports_json_mode,
-                "tags": info.tags,
-            })
+            result.append(
+                {
+                    "provider": pid,
+                    "display_name": info.display_name,
+                    "model_name": info.model_id,
+                    "available": available,
+                    "is_free": info.is_free,
+                    "last_check": last_check,
+                    "error": error,
+                    "supports_json_mode": info.supports_json_mode,
+                    "tags": info.tags,
+                }
+            )
         return result
 
     def get_fallback_chain(self, preferred: str = "") -> list[str]:
@@ -237,9 +241,13 @@ class LLMClient:
 
         # 降級順序（排除已在 chain 中的）
         fallback_order = [
-            "glm-flash", "deepseek-flash", "qwen",
-            "glm-5.2", "deepseek-pro",
-            "qoder", "devin",
+            "glm-flash",
+            "deepseek-flash",
+            "qwen",
+            "glm-5.2",
+            "deepseek-pro",
+            "qoder",
+            "devin",
         ]
         for pid in fallback_order:
             if pid not in chain and self._provider_status.get(pid):
@@ -308,7 +316,7 @@ class LLMClient:
                 last_error = e
                 logger.warning(f"供應商 {info.display_name} 調用失敗: {e}")
                 if i < len(chain) - 1:
-                    logger.info(f"降級到: {PROVIDERS[chain[i+1]].display_name}")
+                    logger.info(f"降級到: {PROVIDERS[chain[i + 1]].display_name}")
                 continue
 
         duration_ms = int((time.time() - start) * 1000)
@@ -334,7 +342,11 @@ class LLMClient:
             return await self._call_devin(prompt, system_prompt, api_key)
         elif is_openai_compatible(provider_id):
             return await self._call_openai_compatible(
-                info, api_key, prompt, system_prompt, json_mode,
+                info,
+                api_key,
+                prompt,
+                system_prompt,
+                json_mode,
             )
         else:
             raise RuntimeError(f"未知供應商類型: {provider_id}")
@@ -382,6 +394,7 @@ class LLMClient:
     async def _call_qoder(self, prompt: str, system_prompt: str, api_key: str) -> str:
         """調用 Qoder agent SDK。"""
         from qoder_agent_sdk import QoderAgentOptions, access_token_from_env, query
+
         os.environ["QODER_PERSONAL_ACCESS_TOKEN"] = api_key
         full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
         options = QoderAgentOptions(auth=access_token_from_env())
@@ -410,6 +423,7 @@ class LLMClient:
         max_polls = 24
         poll_interval = 3
         import asyncio
+
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 f"https://api.devin.ai/v3/organizations/{self._devin_org_id}/sessions",
@@ -421,7 +435,7 @@ class LLMClient:
             session_id = session_data.get("devin_id") or session_data.get("session_id")
             if not session_id:
                 raise RuntimeError("Devin 會話創建失敗")
-            for poll in range(max_polls):
+            for _poll in range(max_polls):
                 await asyncio.sleep(poll_interval)
                 status_resp = await client.get(
                     f"https://api.devin.ai/v3/organizations/{self._devin_org_id}/sessions/{session_id}",
