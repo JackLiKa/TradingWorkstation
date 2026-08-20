@@ -220,6 +220,27 @@ class BackendClient:
             logger.warning(f"獲取指數歷史失敗 (code={code}): {e}")
             return []
 
+    async def get_sector_performance(self, days: int = 10) -> list[dict[str, Any]]:
+        """獲取最近 N 個交易日的板塊表現（各行業平均漲跌幅 + 領漲股）。
+
+        Args:
+            days: 最近交易日天數（默認 10）
+
+        Returns:
+            list[dict]: 板塊表現列表，每項含 date/industry/avgPctChange/topCode/topCodeName/topPctChange
+        """
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/stock/sector-performance",
+                params={"days": days},
+                timeout=20,
+            )
+            return data.get("data", [])
+        except Exception as e:
+            logger.warning(f"獲取板塊表現失敗: {e}")
+            return []
+
     async def get_latest_trade_date(self) -> str | None:
         """獲取數據庫中已有數據的最新交易日。
 

@@ -3,6 +3,7 @@ package com.quantization.module.stock;
 import com.quantization.common.api.ApiResponse;
 import com.quantization.module.stock.dto.HotSymbolDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
+import com.quantization.module.stock.dto.SectorPerformanceDto;
 import com.quantization.module.stock.dto.SearchResultDto;
 import com.quantization.module.stock.dto.StockDailyDto;
 import com.quantization.module.stock.dto.StockDailyQueryDto;
@@ -163,5 +164,21 @@ public class StockController {
             entities = entities.subList(size - days, size);
         }
         return ApiResponse.ok(entities.stream().map(IndexDailyDto::from).toList());
+    }
+
+    // ===== 多日板塊表現（10日行情分析）=====
+
+    /**
+     * 查詢最近 N 個交易日的板塊表現（各行業平均漲跌幅 + 領漲股）。
+     * 用於 AI 10日行情分析，識別利好/利空行業及其延續性。
+     *
+     * @param days 最近交易日天數（默認 10）
+     * @return 板塊表現列表（按日期倒序、行業平均漲跌幅倒序）
+     */
+    @Operation(summary = "多日板塊表現（10日行情分析）")
+    @GetMapping("/sector-performance")
+    public ApiResponse<List<SectorPerformanceDto>> sectorPerformance(
+            @RequestParam(required = false, defaultValue = "10") int days) {
+        return ApiResponse.ok(stockService.sectorPerformance(days));
     }
 }

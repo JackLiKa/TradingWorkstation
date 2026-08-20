@@ -4,6 +4,8 @@
 1. 新浪財經 hq.sinajs.cn — 大盤指數實時行情
 2. 騰訊財經 qt.gtimg.cn — 備用指數行情
 3. 後端 dashboard API — 數據庫中的股票統計
+4. 後端 sector-performance API — 多日板塊表現（10日行情分析）
+5. 東方財富 np-listapi.eastmoney.com — 財經新聞抓取
 
 所有數據源都是公共免費 API，無需 API Key。
 """
@@ -39,13 +41,15 @@ class MarketDataClient:
     """
 
     async def get_market_overview(self) -> dict[str, Any]:
-        """獲取全市場概覽：大盤指數 + 後端統計 + 多日形態。
+        """獲取全市場概覽：大盤指數 + 後端統計 + 多日形態 + 多日板塊表現 + 新聞。
 
         Returns:
             {
                 "indices": [{"name": "上證指數", "code": "sh000001", "price": 3990.3, "change_pct": 0.19}, ...],
                 "db_stats": {...},  # 來自後端 dashboard
                 "regime": {...},    # 市場形態識別結果
+                "sector_performance": [...],  # 多日板塊表現（10日）
+                "news": [...],  # 財經新聞列表
                 "timestamp": "2026-08-18 22:30:00",
             }
         """
@@ -63,10 +67,18 @@ class MarketDataClient:
         # 獲取多日指數歷史 + 計算市場形態
         regime = await self._compute_market_regime()
 
+        # 獲取多日板塊表現（10日）
+        sector_performance = await self._get_sector_performance_multi_day(10)
+
+        # 獲取財經新聞
+        news = await self._get_market_news()
+
         return {
             "indices": indices,
             "db_stats": db_stats,
             "regime": regime,
+            "sector_performance": sector_performance,
+            "news": news,
             "timestamp": _now_str(),
         }
 
@@ -87,10 +99,24 @@ class MarketDataClient:
         try:
             from app.services.backend_client import backend_client
 
-            # 獲取上證指數最近 10 日歷史
-            history = await backend_client.get_index_history("sh000001", days=10)
+            # 獲取指數最近 10 日歷史（多指數 fallback）
+            # 數據庫中指數代碼格式為 sh.000001（帶點）
+            # 優先用上證指數，失敗時依次嘗試深證成指、滬深300
+            fallback_codes = ["sh.000001", "sz.399001", "sh.000300"]
+            history = []
+            used_code = ""
+            for code in fallback_codes:
+                history = await backend_client.get_index_history(code, days=10)
+                if len(history) >= 3:
+                    used_code = code
+                    break
+                logger.warning(f"指數 {code} 歷史數據不足 ({len(history)} 條)，嘗試下一個")
+
             if len(history) < 3:
-                return {"regime_type": "unknown", "description": "歷史數據不足", "multi_day_data": []}
+                logger.warning("所有 fallback 指數都數據不足，無法計算市場形態")
+                return {"regime_type": "unknown", "description": "歷史數據不足（所有指數均無足夠數據）", "multi_day_data": []}
+
+            logger.info(f"使用指數 {used_code} 計算市場形態（{len(history)} 條歷史數據）")
 
             # 計算形態特徵
             changes = [h.get("pctChange", 0) or 0 for h in history]
@@ -278,6 +304,124 @@ class MarketDataClient:
                 return sectors
         except Exception as e:
             logger.warning(f"騰訊板塊數據獲取失敗: {e}")
+            return []
+
+    async def _get_sector_performance_multi_day(self, days: int = 10) -> list[dict[str, Any]]:
+        """從後端獲取多日板塊表現（各行業平均漲跌幅 + 領漲股）。
+
+        用於 10 日行情分析，識別利好/利空行業及其延續性。
+
+        Args:
+            days: 最近交易日天數
+
+        Returns:
+            list[dict]: 板塊表現列表，每項含 date/industry/avgPctChange/topCode/topCodeName/topPctChange
+        """
+        try:
+            from app.services.backend_client import backend_client
+
+            data = await backend_client.get_sector_performance(days)
+            logger.info(f"獲取 {len(data)} 條板塊表現數據（{days}日）")
+            return data
+        except Exception as e:
+            logger.warning(f"多日板塊表現獲取失敗: {e}")
+            return []
+
+    async def _get_market_news(self, page_size: int = 20) -> list[dict[str, Any]]:
+        """從東方財經抓取最新財經新聞（A股市場要聞）。
+
+        東方財富 API 返回 JSON 格式的市場要聞列表，無需 API Key。
+
+        Args:
+            page_size: 抓取新聞條數（默認 20）
+
+        Returns:
+            list[dict]: 新聞列表，每項含 title/source/date/url
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10, headers=_HEADERS) as client:
+                # 東方財富市場要聞 API（column=350 為市場頻道）
+                resp = await client.get(
+                    "https://np-listapi.eastmoney.com/comm/web/getNewsByColumns",
+                    params={
+                        "client": "web",
+                        "biz": "web_news_col",
+                        "column": "350",
+                        "order": 1,
+                        "needInteract": 0,
+                        "pageSize": page_size,
+                        "pageNo": 1,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                news_list = []
+                for item in data.get("data", {}).get("list", [])[:page_size]:
+                    news_list.append(
+                        {
+                            "title": item.get("Art_Title", ""),
+                            "source": "東方財富",
+                            "date": item.get("Art_ShowTime", "")[:10] if item.get("Art_ShowTime") else "",
+                            "url": f"https://finance.eastmoney.com/a/{item.get('Art_Code', '')}.html",
+                        }
+                    )
+                logger.info(f"獲取 {len(news_list)} 條財經新聞")
+                return news_list
+        except Exception as e:
+            logger.warning(f"東方財富新聞抓取失敗: {e}")
+            return []
+
+    async def search_news_by_keyword(self, keyword: str, page_size: int = 10) -> list[dict[str, Any]]:
+        """按關鍵詞搜索財經新聞（用於利好/利空方向的新聞追蹤）。
+
+        使用東方財富搜索 API，查找與特定行業/關鍵詞相關的新聞。
+
+        Args:
+            keyword: 搜索關鍵詞（如「半導體」「新能源」「房地產」）
+            page_size: 返回新聞條數
+
+        Returns:
+            list[dict]: 新聞列表，每項含 title/source/date/url
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10, headers=_HEADERS) as client:
+                resp = await client.get(
+                    "https://search-api-web.eastmoney.com/search/jsonp",
+                    params={
+                        "cb": "jQuery",
+                        "param": f'{{"uid":"","keyword":"{keyword}","type":["cmsArticleWebOld"],"client":"web","clientType":"web","clientVersion":"curr","param":{{"cmsArticleWebOld":{{"searchScope":"default","sort":"default","pageIndex":1,"pageSize":{page_size},"preTag":"<em>","postTag":"</em>"}}}}}}',
+                    },
+                )
+                resp.raise_for_status()
+                # JSONP 格式，需要去除回調函數包裝
+                text = resp.text
+                start = text.find("(")
+                end = text.rfind(")")
+                if start == -1 or end == -1:
+                    return []
+                json_str = text[start + 1 : end]
+                import json
+
+                data = json.loads(json_str)
+                news_list = []
+                articles = (
+                    data.get("result", {})
+                    .get("cmsArticleWebOld", {})
+                    .get("list", [])
+                )
+                for item in articles[:page_size]:
+                    news_list.append(
+                        {
+                            "title": item.get("title", "").replace("<em>", "").replace("</em>", ""),
+                            "source": item.get("mediaName", "東方財富"),
+                            "date": item.get("date", "")[:10] if item.get("date") else "",
+                            "url": item.get("url", ""),
+                        }
+                    )
+                logger.info(f"搜索關鍵詞「{keyword}」獲取 {len(news_list)} 條新聞")
+                return news_list
+        except Exception as e:
+            logger.warning(f"按關鍵詞「{keyword}」搜索新聞失敗: {e}")
             return []
 
 

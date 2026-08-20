@@ -187,8 +187,9 @@ async def run_optimization_loop():
         state.best_score = db_best_score
         state.best_strategy_id = db_strategy_id
         # 同步保存最優策略的 criteria/config，供後續迭代回退使用
+        # best_config 也必須包含用戶配置，否則回退時會丟失用戶手動設置
         state.best_criteria = dict(criteria)
-        state.best_config = dict(config)
+        state.best_config = dict(state.current_config)
         logger.info(f"f0 = 數據庫最佳策略 (評分={db_best_score}, id={db_strategy_id})")
         if user_config_overrides:
             logger.info(f"用戶手動配置已保留: {list(user_config_overrides.keys())}")

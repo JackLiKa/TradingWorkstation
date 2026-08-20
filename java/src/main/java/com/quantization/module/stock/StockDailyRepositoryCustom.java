@@ -30,4 +30,7 @@ public interface StockDailyRepositoryCustom {
 
     /** 搜索建議：根據用戶輸入的部分代碼，返回最新交易日匹配的股票列表（含收盤價、漲跌幅） */
     List<StockDailyEntity> suggest(String query, int limit);
+
+    /** 多日板塊表現：最近 N 個交易日，每日各行業平均漲跌幅 + 領漲股 */
+    List<Object[]> sectorPerformance(int days);
 }

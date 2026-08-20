@@ -132,3 +132,47 @@ class TestUserConfigPreservation:
         final_config = {**db_config, **user_config_overrides}
         assert final_config["startDate"] == "2025-06-01"
         assert final_config["maxPositions"] == 10
+
+    def test_best_config_preserves_user_overrides(self):
+        """best_config 也必須包含用戶配置，否則迭代回退時會丟失用戶手動設置。
+
+        BUG: 之前 best_config = dict(config) 只存 DB 配置，
+        當迭代未超越 best 時 current_config = dict(best_config) 會丟失用戶配置。
+        修復: best_config = dict(state.current_config)（含用戶覆蓋）。
+        """
+        state = OptimizerState()
+        user_config = {
+            **DEFAULT_BACKTEST_CONFIG,
+            "startDate": "2025-06-01",
+            "endDate": "2026-01-01",
+            "maxPositions": 10,
+        }
+        state.current_config = user_config
+        user_config_overrides = dict(state.current_config)
+
+        # 模擬 DB 有策略時的流程
+        db_config = {
+            "startDate": "2024-01-01",
+            "endDate": "2025-01-01",
+            "maxPositions": 5,
+            "rebalanceInterval": 5,
+            "holdingPeriod": 10,
+            "initialCapital": 1_000_000,
+            "commissionBps": 3,
+            "stopLossPct": None,
+            "takeProfitPct": None,
+        }
+
+        # current_config 合併用戶配置
+        state.current_config = {**db_config, **user_config_overrides}
+
+        # best_config 也必須包含用戶配置（BUG 修復前是 dict(config)）
+        state.best_config = dict(state.current_config)
+
+        # 模擬迭代回退：current_config = dict(best_config)
+        state.current_config = dict(state.best_config)
+
+        # 用戶配置應該仍然保留
+        assert state.current_config["startDate"] == "2025-06-01"
+        assert state.current_config["endDate"] == "2026-01-01"
+        assert state.current_config["maxPositions"] == 10

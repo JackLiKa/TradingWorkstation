@@ -147,32 +147,102 @@ def _check_regime_identification(output: str) -> tuple[float, str]:
     return 0.0, "未識別到任何市場形態類型（震盪/上漲中繼/下跌中繼/上漲趨勢/下跌趨勢）"
 
 
+def _check_continuity_judgment(output: str) -> tuple[float, str]:
+    """延續性判斷維度 — 檢查輸出是否包含利好延續性或利空性質判斷。
+
+    利好延續性：持續性/間歇性/突發性
+    利空性質：持續性利空/突發性利空/情緒性利空
+    """
+    bullish_continuity = ["持續性", "持续性", "間歇性", "间歇性", "突發性", "突发性"]
+    bearish_nature = ["持續性利空", "持续性利空", "突發性利空", "突发性利空", "情緒性利空", "情绪性利空"]
+
+    text = output.lower()
+    found_bullish = [c for c in bullish_continuity if c.lower() in text]
+    found_bearish = [n for n in bearish_nature if n.lower() in text]
+
+    if found_bearish:
+        return 1.0, f"識別到利空性質: {found_bearish}"
+    if found_bullish:
+        return 0.8, f"識別到利好延續性: {found_bullish}"
+    return 0.0, "未識別到利好延續性或利空性質判斷"
+
+
+def _check_sentiment_analysis(output: str) -> tuple[float, str]:
+    """市場情緒分析維度 — 檢查輸出是否包含情緒分數或情緒標籤。"""
+    sentiment_keywords = ["情緒", "情绪", "sentiment", "偏樂觀", "偏悲觀", "中性", "恐慌", "樂觀", "悲觀"]
+    text = output.lower()
+    found = [k for k in sentiment_keywords if k.lower() in text]
+
+    if len(found) >= 2:
+        return 1.0, f"情緒分析充分: {found}"
+    elif len(found) >= 1:
+        return 0.6, f"有情緒分析: {found}"
+    return 0.0, "未識別到市場情緒分析"
+
+
+def _check_news_tracking(output: str) -> tuple[float, str]:
+    """新聞追蹤維度 — 檢查輸出是否引用了新聞標題或新聞來源。"""
+    news_indicators = ["新聞", "新闻", "東方財富", "东方财富", "related_news", "supported_by_news", "title"]
+    text = output.lower()
+    found = [k for k in news_indicators if k.lower() in text]
+
+    if len(found) >= 2:
+        return 1.0, f"新聞追蹤充分: {found}"
+    elif len(found) >= 1:
+        return 0.5, f"有新聞引用: {found}"
+    return 0.0, "未引用任何新聞"
+
+
 # ===== 各階段的多維度評分定義 =====
 # 維度類型：rule（規則驗證）/ llm（LLM 語義判斷）
 STAGE_RUBRICS: dict[str, list[dict]] = {
     "market_news": [
-        {"name": "長度充分", "weight": 0.10, "type": "rule", "check": lambda o, e: _check_length(o, e["min_length"])},
-        {"name": "數據引用", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_data_density(o)},
-        {"name": "結構完整", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_structure(o)},
         {
-            "name": "必要內容",
-            "weight": 0.20,
+            "name": "JSON格式",
+            "weight": 0.15,
             "type": "rule",
-            "check": lambda o, e: _check_required_keywords(
-                o, ["市場情緒|大盤情緒", "利好|強勢", "利空|弱勢", "選股|關注|避開"]
+            "check": lambda o, e: _check_json_valid(
+                o, ["market_regime", "market_sentiment", "bullish_factors", "bearish_factors"]
             ),
         },
+        {"name": "數據引用", "weight": 0.15, "type": "rule", "check": lambda o, e: _check_data_density(o)},
         {
             "name": "市場形態識別",
-            "weight": 0.20,
+            "weight": 0.15,
             "type": "rule",
             "check": lambda o, e: _check_regime_identification(o),
         },
         {
+            "name": "延續性判斷",
+            "weight": 0.15,
+            "type": "rule",
+            "check": lambda o, e: _check_continuity_judgment(o),
+        },
+        {
+            "name": "市場情緒分析",
+            "weight": 0.10,
+            "type": "rule",
+            "check": lambda o, e: _check_sentiment_analysis(o),
+        },
+        {
+            "name": "新聞追蹤",
+            "weight": 0.10,
+            "type": "rule",
+            "check": lambda o, e: _check_news_tracking(o),
+        },
+        {
+            "name": "必要內容",
+            "weight": 0.10,
+            "type": "rule",
+            "check": lambda o, e: _check_required_keywords(
+                o, ["利好|強勢|bullish", "利空|弱勢|bearish", "選股|關注|避開"]
+            ),
+        },
+        {
             "name": "內容實質",
-            "weight": 0.20,
+            "weight": 0.10,
             "type": "llm",
-            "check": "輸出是否包含具體的行業分析（非空洞套話），是否引用了具體的漲跌幅數據，市場形態判斷是否有多日數據支撐",
+            "check": "輸出是否包含具體的多日行業分析（非單日漲跌），是否引用了10日內的具體漲跌幅數據，利好延續性判斷是否有數據支撐，利空性質判斷是否區分了突發性和持續性",
         },
     ],
     "industry_analysis": [
@@ -285,7 +355,13 @@ STAGE_RUBRICS: dict[str, list[dict]] = {
 
 # 各階段的基本期望（保留向後兼容）
 STAGE_EXPECTATIONS = {
-    "market_news": {"format": "自然語言", "required_content": "市場情緒+利好+利空+選股建議", "min_length": 100},
+    "market_news": {
+        "format": "JSON",
+        "required_content": "market_regime+market_sentiment+bullish_factors+bearish_factors+選股建議",
+        "min_length": 200,
+        "must_be_json": True,
+        "required_fields": ["market_regime", "market_sentiment", "bullish_factors", "bearish_factors"],
+    },
     "industry_analysis": {
         "format": "JSON",
         "required_content": "reasoning+favorable_industries+filtered_codes",

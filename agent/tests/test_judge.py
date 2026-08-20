@@ -106,22 +106,50 @@ class TestJudgeEvaluation:
         assert passed is False
 
     def test_high_quality_market_news(self, judge):
-        """高質量 market_news 應該高分（含市場形態識別）。"""
-        output = """### 市場形態
-最近10日漲跌交替6次，交替率67%，平均幅度0.8%，呈現震盪行情。
-
-### 市場情緒
-上證指數上漲0.85%，深證成指上漲1.23%，市場情緒偏多。
-
-### 利好行業
-1. 半導體：板塊漲幅2.8%，受益國產替代政策
-2. 新能源：板塊漲幅2.1%，鋰電漲價預期
-
-### 利空行業
-1. 房地產：板塊跌幅0.8%，銷售低迷
-
-### 選股建議
-關注半導體和新能源龍頭股。"""
+        """高質量 market_news 應該高分（含市場形態+延續性+情緒+新聞追蹤的結構化 JSON）。"""
+        output = json.dumps(
+            {
+                "market_regime": {
+                    "type": "震盪",
+                    "description": "最近10日漲跌交替6次，交替率67%，平均幅度0.8%，呈現震盪行情",
+                    "cumulative_change": 0.5,
+                    "alternation_count": 6,
+                },
+                "market_sentiment": {
+                    "score": 55,
+                    "label": "偏樂觀",
+                    "reasoning": "上證指數上漲0.85%，深證成指上漲1.23%，市場情緒偏多",
+                },
+                "bullish_factors": [
+                    {
+                        "sector": "C39電子設備製造",
+                        "daily_changes": [2.8, -0.5, 1.2, 0.8, -0.3, 1.5, 0.9, -0.2, 0.6, 1.1],
+                        "cumulative_change": 7.9,
+                        "continuity": "持續性",
+                        "continuity_reasoning": "10日內8天上漲，累計漲幅7.9%，持續性利好",
+                        "supported_by_news": True,
+                        "related_news": [
+                            {"title": "半導體板塊持續走強", "source": "東方財富", "date": "2026-08-18"}
+                        ],
+                    }
+                ],
+                "bearish_factors": [
+                    {
+                        "sector": "K70房地產",
+                        "daily_changes": [-0.8, -0.5, -1.2, 0.3, -0.6, -0.9, -0.4, -0.7, -0.3, -0.5],
+                        "cumulative_change": -5.6,
+                        "nature": "持續性利空",
+                        "nature_reasoning": "10日內8天下跌，累計跌幅5.6%，持續性利空",
+                        "supported_by_news": True,
+                        "related_news": [
+                            {"title": "房地產銷售數據持續低迷", "source": "東方財富", "date": "2026-08-18"}
+                        ],
+                    }
+                ],
+                "stock_selection_advice": "關注半導體和新能源龍頭股，避開房地產",
+            },
+            ensure_ascii=False,
+        )
         score, passed, feedback = asyncio.run(judge.evaluate("market_news", output))
         assert score > 70, f"高質量輸出應 >70，得到 {score}"
         assert passed is True
@@ -156,7 +184,16 @@ class TestJudgeEvaluation:
             ("market_news", "市場好"),  # 極差
             (
                 "market_news",
-                "### 市場情緒\n上證上漲0.85%\n### 利好\n半導體漲2.8%\n### 利空\n房地產跌0.8%\n### 選股\n關注半導體",
+                json.dumps(
+                    {
+                        "market_regime": {"type": "震盪", "description": "震盪行情", "cumulative_change": 0.5, "alternation_count": 6},
+                        "market_sentiment": {"score": 55, "label": "偏樂觀", "reasoning": "市場情緒偏多"},
+                        "bullish_factors": [{"sector": "半導體", "daily_changes": [2.8], "cumulative_change": 2.8, "continuity": "持續性", "continuity_reasoning": "持續上漲", "supported_by_news": False, "related_news": []}],
+                        "bearish_factors": [{"sector": "房地產", "daily_changes": [-0.8], "cumulative_change": -0.8, "nature": "持續性利空", "nature_reasoning": "持續下跌", "supported_by_news": False, "related_news": []}],
+                        "stock_selection_advice": "關注半導體",
+                    },
+                    ensure_ascii=False,
+                ),
             ),  # 中等
         ]
         for stage, output in outputs:
@@ -167,12 +204,20 @@ class TestJudgeEvaluation:
 
     def test_feedback_contains_dimensions(self, judge):
         """反饋應該包含各維度評分詳情。"""
-        # 用中等長度輸入觸發維度評分（非極短快速判斷）
-        score, passed, feedback = asyncio.run(
-            judge.evaluate("market_news", "市場情緒偏多，利好半導體，利空房地產，選股建議關注龍頭股，漲幅2.8%")
+        # 用中等長度 JSON 輸入觸發維度評分（非極短快速判斷）
+        output = json.dumps(
+            {
+                "market_regime": {"type": "震盪", "description": "震盪行情", "cumulative_change": 0.5, "alternation_count": 6},
+                "market_sentiment": {"score": 55, "label": "偏樂觀", "reasoning": "市場情緒偏多"},
+                "bullish_factors": [{"sector": "半導體", "daily_changes": [2.8], "cumulative_change": 2.8, "continuity": "持續性", "continuity_reasoning": "持續上漲", "supported_by_news": False, "related_news": []}],
+                "bearish_factors": [{"sector": "房地產", "daily_changes": [-0.8], "cumulative_change": -0.8, "nature": "持續性利空", "nature_reasoning": "持續下跌", "supported_by_news": False, "related_news": []}],
+                "stock_selection_advice": "關注半導體，避開房地產",
+            },
+            ensure_ascii=False,
         )
+        score, passed, feedback = asyncio.run(judge.evaluate("market_news", output))
         assert "總分" in feedback
-        assert "長度" in feedback or "數據" in feedback or "結構" in feedback
+        assert "JSON" in feedback or "數據" in feedback or "形態" in feedback
 
     def test_rubric_definitions_complete(self):
         """所有階段都應該有 rubric 定義。"""

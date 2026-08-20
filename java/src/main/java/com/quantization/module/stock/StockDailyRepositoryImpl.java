@@ -375,4 +375,52 @@ public class StockDailyRepositoryImpl implements StockDailyRepositoryCustom {
         var nativeQuery = em.createNativeQuery(sql, StockDailyEntity.class);
         return nativeQuery.getResultList();
     }
+
+    /**
+     * 多日板塊表現：最近 N 個交易日，每日各行業平均漲跌幅 + 領漲股。
+     * 分兩步查詢避免複雜子查詢：
+     * 1. 按日期+行業分組計算平均漲跌幅
+     * 2. 用窗口函數找每組漲幅最大的股票作為領漲股
+     *
+     * @param days 最近交易日天數
+     * @return Object[] 每行: [tradeDate, industry, avgPctChange, topCode, topCodeName, topPctChange]
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public List<Object[]> sectorPerformance(int days) {
+        // 取最近 N 個交易日
+        String dateSql = "SELECT DISTINCT date FROM stock_daily WHERE adjustflag = 3 ORDER BY date DESC LIMIT " + days;
+        List<LocalDate> tradeDates = em.createNativeQuery(dateSql, LocalDate.class).getResultList();
+        if (tradeDates.isEmpty()) return List.of();
+
+        // 使用窗口函數：按日期+行業分組，同時取平均漲跌幅和領漲股（漲幅最大的股票）
+        String sql = """
+            SELECT
+                date AS trade_date,
+                industry AS industry,
+                avg_pct AS avg_pct,
+                top_code AS top_code,
+                top_name AS top_name,
+                top_pct AS top_pct
+            FROM (
+                SELECT
+                    d.date,
+                    si.industry,
+                    AVG(d.pctChg) OVER (PARTITION BY d.date, si.industry) AS avg_pct,
+                    d.code AS top_code,
+                    si.code_name AS top_name,
+                    d.pctChg AS top_pct,
+                    ROW_NUMBER() OVER (PARTITION BY d.date, si.industry ORDER BY d.pctChg DESC) AS rn
+                FROM stock_daily d
+                INNER JOIN stock_industry si ON d.code = si.code
+                WHERE d.adjustflag = 3 AND d.date IN (:dates)
+            ) ranked
+            WHERE rn = 1
+            ORDER BY date DESC, avg_pct DESC
+            """;
+
+        var query = em.createNativeQuery(sql);
+        query.setParameter("dates", tradeDates);
+        return query.getResultList();
+    }
 }

@@ -2,6 +2,7 @@ package com.quantization.module.stock;
 
 import com.quantization.config.CacheConfig;
 import com.quantization.module.stock.dto.HotSymbolDto;
+import com.quantization.module.stock.dto.SectorPerformanceDto;
 import com.quantization.module.stock.dto.SearchResultDto;
 import com.quantization.module.stock.dto.StockDailyDto;
 import com.quantization.module.stock.dto.StockDailyQueryDto;
@@ -117,6 +118,25 @@ public class StockService {
                         e.getCode(),
                         e.getClosePrice() == null ? null : e.getClosePrice().doubleValue(),
                         e.getPctChange() == null ? null : e.getPctChange().doubleValue()))
+                .toList();
+    }
+
+    /**
+     * 多日板塊表現：最近 N 個交易日，每日各行業平均漲跌幅 + 領漲股。
+     *
+     * @param days 最近交易日天數
+     * @return 板塊表現 DTO 列表
+     */
+    @Transactional(readOnly = true)
+    public List<SectorPerformanceDto> sectorPerformance(int days) {
+        return repository.sectorPerformance(days).stream()
+                .map(row -> new SectorPerformanceDto(
+                        (java.time.LocalDate) row[0],
+                        (String) row[1],
+                        row[2] instanceof Number n2 ? n2.doubleValue() : null,
+                        (String) row[3],
+                        (String) row[4],
+                        row[5] instanceof Number n5 ? n5.doubleValue() : null))
                 .toList();
     }
 
