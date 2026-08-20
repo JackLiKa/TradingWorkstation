@@ -193,8 +193,8 @@ export function AgentIterationCard({ iteration, isBest, defaultExpanded = false 
                 <div>
                   <SectionTitle icon={Gavel} label="評委評分" />
                   <div className="space-y-1.5">
-                    {iteration.stage_results.map((sr, idx) => (
-                      <JudgeResultCard key={idx} result={sr} />
+                    {iteration.stage_results.map((sr) => (
+                      <JudgeResultCard key={sr.stage_name} result={sr} />
                     ))}
                   </div>
                 </div>
@@ -412,8 +412,8 @@ function IndustryAnalysisCard({ industries, filteredCodes }: {
       <div className="mb-2">
         <span className="text-xs text-muted">利好行業 ({industries.length})：</span>
         <div className="flex flex-wrap gap-1 mt-1">
-          {industries.map((ind, i) => (
-            <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/20">
+          {industries.map((ind) => (
+            <span key={ind} className="text-xs px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/20">
               {ind}
             </span>
           ))}
@@ -424,8 +424,8 @@ function IndustryAnalysisCard({ industries, filteredCodes }: {
         <div>
           <span className="text-xs text-muted">篩選股票 ({filteredCodes.length} 隻)：</span>
           <div className="flex flex-wrap gap-1 mt-1 max-h-20 overflow-y-auto">
-            {filteredCodes.slice(0, 30).map((code, i) => (
-              <span key={i} className="text-xs px-1.5 py-0.5 rounded bg-bg-base/60 border border-border text-slate-300 font-mono">
+            {filteredCodes.slice(0, 30).map((code) => (
+              <span key={code} className="text-xs px-1.5 py-0.5 rounded bg-bg-base/60 border border-border text-slate-300 font-mono">
                 {code}
               </span>
             ))}

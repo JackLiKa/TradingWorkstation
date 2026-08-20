@@ -255,7 +255,7 @@ export function AgentMonitorPanel() {
               const height = `${Math.max((score / maxScore) * 100, 5)}%`;
               return (
                 <div
-                  key={i}
+                  key={`score-bar-${i}`}
                   className="flex-1 bg-accent/40 rounded-t"
                   style={{ height }}
                   title={`第 ${i + 1} 輪: ${score}`}
@@ -275,7 +275,7 @@ export function AgentMonitorPanel() {
           </summary>
           <div className="mt-1.5 space-y-0.5 max-h-40 overflow-y-auto">
             {recentEvents.slice(-15).reverse().map((e, i) => (
-              <div key={i} className="flex items-center gap-2 text-[11px] text-muted py-0.5">
+              <div key={`event-${e.timestamp}-${e.node_id}-${i}`} className="flex items-center gap-2 text-[11px] text-muted py-0.5">
                 <span className="text-fg/60">{e.timestamp.slice(11, 19)}</span>
                 <span className="font-medium text-fg">{e.node_id}</span>
                 <span className={
@@ -309,7 +309,7 @@ export function AgentMonitorPanel() {
             <div className="space-y-1">
               <div className="text-xs font-medium text-muted">建議操作:</div>
               {analysis.suggestions.map((s, i) => (
-                <div key={i} className="text-xs text-fg/80 flex items-start gap-1">
+                <div key={`suggestion-${i}`} className="text-xs text-fg/80 flex items-start gap-1">
                   <span className="text-accent">•</span>
                   {s}
                 </div>

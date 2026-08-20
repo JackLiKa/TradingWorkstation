@@ -258,14 +258,14 @@ export function AgentNodeTimeline() {
 
       {/* 按迭代展開的時間軸 */}
       <div className="space-y-1 max-h-96 overflow-y-auto">
-        {iterations.slice().reverse().map(it => {
+        {iterations.slice().reverse().map((it, itIdx) => {
           const expanded = expandedIterations.has(it.iteration);
           const totalDuration = it.nodes.reduce((a, n) => a + n.duration_ms, 0);
           const passedCount = it.nodes.filter(n => n.status === 'passed').length;
           const failedCount = it.nodes.filter(n => n.status === 'failed').length;
 
           return (
-            <div key={it.iteration} className="rounded border border-border/50">
+            <div key={`it-${it.iteration}-${itIdx}`} className="rounded border border-border/50">
               <button
                 onClick={() => toggleIteration(it.iteration)}
                 className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-bg-base/40 transition-colors text-left"
@@ -299,8 +299,8 @@ export function AgentNodeTimeline() {
               </button>
               {expanded && (
                 <div className="px-2 pb-2 space-y-0.5">
-                  {it.nodes.map((node, i) => (
-                    <NodeBar key={i} node={node} />
+                  {it.nodes.map((node) => (
+                    <NodeBar key={node.node_id} node={node} />
                   ))}
                 </div>
               )}

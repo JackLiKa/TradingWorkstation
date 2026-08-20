@@ -66,9 +66,9 @@ export function AgentScoreTrend({ iterations, bestScore, bestIteration }: Props)
         {/* 折線 */}
         <path d={pathD} fill="none" stroke="rgb(251 191 36)" strokeWidth="1.5" strokeLinejoin="round" />
         {/* 數據點 */}
-        {points.map((p) => (
+        {points.map((p, idx) => (
           <circle
-            key={p.iteration}
+            key={`score-${p.iteration}-${idx}`}
             cx={p.x}
             cy={p.y}
             r={p.iteration === bestIteration ? 3 : 2}
