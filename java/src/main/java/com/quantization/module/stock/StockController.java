@@ -184,6 +184,21 @@ public class StockController {
         return ApiResponse.ok(stockService.industryDailyRange(industry, start, end));
     }
 
+    /**
+     * 查詢日期區間內全部行業的聚合數據（用於行業相關性矩陣）。
+     *
+     * @param start 起始日期
+     * @param end   結束日期
+     * @return 全部行業聚合列表（按日期升序、行業升序）
+     */
+    @Operation(summary = "全部行業日聚合區間數據（相關性矩陣用）")
+    @GetMapping("/industry-daily/all-range")
+    public ApiResponse<List<IndustryDailyDto>> allIndustryDailyRange(
+            @RequestParam LocalDate start,
+            @RequestParam LocalDate end) {
+        return ApiResponse.ok(stockService.allIndustryDailyRange(start, end));
+    }
+
     // ===== 指數歷史（市場形態識別）=====
 
     /**

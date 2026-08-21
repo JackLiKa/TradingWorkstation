@@ -101,6 +101,61 @@ class TestFormatExperiences:
         # 市場環境截斷到 150 字
         assert len(result) < len(long_market) + len(long_reflection)
 
+    def test_industry_focus_displayed(self):
+        """行業聚焦數據應該在格式化輸出中顯式顯示。"""
+        experiences = [
+            {
+                "iteration": 5,
+                "similarity": 0.88,
+                "composite_score": 72.0,
+                "market_context": "科技股領漲",
+                "criteria": {
+                    "minTurn": 2.0,
+                    "industries": ["C39計算機通信", "I63軟件信息技術"],
+                },
+                "stats": {"totalReturn": 8.5, "maxDrawdown": 4.2, "sharpe": 1.3},
+                "reflection": "科技行業聚焦策略表現良好",
+            }
+        ]
+        result = format_experiences_for_prompt(experiences)
+        assert "行業聚焦" in result
+        assert "C39計算機通信" in result
+        assert "I63軟件信息技術" in result
+        assert "科技行業聚焦" in result
+
+    def test_no_industry_focus_no_section(self):
+        """無行業聚焦時不應顯示行業聚焦行。"""
+        experiences = [
+            {
+                "iteration": 1,
+                "similarity": 0.9,
+                "composite_score": 70.0,
+                "market_context": "牛市",
+                "criteria": {"minTurn": 2.0},
+                "stats": {"totalReturn": 10.0, "maxDrawdown": 5.0, "sharpe": 1.5},
+                "reflection": "表現良好",
+            }
+        ]
+        result = format_experiences_for_prompt(experiences)
+        # 不應包含「行業聚焦:」行（criteria 中無 industries）
+        assert "行業聚焦:" not in result
+
+    def test_industry_focus_usage_guidance(self):
+        """使用指引應包含行業聚焦相關建議。"""
+        experiences = [
+            {
+                "iteration": 1,
+                "similarity": 0.9,
+                "composite_score": 70.0,
+                "market_context": "牛市",
+                "criteria": {"minTurn": 2.0},
+                "stats": {},
+                "reflection": "",
+            }
+        ]
+        result = format_experiences_for_prompt(experiences)
+        assert "行業聚焦" in result  # 使用指引中提及
+
 
 class TestRagAvailability:
     """測試 RAG 可用性檢查。"""

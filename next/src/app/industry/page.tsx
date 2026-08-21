@@ -8,15 +8,16 @@ import { IndustryCapitalFlow } from '@/components/industry/IndustryCapitalFlow';
 import { IndustryRisingFalling } from '@/components/industry/IndustryRisingFalling';
 import { IndustryTrendChart } from '@/components/industry/IndustryTrendChart';
 import { RotationHistoryChart } from '@/components/industry/RotationHistoryChart';
+import { IndustryCorrelationHeatmap } from '@/components/industry/IndustryCorrelationHeatmap';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
-import { Calendar, RefreshCw, TrendingUp, DollarSign, BarChart3, Activity, RotateCcw, BarChart2, Newspaper, RefreshCcw } from 'lucide-react';
+import { Calendar, RefreshCw, TrendingUp, DollarSign, BarChart3, Activity, RotateCcw, BarChart2, Newspaper, RefreshCcw, Grid3x3 } from 'lucide-react';
 import type { IndustryDailyDto, IndexDailyDto } from '@/lib/api/types';
 import { agentApi, type IndustryNewsItem } from '@/lib/api/agent';
 
 /** 可視化類型 */
-type ViewType = 'heatmap' | 'capital' | 'risingFalling' | 'trend' | 'rotation';
+type ViewType = 'heatmap' | 'capital' | 'risingFalling' | 'trend' | 'rotation' | 'correlation';
 
 const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp }[] = [
   { key: 'heatmap', label: '行業熱力圖', icon: TrendingUp },
@@ -24,6 +25,7 @@ const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp }[] = [
   { key: 'risingFalling', label: '漲跌家數', icon: BarChart3 },
   { key: 'trend', label: '行業走勢', icon: Activity },
   { key: 'rotation', label: '輪動信號', icon: RefreshCcw },
+  { key: 'correlation', label: '相關性矩陣', icon: Grid3x3 },
 ];
 
 function formatDateInput(d: Date) {
@@ -140,6 +142,7 @@ export default function IndustryPage() {
     if (view === 'capital') return <IndustryCapitalFlow data={daily} />;
     if (view === 'risingFalling') return <IndustryRisingFalling data={daily} />;
     if (view === 'rotation') return <RotationHistoryChart />;
+    if (view === 'correlation') return <IndustryCorrelationHeatmap rangeStart={rangeStart} rangeEnd={rangeEnd} />;
     return null;
   };
 

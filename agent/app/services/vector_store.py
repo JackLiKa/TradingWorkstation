@@ -137,14 +137,20 @@ def _build_experience_text(
     """構建用於 embedding 的經驗文本（語義豐富的描述）。"""
     # 提取關鍵策略特徵
     active_filters = {k: v for k, v in criteria.items() if v is not None and v is not False and v != "any" and v != 0}
+    # 提取行業聚焦信息（顯式加入語義文本，提升行業相關經驗的檢索質量）
+    industries = criteria.get("industries")
+    industry_text = ""
+    if industries and isinstance(industries, list) and len(industries) > 0:
+        industry_text = f"\n行業聚焦: {', '.join(industries)}"
     # 提取回測結果摘要
     total_return = stats.get("totalReturn", 0)
     max_drawdown = stats.get("maxDrawdown", 0)
     sharpe = stats.get("sharpe", 0)
-    # 構建語義文本（包含市場環境 + 策略特徵 + 結果）
+    # 構建語義文本（包含市場環境 + 策略特徵 + 行業聚焦 + 結果）
     text = (
         f"市場環境: {market_context[:300]}\n"
-        f"策略條件: {json.dumps(active_filters, ensure_ascii=False)}\n"
+        f"策略條件: {json.dumps(active_filters, ensure_ascii=False)}"
+        f"{industry_text}\n"
         f"回測結果: 收益{total_return}%, 回撤{max_drawdown}%, 夏普{sharpe}\n"
         f"反思: {reflection[:200]}"
     )
@@ -346,11 +352,20 @@ def search_similar_experiences(
         return []
 
     try:
-        # 構建查詢文本（市場環境 + 當前策略特徵）
+        # 構建查詢文本（市場環境 + 當前策略特徵 + 當前行業聚焦）
         active_filters = {
             k: v for k, v in current_criteria.items() if v is not None and v is not False and v != "any" and v != 0
         }
-        query_text = f"市場環境: {market_context[:300]}\n策略條件: {json.dumps(active_filters, ensure_ascii=False)}"
+        # 顯式加入當前行業聚焦，提升同行業歷史經驗的檢索優先級
+        current_industries = current_criteria.get("industries")
+        industry_text = ""
+        if current_industries and isinstance(current_industries, list) and len(current_industries) > 0:
+            industry_text = f"\n當前行業聚焦: {', '.join(current_industries)}"
+        query_text = (
+            f"市場環境: {market_context[:300]}\n"
+            f"策略條件: {json.dumps(active_filters, ensure_ascii=False)}"
+            f"{industry_text}"
+        )
         query_embedding = _embed(query_text)
         if query_embedding is None:
             return []

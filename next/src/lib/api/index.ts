@@ -50,6 +50,9 @@ export const api = {
     apiFetch<IndustryDailyDto[]>(`/stock/industry-daily${tradeDate ? `?tradeDate=${tradeDate}` : ''}`),
   industryDailyRange: (industry: string, start: string, end: string) =>
     apiFetch<IndustryDailyDto[]>(`/stock/industry-daily/range?industry=${encodeURIComponent(industry)}&start=${start}&end=${end}`),
+
+  allIndustryDailyRange: (start: string, end: string) =>
+    apiFetch<IndustryDailyDto[]>(`/stock/industry-daily/all-range?start=${start}&end=${end}`),
   industriesList: () => apiFetch<string[]>(`/stock/industries/list`),
 
   // ===== 指數歷史 =====

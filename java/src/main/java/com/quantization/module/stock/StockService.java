@@ -393,6 +393,21 @@ public class StockService {
                 .toList();
     }
 
+    /**
+     * 查詢日期區間內全部行業的聚合數據（用於行業相關性矩陣計算）。
+     *
+     * @param start 起始日期
+     * @param end   結束日期
+     * @return 全部行業聚合 DTO 列表（按日期升序、行業升序）
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'all-' + #p0 + '-' + #p1")
+    public List<IndustryDailyDto> allIndustryDailyRange(LocalDate start, LocalDate end) {
+        return industryDailyRepository.findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(
+                        start, end).stream()
+                .map(IndustryDailyDto::from)
+                .toList();
+    }
+
     // ------------------------------------------------------------------------
     // 私有輔助方法
     // ------------------------------------------------------------------------

@@ -93,6 +93,11 @@ def format_experiences_for_prompt(experiences: list[dict[str, Any]]) -> str:
 
             lines.append(f"- 策略條件: {json.dumps(active, ensure_ascii=False)}")
 
+        # 行業聚焦（顯式突出，幫助 AI 識別行業相關經驗）
+        exp_industries = criteria.get("industries")
+        if exp_industries and isinstance(exp_industries, list) and len(exp_industries) > 0:
+            lines.append(f"- 行業聚焦: {', '.join(exp_industries)}")
+
         # 回測結果
         stats = exp.get("stats", {})
         if stats:
@@ -113,6 +118,8 @@ def format_experiences_for_prompt(experiences: list[dict[str, Any]]) -> str:
     lines.append("- 如果相似市場環境下某策略效果好，可借鑒其參數方向")
     lines.append("- 如果相似市場環境下某策略效果差，避免重複類似錯誤")
     lines.append("- 不要直接複製歷史策略，而是基於反思改進")
+    lines.append("- 若歷史經驗包含「行業聚焦」且與當前強勢行業重疊，可優先參考該經驗的行業選擇")
+    lines.append("- 若歷史經驗中某行業聚焦策略效果差，避免再次聚焦相同行業")
 
     return "\n".join(lines)
 
