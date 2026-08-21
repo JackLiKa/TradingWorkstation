@@ -11,6 +11,7 @@ from typing import Any
 
 from app.agents.few_shot import get_few_shot
 from app.agents.stages.base import BaseStage
+from app.services.market_data_client import market_data_client
 
 logger = logging.getLogger("agent.stage.strategy")
 
@@ -27,6 +28,9 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 
 ## 市場分析
 {market_context}
+
+## 最新交易日行業強弱
+{industry_text}
 
 ## 上一輪反思結論
 {prev_reflection}
@@ -50,11 +54,13 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 {few_shot}
 
 ## 你的任務
-1. 根據上方「市場分析」和「上一輪反思結論」，調整選股條件
-2. 參考上方「歷史優化記錄」和 RAG 經驗（如有），避免重複歷史上效果差的策略
-3. 如有「歷史錯誤教訓」，確保不重複同類錯誤（特別是 JSON 格式錯誤）
-4. 每次只調整 1-3 個參數，不要大幅變動
-4. reasoning 必須說明：為何調整這些參數 + 預期效果 + 是否借鑒了上方提供的歷史經驗
+1. 根據上方「市場分析」「最新交易日行業強弱」和「上一輪反思結論」，調整選股條件
+2. 若領漲行業動能強勁，可適當提高 minPctChange / minReturn20 / minTurn 等動量條件，捕捉強勢股
+3. 若市場由弱勢行業主導或防禦信號明顯，則偏向低波動、低換手或高紅利風格
+4. 參考上方「歷史優化記錄」和 RAG 經驗（如有），避免重複歷史上效果差的策略
+5. 如有「歷史錯誤教訓」，確保不重複同類錯誤（特別是 JSON 格式錯誤）
+6. 每次只調整 1-3 個參數，不要大幅變動
+7. reasoning 必須說明：為何調整這些參數 + 預期效果 + 是否參考強勢行業 + 是否借鑒了歷史經驗
 
 【數據引用要求】
 - reasoning 中引用的市場狀況必須來自上方「市場分析」區塊
@@ -169,6 +175,15 @@ class StrategyGenerationStage(BaseStage):
         asof_date = current_criteria.get("asOfDate", datetime.now().strftime("%Y-%m-%d"))
         adjustflag = current_criteria.get("adjustflag", 3)
 
+        # 獲取最新交易日行業強弱，輔助策略生成
+        logger.info("[AI2] 獲取行業日聚合...")
+        try:
+            industry_daily = await market_data_client._get_industry_daily()
+            industry_text = _format_industry_daily(industry_daily)
+        except Exception as e:
+            logger.warning(f"[AI2] 獲取行業聚合失敗: {e}")
+            industry_text = "數據不足，無法提供行業聚合"
+
         # 注入歷史錯誤教訓（避免重複犯錯）
         from app.services import error_store
 
@@ -176,6 +191,7 @@ class StrategyGenerationStage(BaseStage):
 
         prompt = PROMPT_TEMPLATE.format(
             market_context=market_context,
+            industry_text=industry_text,
             prev_reflection=prev_reflection if prev_reflection else "無",
             next_prompt=next_prompt if next_prompt else "無（按你的判斷生成）",
             current_criteria=json.dumps(current_criteria, ensure_ascii=False, indent=2),
@@ -191,6 +207,28 @@ class StrategyGenerationStage(BaseStage):
         response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
         logger.info(f"[AI2 策略生成] {response[:100]}...")
         return response
+
+
+def _format_industry_daily(data: list[dict[str, Any]]) -> str:
+    """格式化行業日聚合數據為 prompt 可讀文本。"""
+    if not data:
+        return "數據不足，無法提供行業聚合"
+
+    lines = [f"交易日: {data[0].get('tradeDate', '')}", ""]
+    lines.append("行業名稱 | 平均漲跌幅(%) | 上漲家數 | 下跌家數 | 總成交金額 | 個股數")
+    # 取前 15 強勢 + 後 5 弱勢，避免 token 過多
+    for item in data[:15] + data[-5:]:
+        industry = item.get("industry", "")
+        avg = item.get("avgPctChg")
+        avg_str = f"{avg:.4f}" if avg is not None else "N/A"
+        rising = item.get("risingCount", 0)
+        falling = item.get("fallingCount", 0)
+        amount = item.get("totalAmount")
+        amount_str = f"{amount:.2f}" if amount is not None else "N/A"
+        count = item.get("stockCount", 0)
+        lines.append(f"{industry} | {avg_str} | {rising} | {falling} | {amount_str} | {count}")
+
+    return "\n".join(lines)
 
 
 def parse_strategy_output(response: str) -> dict[str, Any]:

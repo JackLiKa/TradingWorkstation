@@ -10,6 +10,7 @@ import type {
   SearchResultDto,
   StockSuggestionDto,
   HotSymbolDto,
+  IndustryDailyDto,
   CandlestickDto,
   ScreenerResultDto,
   ScreenerCriteriaDto,
@@ -41,6 +42,12 @@ export const api = {
   // ===== Stock 股票搜索 =====
   search: (params: URLSearchParams) => apiFetch<SearchResultDto>(`/stock/search?${params.toString()}`),
   suggest: (q: string, limit = 10) => apiFetch<StockSuggestionDto[]>(`/stock/suggest?q=${encodeURIComponent(q)}&limit=${limit}`),
+
+  // ===== 行業日聚合 =====
+  industryDaily: (tradeDate?: string) =>
+    apiFetch<IndustryDailyDto[]>(`/stock/industry-daily${tradeDate ? `?tradeDate=${tradeDate}` : ''}`),
+  industryDailyRange: (industry: string, start: string, end: string) =>
+    apiFetch<IndustryDailyDto[]>(`/stock/industry-daily/range?industry=${encodeURIComponent(industry)}&start=${start}&end=${end}`),
 
   // ===== Chart K線圖 =====
   candlestick: (params: URLSearchParams) => apiFetch<CandlestickDto>(`/chart/candlestick?${params.toString()}`),

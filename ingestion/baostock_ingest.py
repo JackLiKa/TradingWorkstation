@@ -171,6 +171,7 @@ def _sync_index_metadata(conn) -> int:
 def _sync_industry_daily(conn, start: str, end: str) -> int:
     """按 (date, industry) 聚合 stock_daily + stock_industry，寫入 industry_daily。
 
+    只重算 [start, end] 區間內尚未聚合的日期（基於 stock_daily adjustflag=3 的數據），
     用於支持行業級日度分析：均漲跌、總成交、漲跌家數等。
     """
     create_table_sql = """
@@ -242,10 +243,30 @@ def _sync_industry_daily(conn, start: str, end: str) -> int:
                 pass
             else:
                 raise
-        cursor.execute(agg_sql, (start, end))
+
+        # 找出 [start, end] 區間內尚未聚合的日期範圍
+        cursor.execute(
+            """
+            SELECT MIN(d.date), MAX(d.date)
+            FROM stock_daily d
+            WHERE d.adjustflag = 3
+              AND d.date >= %s AND d.date <= %s
+              AND NOT EXISTS (
+                SELECT 1 FROM industry_daily id WHERE id.date = d.date LIMIT 1
+              )
+            """,
+            (start, end),
+        )
+        min_missing, max_missing = cursor.fetchone()
+
+        if min_missing is None or max_missing is None:
+            print(f"[skip] 行業日聚合數據已是最新（{start} ~ {end}）")
+            return 0
+
+        cursor.execute(agg_sql, (min_missing, max_missing))
         conn.commit()
         affected = cursor.rowcount
-    print(f"[done] 行業日聚合數據已同步 {affected} 條（{start} ~ {end}）")
+    print(f"[done] 行業日聚合數據已同步 {affected} 條（{min_missing} ~ {max_missing}）")
     return affected
 
 

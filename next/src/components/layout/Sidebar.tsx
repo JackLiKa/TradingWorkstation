@@ -7,12 +7,13 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, CandlestickChart, Database, Settings, SlidersHorizontal, Menu, X, Bot, Activity } from 'lucide-react';
+import { LayoutDashboard, CandlestickChart, Database, Settings, SlidersHorizontal, Menu, X, Bot, Activity, Layers } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** 導航菜單項配置（路由 + 標籤 + 圖標） */
 const NAV_ITEMS = [
   { href: '/', label: '总览面板', icon: LayoutDashboard },
+  { href: '/industry', label: '行业分析', icon: Layers },
   { href: '/screener', label: '选股器与回测', icon: SlidersHorizontal },
   { href: '/agent', label: 'AI 策略优化', icon: Bot },
   { href: '/agent-dashboard', label: 'Agent Dashboard', icon: Activity },
