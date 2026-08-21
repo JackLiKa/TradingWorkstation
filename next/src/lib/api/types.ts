@@ -225,6 +225,49 @@ export interface ProsperityForecastDto {
   summary: string;
 }
 
+/** 景氣度預測回測結果 */
+export interface ProsperityForecastBacktestDto {
+  forecastDays: number;
+  totalPredictions: number;
+  mae: number;
+  directionAccuracy: number;
+  gradeHitRate: number;
+  avgTopReturn: number;
+  avgMarketReturn: number;
+  avgExcessReturn: number;
+  summary: string;
+  entries: {
+    predictDate: string;
+    targetDate: string;
+    topPredicted: string;
+    topActual: string;
+    predictedProsperity: number;
+    actualProsperity: number;
+    absError: number;
+    directionCorrect: boolean;
+    gradeCorrect: boolean;
+  }[];
+}
+
+/** 行業輪動 Markov 模型 */
+export interface RotationMarkovDto {
+  analysisDate: string;
+  totalTransitions: number;
+  industries: Record<string, {
+    industry: string;
+    transitionMatrix: number[][];
+    currentState: number;
+    currentStateName: string;
+    nextProbabilities: Record<number, number>;
+    steadyState: Record<number, number>;
+    transitionCount: number;
+    mostLikelyNext: string;
+    mostLikelyNextProb: number;
+    leaderProbability: number;
+  }>;
+  summary: string;
+}
+
 /** 漲跌幅最大的熱門股票（用於波動列表展示） */
 export interface HotSymbolDto {
   code: string;

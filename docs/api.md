@@ -34,6 +34,21 @@
 | GET | `/stock/sector-performance` | 多日板塊表現，query: days（默認 10） |
 | GET | `/stock/industry-daily` | 行業日聚合數據，query: tradeDate（可選，默認最新交易日） |
 | GET | `/stock/industry-daily/range` | 指定行業區間聚合，query: industry, start, end |
+| GET | `/stock/industry-correlation` | 行業相關性矩陣，query: days（默認 30） |
+| GET | `/stock/industry-capital-migration` | 行業資金遷移分析，query: days（默認 5） |
+| GET | `/stock/industry-prosperity` | 行業景氣度分析（4 維度綜合評分 + 5 級等級） |
+| GET | `/stock/industry-prosperity/trend` | 景氣度歷史趨勢，query: days（默認 10） |
+| GET | `/stock/industry-prosperity/benchmark` | 景氣度 vs 大盤疊加，query: days（默認 60） |
+| GET | `/stock/industry-prosperity/heatmap` | 景氣度熱力圖矩陣，query: days（默認 10） |
+| GET | `/stock/industry-prosperity/alerts` | 景氣度異常預警，query: threshold（默認 10）, notify（默認 false） |
+| GET | `/stock/industry-prosperity/seasonality` | 景氣度週期性分析（季節性模式），query: months（默認 12） |
+| GET | `/stock/industry-prosperity/markov` | 景氣度 Markov 狀態轉移模型，query: months（默認 12） |
+| GET | `/stock/industry-prosperity/forecast` | 景氣度多模型預測（ARIMA+Holt-Winters+線性回歸），query: months, forecastDays |
+| GET | `/stock/industry-prosperity/forecast/backtest` | 景氣度預測回測驗證，query: months, forecastDays, backtestDays |
+| GET | `/stock/rotation-prediction` | 輪動預測（動量+資金+趨勢），query: lookbackDays（默認 20） |
+| GET | `/stock/rotation-prediction/backtest` | 輪動預測回測，query: lookbackDays, forwardDays, backtestDays |
+| GET | `/stock/rotation-prediction/automl` | 輪動預測 AutoML 自動調參，query: backtestDays（默認 90） |
+| GET | `/stock/rotation-markov` | 行業輪動 Markov 模型（領漲轉換概率），query: lookbackDays（默認 30） |
 
 ## K 线 chart
 
@@ -76,6 +91,7 @@
 |------|------|------|
 | GET | `/system/health` | 数据库连接 + 表结构校验 |
 | PUT | `/system/database` | 更新数据库配置（校验后写 .env） |
+| GET | `/system/notification/test` | 通知服務測試（郵件/Webhook） |
 
 ## 偏好 preference
 

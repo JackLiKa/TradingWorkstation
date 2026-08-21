@@ -11,6 +11,8 @@ import com.quantization.module.stock.dto.ProsperityAlertDto;
 import com.quantization.module.stock.dto.ProsperitySeasonalityDto;
 import com.quantization.module.stock.dto.ProsperityMarkovDto;
 import com.quantization.module.stock.dto.ProsperityForecastDto;
+import com.quantization.module.stock.dto.ProsperityForecastBacktestDto;
+import com.quantization.module.stock.dto.RotationMarkovDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexHistoryBatchRequestDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
@@ -327,6 +329,7 @@ public class StockController {
     @GetMapping("/industry-prosperity/seasonality")
     public ApiResponse<ProsperitySeasonalityDto> prosperitySeasonality(
             @RequestParam(required = false, defaultValue = "12") int months) {
+        months = Math.max(1, Math.min(60, months));
         return ApiResponse.ok(stockService.prosperitySeasonality(months));
     }
 
@@ -340,6 +343,7 @@ public class StockController {
     @GetMapping("/industry-prosperity/markov")
     public ApiResponse<ProsperityMarkovDto> prosperityMarkov(
             @RequestParam(required = false, defaultValue = "12") int months) {
+        months = Math.max(1, Math.min(36, months));
         return ApiResponse.ok(stockService.prosperityMarkov(months));
     }
 
@@ -355,7 +359,45 @@ public class StockController {
     public ApiResponse<ProsperityForecastDto> prosperityForecast(
             @RequestParam(required = false, defaultValue = "6") int months,
             @RequestParam(required = false, defaultValue = "5") int forecastDays) {
+        months = Math.max(1, Math.min(24, months));
+        forecastDays = Math.max(1, Math.min(20, forecastDays));
         return ApiResponse.ok(stockService.prosperityForecast(months, forecastDays));
+    }
+
+    /**
+     * 行業景氣度預測回測 — 驗證多模型預測的歷史準確率。
+     *
+     * @param months       分析回溯月數（默認 6）
+     * @param forecastDays 預測天數（默認 5）
+     * @param backtestDays 回測總天數（默認 60）
+     * @return 回測結果 DTO
+     */
+    @Operation(summary = "景氣度預測回測（歷史預測準確率驗證）")
+    @GetMapping("/industry-prosperity/forecast/backtest")
+    public ApiResponse<ProsperityForecastBacktestDto> prosperityForecastBacktest(
+            @RequestParam(required = false, defaultValue = "6") int months,
+            @RequestParam(required = false, defaultValue = "5") int forecastDays,
+            @RequestParam(required = false, defaultValue = "60") int backtestDays) {
+        // 安全邊界：限制參數範圍，防止數據庫過載
+        months = Math.max(1, Math.min(24, months));
+        forecastDays = Math.max(1, Math.min(20, forecastDays));
+        backtestDays = Math.max(10, Math.min(180, backtestDays));
+        return ApiResponse.ok(stockService.prosperityForecastBacktest(months, forecastDays, backtestDays));
+    }
+
+    /**
+     * 行業輪動 Markov 模型 — 預測領漲行業轉換概率。
+     *
+     * @param lookbackDays 回溯天數（默認 30）
+     * @return 輪動 Markov 分析 DTO
+     */
+    @Operation(summary = "行業輪動 Markov 模型（領漲行業轉換概率）")
+    @GetMapping("/rotation-markov")
+    public ApiResponse<RotationMarkovDto> rotationMarkov(
+            @RequestParam(required = false, defaultValue = "30") int lookbackDays) {
+        // 安全邊界：限制回溯天數，防止數據庫過載
+        lookbackDays = Math.max(5, Math.min(180, lookbackDays));
+        return ApiResponse.ok(stockService.rotationMarkov(lookbackDays));
     }
 
     // ===== 指數歷史（市場形態識別）=====

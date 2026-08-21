@@ -22,6 +22,8 @@ import { ProsperityAlertsPanel } from '@/components/industry/ProsperityAlertsPan
 import { ProsperitySeasonalityPanel } from '@/components/industry/ProsperitySeasonalityPanel';
 import { ProsperityMarkovPanel } from '@/components/industry/ProsperityMarkovPanel';
 import { ProsperityForecastPanel } from '@/components/industry/ProsperityForecastPanel';
+import { ProsperityForecastBacktestPanel } from '@/components/industry/ProsperityForecastBacktestPanel';
+import { RotationMarkovPanel } from '@/components/industry/RotationMarkovPanel';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
@@ -71,7 +73,9 @@ type ViewType =
   | 'prosperityAlerts'
   | 'prosperitySeasonality'
   | 'prosperityMarkov'
-  | 'prosperityForecast';
+  | 'prosperityForecast'
+  | 'forecastBacktest'
+  | 'rotationMarkov';
 
 /** 視圖分組 */
 type ViewGroup = 'snapshot' | 'trend' | 'advanced';
@@ -105,6 +109,8 @@ const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp; group: Vie
   { key: 'prosperitySeasonality', label: '景氣度週期', icon: Calendar, group: 'advanced' },
   { key: 'prosperityMarkov', label: 'Markov轉移', icon: GitBranch, group: 'advanced' },
   { key: 'prosperityForecast', label: '多模型預測', icon: LineChart, group: 'advanced' },
+  { key: 'forecastBacktest', label: '預測回測', icon: Target, group: 'advanced' },
+  { key: 'rotationMarkov', label: '輪動Markov', icon: GitBranch, group: 'advanced' },
 ];
 
 function formatDateInput(d: Date) {
@@ -241,6 +247,8 @@ export default function IndustryPage() {
     if (view === 'prosperitySeasonality') return <ProsperitySeasonalityPanel />;
     if (view === 'prosperityMarkov') return <ProsperityMarkovPanel />;
     if (view === 'prosperityForecast') return <ProsperityForecastPanel />;
+    if (view === 'forecastBacktest') return <ProsperityForecastBacktestPanel />;
+    if (view === 'rotationMarkov') return <RotationMarkovPanel />;
     return null;
   };
 

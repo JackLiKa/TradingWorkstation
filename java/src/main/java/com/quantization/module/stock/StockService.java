@@ -14,6 +14,8 @@ import com.quantization.module.stock.dto.ProsperityAlertDto;
 import com.quantization.module.stock.dto.ProsperitySeasonalityDto;
 import com.quantization.module.stock.dto.ProsperityMarkovDto;
 import com.quantization.module.stock.dto.ProsperityForecastDto;
+import com.quantization.module.stock.dto.ProsperityForecastBacktestDto;
+import com.quantization.module.stock.dto.RotationMarkovDto;
 import com.quantization.module.stock.dto.RotationSignalDto;
 import com.quantization.module.stock.dto.SectorPerformanceDto;
 import com.quantization.module.stock.dto.SearchResultDto;
@@ -1948,6 +1950,390 @@ public class StockService {
             forecast[i] = Math.max(0, Math.min(100, a + b * (n + i)));
         }
         return forecast;
+    }
+
+    /**
+     * 行業景氣度預測回測 — 驗證多模型預測的歷史準確率。
+     *
+     * 回測邏輯：
+     * 1. 對每個歷史交易日 T，用 T 之前的數據預測 T+forecastDays 的景氣度
+     * 2. 比較預測值與實際景氣度
+     * 3. 計算 MAE、方向準確率、等級命中率、超額收益
+     *
+     * @param months        分析回溯月數（默認 6）
+     * @param forecastDays  預測天數（默認 5）
+     * @param backtestDays  回測總天數（默認 60）
+     * @return 回測結果 DTO
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'forecast-backtest-' + #p0 + '-' + #p1 + '-' + #p2")
+    public ProsperityForecastBacktestDto prosperityForecastBacktest(int months, int forecastDays, int backtestDays) {
+        LocalDate today = LocalDate.now();
+        LocalDate dataStart = today.minusMonths(months).minusDays(backtestDays + 20);
+        LocalDate dataEnd = today;
+
+        List<IndustryDailyEntity> allEntities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(dataStart, dataEnd);
+
+        if (allEntities.isEmpty()) {
+            return new ProsperityForecastBacktestDto(forecastDays, 0, 0, 0, 0, 0, 0, 0,
+                    "數據不足，無法回測", List.of());
+        }
+
+        // 按日期分組
+        Map<LocalDate, List<IndustryDailyEntity>> byDate = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : allEntities) {
+            byDate.computeIfAbsent(e.getTradeDate(), k -> new ArrayList<>()).add(e);
+        }
+
+        List<LocalDate> sortedDates = new ArrayList<>(byDate.keySet());
+        sortedDates.sort(LocalDate::compareTo);
+
+        if (sortedDates.size() < forecastDays + 10) {
+            return new ProsperityForecastBacktestDto(forecastDays, 0, 0, 0, 0, 0, 0, 0,
+                    "交易日不足，無法回測", List.of());
+        }
+
+        // 預計算每日景氣度
+        Map<LocalDate, Map<String, Double>> dailyProsperity = new LinkedHashMap<>();
+        for (LocalDate date : sortedDates) {
+            dailyProsperity.put(date, computeProsperityMap(byDate.get(date)));
+        }
+
+        // 回測窗口
+        int startIdx = Math.max(20, sortedDates.size() - backtestDays - forecastDays);
+        int endIdx = sortedDates.size() - forecastDays;
+
+        List<ProsperityForecastBacktestDto.BacktestEntry> entries = new ArrayList<>();
+        double totalAbsError = 0;
+        int directionCorrect = 0;
+        int gradeCorrect = 0;
+        double totalTopReturn = 0;
+        double totalMarketReturn = 0;
+
+        // 每隔幾個交易日取樣一次
+        int step = Math.max(1, (endIdx - startIdx) / 20);
+
+        for (int i = startIdx; i < endIdx; i += step) {
+            LocalDate predictDate = sortedDates.get(i);
+            LocalDate targetDate = sortedDates.get(Math.min(i + forecastDays, sortedDates.size() - 1));
+
+            // 用 predictDate 之前的數據預測
+            Map<String, List<Double>> industrySeries = new LinkedHashMap<>();
+            for (int j = Math.max(0, i - months * 21); j <= i; j++) {
+                Map<String, Double> dp = dailyProsperity.get(sortedDates.get(j));
+                for (Map.Entry<String, Double> e : dp.entrySet()) {
+                    industrySeries.computeIfAbsent(e.getKey(), k -> new ArrayList<>()).add(e.getValue());
+                }
+            }
+
+            // 對每個行業預測景氣度
+            Map<String, Double> predictedProsperity = new LinkedHashMap<>();
+            for (Map.Entry<String, List<Double>> entry : industrySeries.entrySet()) {
+                double[] data = entry.getValue().stream().mapToDouble(Double::doubleValue).toArray();
+                if (data.length < 10) continue;
+
+                double[] arimaF = forecastARIMA(data, forecastDays);
+                double[] hwF = forecastHoltWinters(data, forecastDays, 5);
+                double[] linearF = forecastLinearRegression(data, forecastDays);
+
+                double ensemble = arimaF[arimaF.length - 1] * 0.35
+                        + hwF[hwF.length - 1] * 0.35 + linearF[linearF.length - 1] * 0.30;
+                predictedProsperity.put(entry.getKey(), Math.max(0, Math.min(100, ensemble)));
+            }
+
+            if (predictedProsperity.isEmpty()) continue;
+
+            // 實際景氣度
+            Map<String, Double> actualProsperity = dailyProsperity.getOrDefault(targetDate, Map.of());
+            if (actualProsperity.isEmpty()) continue;
+
+            // 找預測 Top 1 和實際 Top 1
+            String topPredicted = predictedProsperity.entrySet().stream()
+                    .max(Map.Entry.comparingByValue()).map(Map.Entry::getKey).orElse("");
+            String topActual = actualProsperity.entrySet().stream()
+                    .max(Map.Entry.comparingByValue()).map(Map.Entry::getKey).orElse("");
+
+            double predictedVal = predictedProsperity.getOrDefault(topPredicted, 0.0);
+            double actualVal = actualProsperity.getOrDefault(topPredicted, 0.0);
+            double absError = Math.abs(predictedVal - actualVal);
+
+            // 方向準確率：預測的上升/下降方向是否正確
+            double prevVal = dailyProsperity.get(predictDate).getOrDefault(topPredicted, 50.0);
+            boolean predictedUp = predictedVal > prevVal;
+            boolean actualUp = actualVal > prevVal;
+            boolean dirCorrect = predictedUp == actualUp;
+            if (dirCorrect) directionCorrect++;
+
+            // 等級命中率
+            String predictedGrade = prosperityGrade(predictedVal);
+            String actualGrade = prosperityGrade(actualVal);
+            boolean gCorrect = predictedGrade.equals(actualGrade);
+            if (gCorrect) gradeCorrect++;
+
+            totalAbsError += absError;
+
+            // 超額收益：預測 Top 行業在 predictDate → targetDate 的實際漲跌幅
+            double topReturn = 0;
+            List<IndustryDailyEntity> predictDayEntities = byDate.get(predictDate);
+            List<IndustryDailyEntity> targetDayEntities = byDate.get(targetDate);
+            if (predictDayEntities != null && targetDayEntities != null) {
+                double predictPct = predictDayEntities.stream()
+                        .filter(e -> topPredicted.equals(e.getIndustry()))
+                        .mapToDouble(e -> e.getAvgPctChg() != null ? e.getAvgPctChg().doubleValue() : 0)
+                        .findFirst().orElse(0);
+                double targetPct = targetDayEntities.stream()
+                        .filter(e -> topPredicted.equals(e.getIndustry()))
+                        .mapToDouble(e -> e.getAvgPctChg() != null ? e.getAvgPctChg().doubleValue() : 0)
+                        .findFirst().orElse(0);
+                topReturn = targetPct - predictPct;
+
+                double marketPct = predictDayEntities.stream()
+                        .mapToDouble(e -> e.getAvgPctChg() != null ? e.getAvgPctChg().doubleValue() : 0)
+                        .average().orElse(0);
+                double marketTargetPct = targetDayEntities.stream()
+                        .mapToDouble(e -> e.getAvgPctChg() != null ? e.getAvgPctChg().doubleValue() : 0)
+                        .average().orElse(0);
+                double marketReturn = marketTargetPct - marketPct;
+                totalMarketReturn += marketReturn;
+            }
+            totalTopReturn += topReturn;
+
+            entries.add(new ProsperityForecastBacktestDto.BacktestEntry(
+                    predictDate.toString(),
+                    targetDate.toString(),
+                    topPredicted,
+                    topActual,
+                    Math.round(predictedVal * 100.0) / 100.0,
+                    Math.round(actualVal * 100.0) / 100.0,
+                    Math.round(absError * 100.0) / 100.0,
+                    dirCorrect,
+                    gCorrect
+            ));
+        }
+
+        int total = entries.size();
+        double mae = total > 0 ? totalAbsError / total : 0;
+        double dirAcc = total > 0 ? (double) directionCorrect / total * 100.0 : 0;
+        double gradeHit = total > 0 ? (double) gradeCorrect / total * 100.0 : 0;
+        double avgTop = total > 0 ? totalTopReturn / total : 0;
+        double avgMarket = total > 0 ? totalMarketReturn / total : 0;
+        double avgExcess = avgTop - avgMarket;
+
+        String summary = String.format(
+                "回測 %d 次（forecast=%d日）。MAE %.2f，方向準確率 %.1f%%，等級命中率 %.1f%%。" +
+                "預測 Top 行業平均收益 %.3f%%，市場平均 %.3f%%，超額收益 %.3f%%。",
+                total, forecastDays, mae, dirAcc, gradeHit, avgTop, avgMarket, avgExcess
+        );
+
+        return new ProsperityForecastBacktestDto(
+                forecastDays, total,
+                Math.round(mae * 100.0) / 100.0,
+                Math.round(dirAcc * 100.0) / 100.0,
+                Math.round(gradeHit * 100.0) / 100.0,
+                Math.round(avgTop * 1000.0) / 1000.0,
+                Math.round(avgMarket * 1000.0) / 1000.0,
+                Math.round(avgExcess * 1000.0) / 1000.0,
+                summary,
+                entries
+        );
+    }
+
+    /**
+     * 行業輪動 Markov 模型 — 預測領漲行業轉換概率。
+     *
+     * 將行業按每日漲跌幅排名分為 3 個狀態：
+     * 1=領漲（Top 1/3）、2=中間（Middle 1/3）、3=滯後（Bottom 1/3）
+     *
+     * @param lookbackDays 回溯天數（默認 30）
+     * @return 輪動 Markov 分析 DTO
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'rotation-markov-' + #p0")
+    public RotationMarkovDto rotationMarkov(int lookbackDays) {
+        LocalDate end = LocalDate.now();
+        LocalDate start = end.minusDays(lookbackDays + 10);
+
+        List<IndustryDailyEntity> entities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(start, end);
+
+        if (entities.isEmpty()) {
+            return new RotationMarkovDto(end.toString(), 0, Map.of(), "數據不足，無法構建輪動 Markov 模型");
+        }
+
+        // 按日期分組
+        Map<LocalDate, List<IndustryDailyEntity>> byDate = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : entities) {
+            byDate.computeIfAbsent(e.getTradeDate(), k -> new ArrayList<>()).add(e);
+        }
+
+        List<LocalDate> sortedDates = new ArrayList<>(byDate.keySet());
+        sortedDates.sort(LocalDate::compareTo);
+
+        if (sortedDates.size() < 3) {
+            return new RotationMarkovDto(end.toString(), 0, Map.of(), "交易日不足，無法構建輪動 Markov 模型");
+        }
+
+        // 每日按漲跌幅排名，分為 3 個狀態
+        Map<LocalDate, Map<String, Integer>> dailyStates = new LinkedHashMap<>();
+        for (LocalDate date : sortedDates) {
+            List<IndustryDailyEntity> dayEntities = byDate.get(date);
+            // 按漲跌幅排序
+            List<IndustryDailyEntity> sorted = new ArrayList<>(dayEntities);
+            sorted.sort((a, b) -> {
+                double aPct = a.getAvgPctChg() != null ? a.getAvgPctChg().doubleValue() : 0;
+                double bPct = b.getAvgPctChg() != null ? b.getAvgPctChg().doubleValue() : 0;
+                return Double.compare(bPct, aPct); // 倒序
+            });
+
+            int n = sorted.size();
+            int topThird = n / 3;
+            int midThird = n * 2 / 3;
+
+            Map<String, Integer> states = new LinkedHashMap<>();
+            for (int i = 0; i < n; i++) {
+                int state;
+                if (i < topThird) state = 1; // 領漲
+                else if (i < midThird) state = 2; // 中間
+                else state = 3; // 滯後
+                states.put(sorted.get(i).getIndustry(), state);
+            }
+            dailyStates.put(date, states);
+        }
+
+        // 按行業收集狀態序列
+        Map<String, List<Integer>> industryStateSeries = new LinkedHashMap<>();
+        for (LocalDate date : sortedDates) {
+            Map<String, Integer> states = dailyStates.get(date);
+            for (Map.Entry<String, Integer> e : states.entrySet()) {
+                industryStateSeries.computeIfAbsent(e.getKey(), k -> new ArrayList<>()).add(e.getValue());
+            }
+        }
+
+        Map<String, RotationMarkovDto.IndustryRotationMarkov> result = new LinkedHashMap<>();
+        int totalTransitions = 0;
+
+        for (Map.Entry<String, List<Integer>> entry : industryStateSeries.entrySet()) {
+            String industry = entry.getKey();
+            List<Integer> series = entry.getValue();
+            if (series.size() < 3) continue;
+
+            // 構建 3x3 轉移計數矩陣
+            int[][] counts = new int[3][3];
+            for (int i = 0; i < series.size() - 1; i++) {
+                int from = series.get(i) - 1;
+                int to = series.get(i + 1) - 1;
+                if (from >= 0 && from < 3 && to >= 0 && to < 3) {
+                    counts[from][to]++;
+                    totalTransitions++;
+                }
+            }
+
+            // 轉為概率矩陣
+            double[][] matrix = new double[3][3];
+            for (int i = 0; i < 3; i++) {
+                int rowSum = 0;
+                for (int j = 0; j < 3; j++) rowSum += counts[i][j];
+                for (int j = 0; j < 3; j++) {
+                    matrix[i][j] = rowSum > 0 ? (double) counts[i][j] / rowSum : 0.0;
+                    matrix[i][j] = Math.round(matrix[i][j] * 10000.0) / 10000.0;
+                }
+                if (rowSum == 0) {
+                    for (int j = 0; j < 3; j++) matrix[i][j] = 1.0 / 3;
+                }
+            }
+
+            int currentState = series.get(series.size() - 1);
+            String currentStateName = rotationStateName(currentState);
+
+            // 下一期各狀態概率
+            Map<Integer, Double> nextProb = new LinkedHashMap<>();
+            int currentIdx = currentState - 1;
+            for (int j = 0; j < 3; j++) {
+                nextProb.put(j + 1, matrix[currentIdx][j]);
+            }
+
+            // 最可能下一狀態
+            int mostLikelyNext = 1;
+            double mostLikelyProb = 0;
+            for (int j = 0; j < 3; j++) {
+                if (matrix[currentIdx][j] > mostLikelyProb) {
+                    mostLikelyProb = matrix[currentIdx][j];
+                    mostLikelyNext = j + 1;
+                }
+            }
+
+            // 穩態分布（3x3 迭代）
+            Map<Integer, Double> steadyState = computeSteadyState3(matrix);
+            double leaderProb = steadyState.getOrDefault(1, 0.0);
+
+            int transitionCount = 0;
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) transitionCount += counts[i][j];
+            }
+
+            result.put(industry, new RotationMarkovDto.IndustryRotationMarkov(
+                    industry,
+                    matrix,
+                    currentState,
+                    currentStateName,
+                    nextProb,
+                    steadyState,
+                    transitionCount,
+                    rotationStateName(mostLikelyNext),
+                    Math.round(mostLikelyProb * 1000.0) / 1000.0,
+                    Math.round(leaderProb * 10000.0) / 10000.0
+            ));
+        }
+
+        // 找長期領漲概率最高的行業
+        List<Map.Entry<String, RotationMarkovDto.IndustryRotationMarkov>> sortedByLeader =
+                new ArrayList<>(result.entrySet());
+        sortedByLeader.sort((a, b) -> Double.compare(
+                b.getValue().leaderProbability(), a.getValue().leaderProbability()));
+
+        String summary = String.format(
+                "分析區間 %s ~ %s，共 %d 次狀態轉換，%d 個行業。" +
+                "長期領漲概率最高：%s（%.1f%%）。",
+                start, end, totalTransitions, result.size(),
+                sortedByLeader.isEmpty() ? "無" : sortedByLeader.get(0).getKey(),
+                sortedByLeader.isEmpty() ? 0 : sortedByLeader.get(0).getValue().leaderProbability() * 100
+        );
+
+        return new RotationMarkovDto(end.toString(), totalTransitions, result, summary);
+    }
+
+    /** 輪動狀態名稱。 */
+    private static String rotationStateName(int state) {
+        return switch (state) {
+            case 1 -> "領漲";
+            case 2 -> "中間";
+            case 3 -> "滯後";
+            default -> "未知";
+        };
+    }
+
+    /** 計算 3x3 Markov 鏈的穩態分布。 */
+    private Map<Integer, Double> computeSteadyState3(double[][] matrix) {
+        double[] state = {1.0 / 3, 1.0 / 3, 1.0 / 3};
+        for (int iter = 0; iter < 1000; iter++) {
+            double[] newState = new double[3];
+            for (int j = 0; j < 3; j++) {
+                for (int i = 0; i < 3; i++) {
+                    newState[j] += state[i] * matrix[i][j];
+                }
+            }
+            double maxDiff = 0;
+            for (int i = 0; i < 3; i++) {
+                maxDiff = Math.max(maxDiff, Math.abs(newState[i] - state[i]));
+            }
+            System.arraycopy(newState, 0, state, 0, 3);
+            if (maxDiff < 1e-8) break;
+        }
+
+        Map<Integer, Double> result = new LinkedHashMap<>();
+        for (int i = 0; i < 3; i++) {
+            result.put(i + 1, Math.round(state[i] * 10000.0) / 10000.0);
+        }
+        return result;
     }
 
     /** 判斷趨勢。 */

@@ -21,6 +21,8 @@ import type {
   ProsperitySeasonalityDto,
   ProsperityMarkovDto,
   ProsperityForecastDto,
+  ProsperityForecastBacktestDto,
+  RotationMarkovDto,
   CandlestickDto,
   ScreenerResultDto,
   ScreenerCriteriaDto,
@@ -106,6 +108,16 @@ export const api = {
     apiFetch<ProsperityForecastDto>(
       `/stock/industry-prosperity/forecast?months=${months}&forecastDays=${forecastDays}`
     ),
+
+  // ===== 景氣度預測回測 =====
+  prosperityForecastBacktest: (months = 6, forecastDays = 5, backtestDays = 60) =>
+    apiFetch<ProsperityForecastBacktestDto>(
+      `/stock/industry-prosperity/forecast/backtest?months=${months}&forecastDays=${forecastDays}&backtestDays=${backtestDays}`
+    ),
+
+  // ===== 行業輪動 Markov 模型 =====
+  rotationMarkov: (lookbackDays = 30) =>
+    apiFetch<RotationMarkovDto>(`/stock/rotation-markov?lookbackDays=${lookbackDays}`),
 
   // ===== 行業景氣度指標 =====
   industryProsperity: (tradeDate?: string) =>
