@@ -484,3 +484,22 @@ async def resolve_alert(alert_id: str):
 
     node_monitor.resolve_alert(alert_id)
     return {"status": "resolved", "alert_id": alert_id}
+
+
+@router.get("/news/search")
+async def search_news(keyword: str, page_size: int = 10):
+    """按關鍵詞搜索財經新聞 — 供前端行業走勢圖疊加新聞標記使用。
+
+    Args:
+        keyword: 搜索關鍵詞（如行業名稱「半導體」「新能源」）
+        page_size: 返回新聞條數（默認 10，最大 30）
+
+    Returns:
+        dict: 包含 keyword 和 news 列表（每項含 title/source/date/url）
+    """
+    page_size = max(1, min(page_size, 30))
+    from app.services.market_data_client import market_data_client
+
+    news = await market_data_client.search_news_by_keyword(keyword, page_size=page_size)
+    return {"keyword": keyword, "news": news}
+

@@ -4,11 +4,14 @@
  */
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { IndustryMultiSelect } from '@/components/screener/IndustryMultiSelect';
+import { api } from '@/lib/api';
 import type { ScreenerCriteriaDto } from '@/lib/api/types';
 import { Play, Download, Loader2 } from 'lucide-react';
 
@@ -37,6 +40,12 @@ interface Props {
 export function ScreenerFilterPanel({ criteria, onChange, onRun, onExport, running }: Props) {
   const update = <K extends keyof ScreenerCriteriaDto>(key: K, value: ScreenerCriteriaDto[K]) =>
     onChange({ ...criteria, [key]: value });
+
+  // 載入行業列表（只載入一次，長期緩存）
+  const { data: industries } = useSWR('/stock/industries/list', () => api.industriesList(), {
+    revalidateOnFocus: false,
+    dedupingInterval: 600_000,
+  });
 
   return (
     <Card>
@@ -180,6 +189,22 @@ export function ScreenerFilterPanel({ criteria, onChange, onRun, onExport, runni
             <CheckField label="MA20>MA60" checked={!!criteria.ma20AboveMa60} onChange={(v) => update('ma20AboveMa60', v)} />
             <CheckField label="排除ST" checked={criteria.excludeSt ?? true} onChange={(v) => update('excludeSt', v)} />
           </div>
+        </Section>
+
+        <Section title="行業篩選">
+          <Field label="限制行業（可多選，留空表示全市場）">
+            <IndustryMultiSelect
+              options={industries ?? []}
+              selected={criteria.industries ?? []}
+              onChange={(v) => update('industries', v.length > 0 ? v : null)}
+              placeholder={industries ? `共 ${industries.length} 個行業可選` : '載入中...'}
+            />
+          </Field>
+          {(criteria.industries?.length ?? 0) > 0 && (
+            <p className="text-xs text-muted">
+              已選 {criteria.industries!.length} 個行業，選股與回測將僅在這些行業內進行
+            </p>
+          )}
         </Section>
       </CardContent>
     </Card>

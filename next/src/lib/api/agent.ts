@@ -17,6 +17,14 @@ import type {
   TimelineData,
 } from './types';
 
+/** 行業新聞項（來自 Agent 服務的東方財富搜索） */
+export interface IndustryNewsItem {
+  title: string;
+  source: string;
+  date: string;
+  url: string;
+}
+
 const AGENT_BASE = process.env.NEXT_PUBLIC_AGENT_API_BASE || 'http://localhost:8100';
 
 async function agentFetch<T>(path: string): Promise<T> {
@@ -80,4 +88,7 @@ export const agentApi = {
     agentPost<{ status: string; stage_preferences: Record<string, string> }>(`/providers/stage`, req),
   resetStageProviders: () =>
     agentPost<{ status: string; stage_preferences: Record<string, string> }>(`/providers/stage/reset`),
+  // ===== 行業新聞搜索 =====
+  searchNews: (keyword: string, pageSize = 10) =>
+    agentFetch<{ keyword: string; news: IndustryNewsItem[] }>(`/news/search?keyword=${encodeURIComponent(keyword)}&page_size=${pageSize}`),
 };

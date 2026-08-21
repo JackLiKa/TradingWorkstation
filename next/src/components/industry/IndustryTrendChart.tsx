@@ -3,12 +3,14 @@
 import { useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 import type { IndustryDailyDto } from '@/lib/api/types';
+import type { IndustryNewsItem } from '@/lib/api/agent';
 
 interface Props {
   data: IndustryDailyDto[];
+  news?: IndustryNewsItem[];
 }
 
-export function IndustryTrendChart({ data }: Props) {
+export function IndustryTrendChart({ data, news = [] }: Props) {
   const option = useMemo(() => {
     const sorted = [...data].sort(
       (a, b) => new Date(a.tradeDate).getTime() - new Date(b.tradeDate).getTime()
@@ -16,6 +18,28 @@ export function IndustryTrendChart({ data }: Props) {
     const dates = sorted.map((d) => d.tradeDate);
     const pctValues = sorted.map((d) => (d.avgPctChg == null ? 0 : d.avgPctChg));
     const amountValues = sorted.map((d) => (d.totalAmount == null ? 0 : d.totalAmount));
+
+    // 構建新聞 markPoints：只標記在 dates 範圍內的新聞
+    const dateSet = new Set(dates);
+    const newsMarks = news
+      .filter((n) => n.date && dateSet.has(n.date))
+      .slice(0, 10)
+      .map((n) => {
+        const idx = dates.indexOf(n.date);
+        const pct = pctValues[idx] ?? 0;
+        return {
+          name: n.title.slice(0, 20),
+          coord: [n.date, pct],
+          value: '新聞',
+          itemStyle: { color: '#f59e0b' },
+          label: {
+            show: true,
+            formatter: '📰',
+            fontSize: 14,
+            color: '#f59e0b',
+          },
+        };
+      });
 
     return {
       title: {
@@ -33,6 +57,16 @@ export function IndustryTrendChart({ data }: Props) {
           const lines = [date];
           if (pct) lines.push(`平均漲跌幅: ${pct.value.toFixed(3)}%`);
           if (amount) lines.push(`成交金額: ${Number(amount.value).toLocaleString()}`);
+          // 當日新聞
+          const dayNews = news.filter((n) => n.date === date);
+          if (dayNews.length > 0) {
+            lines.push('');
+            lines.push('--- 相關新聞 ---');
+            dayNews.slice(0, 3).forEach((n) => {
+              lines.push(`• ${n.title}`);
+            });
+            if (dayNews.length > 3) lines.push(`...共 ${dayNews.length} 條`);
+          }
           return lines.join('<br/>');
         },
       },
@@ -90,6 +124,11 @@ export function IndustryTrendChart({ data }: Props) {
           markLine: {
             data: [{ yAxis: 0, lineStyle: { color: '#64748b' } }],
           },
+          markPoint: {
+            data: newsMarks,
+            symbol: 'pin',
+            symbolSize: 40,
+          },
         },
         {
           name: '成交金額',
@@ -100,7 +139,7 @@ export function IndustryTrendChart({ data }: Props) {
         },
       ],
     };
-  }, [data]);
+  }, [data, news]);
 
   return (
     <div className="rounded-lg border border-border bg-bg-panel p-4 h-[500px]">

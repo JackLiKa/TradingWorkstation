@@ -10,8 +10,9 @@ import { IndustryTrendChart } from '@/components/industry/IndustryTrendChart';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
-import { Calendar, RefreshCw, TrendingUp, DollarSign, BarChart3, Activity, RotateCcw, BarChart2 } from 'lucide-react';
+import { Calendar, RefreshCw, TrendingUp, DollarSign, BarChart3, Activity, RotateCcw, BarChart2, Newspaper } from 'lucide-react';
 import type { IndustryDailyDto } from '@/lib/api/types';
+import { agentApi, type IndustryNewsItem } from '@/lib/api/agent';
 
 /** 可視化類型 */
 type ViewType = 'heatmap' | 'capital' | 'risingFalling' | 'trend';
@@ -69,6 +70,20 @@ export default function IndustryPage() {
   } = useSWR<IndustryDailyDto[]>(trendKey, () => api.industryDailyRange(selectedIndustry, rangeStart, rangeEnd), {
     revalidateOnFocus: false,
     dedupingInterval: 60000,
+  });
+
+  // 載入該行業的相關新聞（用於走勢圖上疊加標記）
+  const newsKey =
+    view === 'trend' && selectedIndustry
+      ? `/api/agent/news/search?keyword=${encodeURIComponent(selectedIndustry)}&page_size=15`
+      : null;
+  const {
+    data: newsData,
+    error: newsError,
+    isLoading: newsLoading,
+  } = useSWR<{ keyword: string; news: IndustryNewsItem[] }>(newsKey, () => agentApi.searchNews(selectedIndustry, 15), {
+    revalidateOnFocus: false,
+    dedupingInterval: 300_000,
   });
 
   const industries = useMemo(() => {
@@ -130,7 +145,7 @@ export default function IndustryPage() {
         </div>
       );
     }
-    return <IndustryTrendChart data={trendData} />;
+    return <IndustryTrendChart data={trendData} news={newsData?.news ?? []} />;
   };
 
   return (
@@ -247,6 +262,44 @@ export default function IndustryPage() {
       <div className="w-full min-h-[300px]">
         {view === 'trend' ? renderTrend() : renderChart()}
       </div>
+
+      {/* 行業新聞列表（僅在走勢視圖下顯示） */}
+      {view === 'trend' && selectedIndustry && (
+        <div className="rounded-lg border border-border bg-bg-panel p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Newspaper className="w-4 h-4 text-accent" />
+            <h3 className="text-sm font-semibold text-slate-100">
+              「{selectedIndustry}」相關新聞
+            </h3>
+            {newsLoading && <RefreshCw className="w-3 h-3 animate-spin text-muted" />}
+            {newsError && <span className="text-xs text-red-400">（新聞載入失敗）</span>}
+            {!newsLoading && !newsError && newsData && (
+              <span className="text-xs text-muted">共 {newsData.news.length} 條</span>
+            )}
+          </div>
+          {newsData && newsData.news.length > 0 ? (
+            <ul className="space-y-2 max-h-60 overflow-auto">
+              {newsData.news.map((n, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-xs text-muted flex-shrink-0 mt-0.5">{n.date || '-'}</span>
+                  <a
+                    href={n.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-slate-300 hover:text-accent truncate"
+                    title={n.title}
+                  >
+                    {n.title}
+                  </a>
+                  <span className="text-xs text-muted flex-shrink-0">{n.source}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            !newsLoading && <p className="text-sm text-muted">暫無相關新聞</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

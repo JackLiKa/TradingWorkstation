@@ -48,6 +48,7 @@ export const api = {
     apiFetch<IndustryDailyDto[]>(`/stock/industry-daily${tradeDate ? `?tradeDate=${tradeDate}` : ''}`),
   industryDailyRange: (industry: string, start: string, end: string) =>
     apiFetch<IndustryDailyDto[]>(`/stock/industry-daily/range?industry=${encodeURIComponent(industry)}&start=${start}&end=${end}`),
+  industriesList: () => apiFetch<string[]>(`/stock/industries/list`),
 
   // ===== Chart K線圖 =====
   candlestick: (params: URLSearchParams) => apiFetch<CandlestickDto>(`/chart/candlestick?${params.toString()}`),
