@@ -168,6 +168,87 @@ def _sync_index_metadata(conn) -> int:
         return len(rows)
 
 
+def _sync_industry_daily(conn, start: str, end: str) -> int:
+    """按 (date, industry) 聚合 stock_daily + stock_industry，寫入 industry_daily。
+
+    用於支持行業級日度分析：均漲跌、總成交、漲跌家數等。
+    """
+    create_table_sql = """
+    CREATE TABLE IF NOT EXISTS industry_daily (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      date DATE NOT NULL COMMENT '交易日',
+      industry VARCHAR(100) NOT NULL COMMENT '行業名稱',
+      stock_count INT NOT NULL DEFAULT 0 COMMENT '該行業當日股票數量',
+      avg_pct_chg DECIMAL(20,6) NULL COMMENT '平均漲跌幅',
+      total_amount DECIMAL(30,2) NULL COMMENT '總成交金額',
+      total_volume BIGINT NULL COMMENT '總成交量',
+      avg_turn DECIMAL(20,6) NULL COMMENT '平均換手率',
+      rising_count INT NULL DEFAULT 0 COMMENT '上漲家數',
+      falling_count INT NULL DEFAULT 0 COMMENT '下跌家數',
+      avg_close DECIMAL(20,4) NULL COMMENT '平均收盤價',
+      max_close DECIMAL(20,4) NULL COMMENT '最高收盤價',
+      min_close DECIMAL(20,4) NULL COMMENT '最低收盤價',
+      created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_date_industry (date, industry),
+      KEY idx_date (date),
+      KEY idx_industry (industry)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='行業日度聚合數據'
+    """
+
+    agg_sql = """
+    INSERT INTO industry_daily
+    (date, industry, stock_count, avg_pct_chg, total_amount, total_volume, avg_turn,
+     rising_count, falling_count, avg_close, max_close, min_close)
+    SELECT
+      d.date,
+      i.industry,
+      COUNT(*) AS stock_count,
+      AVG(d.pctChg) AS avg_pct_chg,
+      SUM(d.amount) AS total_amount,
+      SUM(d.volume) AS total_volume,
+      AVG(d.turn) AS avg_turn,
+      SUM(CASE WHEN d.pctChg > 0 THEN 1 ELSE 0 END) AS rising_count,
+      SUM(CASE WHEN d.pctChg < 0 THEN 1 ELSE 0 END) AS falling_count,
+      AVG(d.close) AS avg_close,
+      MAX(d.close) AS max_close,
+      MIN(d.close) AS min_close
+    FROM stock_daily d
+    JOIN stock_industry i ON d.code = i.code
+    WHERE d.adjustflag = 3
+      AND d.date >= %s AND d.date <= %s
+      AND i.industry IS NOT NULL AND i.industry != ''
+    GROUP BY d.date, i.industry
+    ON DUPLICATE KEY UPDATE
+      stock_count = VALUES(stock_count),
+      avg_pct_chg = VALUES(avg_pct_chg),
+      total_amount = VALUES(total_amount),
+      total_volume = VALUES(total_volume),
+      avg_turn = VALUES(avg_turn),
+      rising_count = VALUES(rising_count),
+      falling_count = VALUES(falling_count),
+      avg_close = VALUES(avg_close),
+      max_close = VALUES(max_close),
+      min_close = VALUES(min_close)
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(create_table_sql)
+        try:
+            cursor.execute("CREATE INDEX idx_code ON stock_industry(code)")
+        except pymysql.MySQLError as e:
+            if "Duplicate" in str(e) or "already exists" in str(e).lower():
+                pass
+            else:
+                raise
+        cursor.execute(agg_sql, (start, end))
+        conn.commit()
+        affected = cursor.rowcount
+    print(f"[done] 行業日聚合數據已同步 {affected} 條（{start} ~ {end}）")
+    return affected
+
+
 # ============================================================================
 # 資料庫查詢（增量更新核心）
 # ============================================================================
@@ -767,6 +848,13 @@ def _run_interactive() -> int:
             print(f"開始同步行業分類數據")
             print(f"{'=' * 60}")
             grand_total += _sync_industry(conn, force=False)
+
+        # 行業日聚合：同步了不復權股票日線時，用最新行業分類做 (date, industry) 聚合
+        if 3 in adjustflags:
+            print(f"\n{'=' * 60}")
+            print(f"開始同步行業日聚合數據")
+            print(f"{'=' * 60}")
+            grand_total += _sync_industry_daily(conn, start_date, end_date)
 
         print(f"\n{'=' * 60}")
         print(f"全部完成！共寫入 {grand_total} 條記錄")

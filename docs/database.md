@@ -90,13 +90,47 @@ CREATE TABLE IF NOT EXISTS stock_industry (
   updated_at timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uk_code_date (code, update_date),
+  KEY idx_code (code),
   KEY idx_industry (industry)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 - 唯一键 `(code, update_date)`：同一股票同一更新日期只保留一条。
+- `idx_code(code)` 用於與 `stock_daily` JOIN 做行業聚合。
 - 行業數據與 adjustflag 無關，獨立存儲，查詢時 JOIN。
 - 同步命令：`python ingestion/baostock_ingest.py --industry` 或 `--mode incremental --adjustflags 1,2,3 --index --industry`。
+
+## 表結構 `industry_daily`
+
+行業日度聚合數據表。由 `baostock_ingest.py` 在同步不復權股票日線後，通過 `JOIN stock_daily (adjustflag=3) × stock_industry` 按 `(date, industry)` 聚合生成。
+
+```sql
+CREATE TABLE IF NOT EXISTS industry_daily (
+  id bigint NOT NULL AUTO_INCREMENT,
+  date date NOT NULL COMMENT '交易日',
+  industry varchar(100) NOT NULL COMMENT '行業名稱',
+  stock_count int NOT NULL DEFAULT 0 COMMENT '該行業當日股票數量',
+  avg_pct_chg decimal(20,6) DEFAULT NULL COMMENT '平均漲跌幅',
+  total_amount decimal(30,2) DEFAULT NULL COMMENT '總成交金額',
+  total_volume bigint DEFAULT NULL COMMENT '總成交量',
+  avg_turn decimal(20,6) DEFAULT NULL COMMENT '平均換手率',
+  rising_count int DEFAULT '0' COMMENT '上漲家數',
+  falling_count int DEFAULT '0' COMMENT '下跌家數',
+  avg_close decimal(20,4) DEFAULT NULL COMMENT '平均收盤價',
+  max_close decimal(20,4) DEFAULT NULL COMMENT '最高收盤價',
+  min_close decimal(20,4) DEFAULT NULL COMMENT '最低收盤價',
+  created_at timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_date_industry (date, industry),
+  KEY idx_date (date),
+  KEY idx_industry (industry)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='行業日度聚合數據';
+```
+
+- 唯一键 `(date, industry)`：同一交易日同一行業只保留一条。
+- 字段：`stock_count` 為該行業當日有日線數據的個股數量；`avg_pct_chg` 為該行業個股漲跌幅均值；`total_amount` / `total_volume` 為行業總成交；`rising_count` / `falling_count` 為上漲 / 下跌家數。
+- 生成時自動排除 `industry IS NULL` 的股票。
 
 ## 表結構 `index_daily`
 
