@@ -24,4 +24,18 @@ public interface StockIndustryRepository extends JpaRepository<StockIndustryEnti
 
     /** 查詢所有行業分類記錄（帶分頁）。 */
     List<StockIndustryEntity> findAllByOrderByCodeAsc();
+
+    /**
+     * 查詢指定股票代碼的最新行業分類。
+     * 對每個 code 取 update_date 最大的那一筆。
+     */
+    @Query("""
+            SELECT s1.code, s1.industry
+            FROM StockIndustryEntity s1
+            WHERE s1.updateDate = (
+                SELECT MAX(s2.updateDate) FROM StockIndustryEntity s2 WHERE s2.code = s1.code
+            )
+            AND s1.code IN :codes
+            """)
+    List<Object[]> findLatestIndustriesByCode(@Param("codes") List<String> codes);
 }

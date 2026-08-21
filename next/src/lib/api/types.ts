@@ -171,6 +171,7 @@ export interface ScreenerCriteriaDto {
   excludeSt?: boolean | null;
   maxResults?: number | null;
   sortBy?: string | null;
+  industries?: string[] | null;
 }
 
 /** 選股結果中的單隻股票（含全部技術指標數值和綜合評分） */

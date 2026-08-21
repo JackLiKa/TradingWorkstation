@@ -14,6 +14,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 选股核心逻辑（高内聚）：分组、候选构建、条件过滤、排序。
@@ -46,9 +47,14 @@ public class ScreenerCore {
     }
 
     public List<ScreenedStockDto> screenAt(Grouped grouped, LocalDate tradeDate, ScreenerCriteriaDto criteria, int limit) {
+        return screenAt(grouped, tradeDate, criteria, limit, Map.of());
+    }
+
+    public List<ScreenedStockDto> screenAt(Grouped grouped, LocalDate tradeDate, ScreenerCriteriaDto criteria, int limit, Map<String, String> industryMap) {
         // 指標最多需要 120 天，只取最近 150 天數據計算即可，避免對全部歷史算指標
         final int LOOKBACK = 150;
         // 並行計算：用 parallelStream 利用多核 CPU 加速指標計算
+        Map<String, String> industries = industryMap == null ? Map.of() : industryMap;
         List<ScreenedStockDto> candidates = grouped.histories.entrySet().parallelStream()
                 .map(entry -> {
                     List<StockDaily> history = entry.getValue();
@@ -60,13 +66,13 @@ public class ScreenerCore {
                     List<StockDaily> slice = history.subList(startIdx, endIdx);
                     IndicatorSnapshot snapshot = indicatorEngine.buildSnapshot(entry.getKey(),
                             slice, IndicatorConfig.screener());
-                    if (snapshot != null && ScreenerFilters.matches(snapshot, criteria)) {
+                    if (snapshot != null && ScreenerFilters.matches(snapshot, criteria, industries)) {
                         return ScreenedStockDto.from(snapshot);
                     }
                     return null;
                 })
                 .filter(java.util.Objects::nonNull)
-                .collect(java.util.stream.Collectors.toList());
+                .collect(Collectors.toList());
         candidates.sort(sortComparator(criteria.sortBy()));
         return candidates.size() > limit ? candidates.subList(0, limit) : candidates;
     }

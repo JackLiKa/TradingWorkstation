@@ -13,6 +13,7 @@ import com.quantization.module.screener.dto.ScreenerCriteriaDto;
 import com.quantization.module.stock.IndexDailyEntity;
 import com.quantization.module.stock.IndexDailyRepository;
 import com.quantization.module.stock.StockDaily;
+import com.quantization.module.stock.StockIndustryRepository;
 import com.quantization.module.stock.StockService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,14 +38,16 @@ public class BacktestService {
     private final StockService stockService;
     private final ScreenerCore screenerCore;
     private final IndexDailyRepository indexDailyRepository;
+    private final StockIndustryRepository industryRepository;
 
     /** 基準指數：上證綜指 */
     private static final String BENCHMARK_CODE = "sh.000001";
 
-    public BacktestService(StockService stockService, ScreenerCore screenerCore, IndexDailyRepository indexDailyRepository) {
+    public BacktestService(StockService stockService, ScreenerCore screenerCore, IndexDailyRepository indexDailyRepository, StockIndustryRepository industryRepository) {
         this.stockService = stockService;
         this.screenerCore = screenerCore;
         this.indexDailyRepository = indexDailyRepository;
+        this.industryRepository = industryRepository;
     }
 
     /**
@@ -120,6 +123,8 @@ public class BacktestService {
             priceLookup = buildPriceLookup(grouped);
         }
 
+        Map<String, String> industryMap = buildIndustryMap(criteria.industries(), grouped.histories().keySet());
+
         // 拉取基準指數（上證綜指）數據
         List<IndexDailyEntity> indexData = indexDailyRepository
                 .findByCodeAndTradeDateBetweenOrderByTradeDateAsc(BENCHMARK_CODE, start, end);
@@ -188,7 +193,7 @@ public class BacktestService {
                 }
 
                 // 选股
-                List<ScreenedStockDto> candidates = screenerCore.screenAt(grouped, date, criteria, maxPositions);
+                List<ScreenedStockDto> candidates = screenerCore.screenAt(grouped, date, criteria, maxPositions, industryMap);
                 int slots = maxPositions - positions.size();
                 List<String> bought = new ArrayList<>();
                 for (int i = 0; i < Math.min(slots, candidates.size()); i++) {
@@ -233,6 +238,20 @@ public class BacktestService {
     }
 
     private record Position(LocalDate entryDate, double entryPrice, double shares, int entryDateIndex) {}
+
+    /** 構建行業對照表：code -> 最新行業名稱 */
+    private Map<String, String> buildIndustryMap(List<String> requested, Set<String> codes) {
+        if (requested == null || requested.isEmpty() || codes == null || codes.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> map = new HashMap<>();
+        for (Object[] row : industryRepository.findLatestIndustriesByCode(new ArrayList<>(codes))) {
+            if (row[0] != null && row[1] != null) {
+                map.put(row[0].toString(), row[1].toString());
+            }
+        }
+        return map;
+    }
 
     /** 構建 priceLookup：Map<code, Map<date, closePrice>>，O(1) 查找價格 */
     private Map<String, Map<LocalDate, Double>> buildPriceLookup(ScreenerCore.Grouped grouped) {

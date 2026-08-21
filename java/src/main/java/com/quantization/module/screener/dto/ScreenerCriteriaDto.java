@@ -1,9 +1,10 @@
 package com.quantization.module.screener.dto;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /**
- * 选股条件 DTO，包含价格、涨跌幅、换手率、技术指标和交叉信号等多维度筛选条件。
+ * 选股条件 DTO，包含价格、涨跌幅、换手率、技术指标、交叉信号与行业等多维度筛选条件。
  * 所有数值字段可为 null，表示该条件不限制。
  */
 public record ScreenerCriteriaDto(
@@ -53,6 +54,7 @@ public record ScreenerCriteriaDto(
         String bollPosition,
         Boolean excludeSt,
         Integer maxResults,
-        String sortBy
+        String sortBy,
+        List<String> industries
 ) {
 }

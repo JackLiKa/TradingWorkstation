@@ -3,6 +3,9 @@ package com.quantization.module.screener;
 import com.quantization.module.indicator.IndicatorSnapshot;
 import com.quantization.module.screener.dto.ScreenerCriteriaDto;
 
+import java.util.List;
+import java.util.Map;
+
 /**
  * 候选与条件的匹配判定（与原 Python _candidate_matches_criteria 对齐）。
  */
@@ -10,7 +13,16 @@ public final class ScreenerFilters {
     private ScreenerFilters() {}
 
     public static boolean matches(IndicatorSnapshot s, ScreenerCriteriaDto c) {
+        return matches(s, c, Map.of());
+    }
+
+    public static boolean matches(IndicatorSnapshot s, ScreenerCriteriaDto c, Map<String, String> industryMap) {
         if (Boolean.TRUE.equals(c.excludeSt()) && s.isSt()) return false;
+        List<String> industries = c.industries();
+        if (industries != null && !industries.isEmpty()) {
+            String stockIndustry = industryMap.get(s.code());
+            if (stockIndustry == null || !industries.contains(stockIndustry)) return false;
+        }
         if (!between(s.closePrice(), c.minClose(), c.maxClose())) return false;
         if (!between(s.pctChange(), c.minPctChange(), c.maxPctChange())) return false;
         if (!between(s.turn(), c.minTurn(), c.maxTurn())) return false;

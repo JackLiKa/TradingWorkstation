@@ -4,13 +4,18 @@ import com.quantization.module.screener.dto.ScreenedStockDto;
 import com.quantization.module.screener.dto.ScreenerCriteriaDto;
 import com.quantization.module.screener.dto.ScreenerResultDto;
 import com.quantization.module.stock.StockDaily;
+import com.quantization.module.stock.StockIndustryRepository;
 import com.quantization.module.stock.StockService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * 选股服务，拉取区间行情数据，按条件筛选并排序，生成选股结果和摘要日志。
@@ -23,10 +28,12 @@ public class ScreenerService {
 
     private final StockService stockService;
     private final ScreenerCore screenerCore;
+    private final StockIndustryRepository industryRepository;
 
-    public ScreenerService(StockService stockService, ScreenerCore screenerCore) {
+    public ScreenerService(StockService stockService, ScreenerCore screenerCore, StockIndustryRepository industryRepository) {
         this.stockService = stockService;
         this.screenerCore = screenerCore;
+        this.industryRepository = industryRepository;
     }
 
     /**
@@ -57,7 +64,10 @@ public class ScreenerService {
             if (endIdx > 1 && dates.get(endIdx - 1).equals(screenDate)) scanned++;
         }
 
-        List<ScreenedStockDto> candidates = screenerCore.screenAt(grouped, screenDate, criteria, criteria.maxResults());
+        // 若指定了行業篩選，批量查詢最新行業分類
+        Map<String, String> industryMap = buildIndustryMap(criteria.industries(), grouped.histories().keySet());
+
+        List<ScreenedStockDto> candidates = screenerCore.screenAt(grouped, screenDate, criteria, criteria.maxResults(), industryMap);
         List<String> summary = buildSummary(criteria, screenDate, scanned, candidates);
         return new ScreenerResultDto(criteria, screenDate, scanned, candidates.size(), candidates, summary);
     }
@@ -81,6 +91,19 @@ public class ScreenerService {
             lines.add("当前条件过严，没有命中股票。建议放宽区间或信号限制。");
         }
         return lines;
+    }
+
+    private Map<String, String> buildIndustryMap(List<String> requested, Set<String> codes) {
+        if (requested == null || requested.isEmpty() || codes == null || codes.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> map = new HashMap<>();
+        for (Object[] row : industryRepository.findLatestIndustriesByCode(new ArrayList<>(codes))) {
+            if (row[0] != null && row[1] != null) {
+                map.put(row[0].toString(), row[1].toString());
+            }
+        }
+        return map;
     }
 
     private String describeSortField(String sortBy) {
@@ -152,6 +175,9 @@ public class ScreenerService {
         if (Boolean.TRUE.equals(c.priceAboveMa60())) labels.add("收盘价站上MA60");
         if (Boolean.TRUE.equals(c.ma5AboveMa20())) labels.add("MA5高于MA20");
         if (Boolean.TRUE.equals(c.ma20AboveMa60())) labels.add("MA20高于MA60");
+        if (c.industries() != null && !c.industries().isEmpty()) {
+            labels.add("行業=" + String.join(",", c.industries()));
+        }
         return labels.isEmpty() ? List.of("默认全市场筛选") : labels;
     }
 
@@ -203,7 +229,8 @@ public class ScreenerService {
                 r.bollPosition() == null ? "any" : r.bollPosition(),
                 r.excludeSt() == null ? true : r.excludeSt(),
                 r.maxResults() == null ? 100 : r.maxResults(),
-                r.sortBy() == null ? "score" : r.sortBy()
+                r.sortBy() == null ? "score" : r.sortBy(),
+                r.industries() == null ? List.of() : r.industries()
         );
     }
 }
