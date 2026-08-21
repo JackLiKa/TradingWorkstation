@@ -308,7 +308,6 @@ curl http://localhost:8100/api/agent/health
 - [ECharts](https://echarts.apache.org/) — 图表库
 - [shadcn/ui](https://ui.shadcn.com/) — UI 组件设计
 - [FastAPI](https://fastapi.tiangolo.com/) — Agent 服务框架
-- 原 [Quantization](https://github.com/JackLiKa/Quantization.git) PySide6 桌面端项目
 
 ## Star History
 
