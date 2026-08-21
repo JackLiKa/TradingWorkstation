@@ -9,7 +9,9 @@ import com.quantization.module.stock.dto.IndexMetadataDto;
 import com.quantization.module.stock.dto.MarketBreadthDto;
 import com.quantization.module.stock.dto.RotationPredictionDto;
 import com.quantization.module.stock.dto.RotationBacktestDto;
+import com.quantization.module.stock.dto.RotationAutoMlDto;
 import com.quantization.module.stock.dto.ProsperityAlertDto;
+import com.quantization.module.stock.dto.ProsperitySeasonalityDto;
 import com.quantization.module.stock.dto.RotationSignalDto;
 import com.quantization.module.stock.dto.SectorPerformanceDto;
 import com.quantization.module.stock.dto.SearchResultDto;
@@ -960,6 +962,83 @@ public class StockService {
         return ranked.stream().limit(topN).map(Map.Entry::getKey).toList();
     }
 
+    /**
+     * 輪動預測 AutoML 自動調參 — 自動尋找最佳 lookbackDays × forwardDays 組合。
+     *
+     * 搜尋空間：
+     * - lookbackDays: [5, 10, 15, 20, 30]
+     * - forwardDays: [3, 5, 10]
+     * 共 15 組合，每組用 backtestDays 回測。
+     *
+     * 評分公式：compositeScore = hitRate * 0.6 + excessReturnNormalized * 0.4
+     *
+     * @param backtestDays 回測總天數（默認 90）
+     * @return AutoML 結果 DTO
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'rotation-automl-' + #p0")
+    public RotationAutoMlDto autoTuneRotationPrediction(int backtestDays) {
+        int[] lookbackOptions = {5, 10, 15, 20, 30};
+        int[] forwardOptions = {3, 5, 10};
+
+        List<RotationAutoMlDto.ParamCombination> combinations = new ArrayList<>();
+
+        for (int lookback : lookbackOptions) {
+            for (int forward : forwardOptions) {
+                RotationBacktestDto bt = backtestRotationPrediction(lookback, forward, backtestDays);
+                if (bt.totalPredictions() == 0) {
+                    combinations.add(new RotationAutoMlDto.ParamCombination(
+                            lookback, forward, 0, 0, 0, 0, 0));
+                    continue;
+                }
+                combinations.add(new RotationAutoMlDto.ParamCombination(
+                        lookback, forward,
+                        bt.hitRate(), bt.avgExcessReturn(), bt.avgLeaderReturn(),
+                        bt.totalPredictions(), 0 // compositeScore 稍後計算
+                ));
+            }
+        }
+
+        // 標準化超額收益到 0-100
+        double minExcess = combinations.stream().mapToDouble(c -> c.avgExcessReturn()).min().orElse(0);
+        double maxExcess = combinations.stream().mapToDouble(c -> c.avgExcessReturn()).max().orElse(0);
+
+        // 計算綜合評分
+        List<RotationAutoMlDto.ParamCombination> scored = new ArrayList<>();
+        for (RotationAutoMlDto.ParamCombination c : combinations) {
+            double excessNorm = normalize(c.avgExcessReturn(), minExcess, maxExcess);
+            double composite = c.hitRate() * 0.6 + excessNorm * 0.4;
+            scored.add(new RotationAutoMlDto.ParamCombination(
+                    c.lookbackDays(), c.forwardDays(),
+                    c.hitRate(), c.avgExcessReturn(), c.avgLeaderReturn(),
+                    c.totalPredictions(),
+                    Math.round(composite * 100.0) / 100.0
+            ));
+        }
+
+        // 按綜合評分排序
+        scored.sort((a, b) -> Double.compare(b.compositeScore(), a.compositeScore()));
+
+        RotationAutoMlDto.ParamCombination best = scored.isEmpty() ? null : scored.get(0);
+
+        String summary = best == null
+                ? "數據不足，無法調參"
+                : String.format(
+                        "最佳參數：lookback=%d日, forward=%d日。命中率 %.1f%%，超額收益 %.3f%%，綜合評分 %.1f。",
+                        best.lookbackDays(), best.forwardDays(),
+                        best.hitRate(), best.avgExcessReturn(), best.compositeScore()
+                );
+
+        return new RotationAutoMlDto(
+                best == null ? 0 : best.lookbackDays(),
+                best == null ? 0 : best.forwardDays(),
+                best == null ? 0 : best.hitRate(),
+                best == null ? 0 : best.avgExcessReturn(),
+                best == null ? 0 : best.compositeScore(),
+                summary,
+                scored
+        );
+    }
+
     /** 將值標準化到 0-100 區間。 */
     private static double normalize(double value, double min, double max) {
         if (max == min) {
@@ -1236,6 +1315,160 @@ public class StockService {
         );
 
         return new ProsperityAlertDto(latestDate.toString(), alerts, summary);
+    }
+
+    /**
+     * 行業景氣度週期性分析 — 檢測季節性模式與週期規律。
+     *
+     * 分析維度：
+     * 1. 月度模式：各行業在每個月的平均景氣度（1-12月）
+     * 2. 星期模式：各行業在每個星期的平均景氣度（週一至週五）
+     * 3. 季節性強度：月度方差 / 總方差（0-1，越高季節性越明顯）
+     * 4. 最佳/最差月份
+     *
+     * @param months 分析回溯月數（默認 12）
+     * @return 週期性分析 DTO
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'prosperity-seasonality-' + #p0")
+    public ProsperitySeasonalityDto prosperitySeasonality(int months) {
+        LocalDate end = LocalDate.now();
+        LocalDate start = end.minusMonths(months);
+
+        List<IndustryDailyEntity> entities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(start, end);
+
+        if (entities.isEmpty()) {
+            return new ProsperitySeasonalityDto(
+                    start + " ~ " + end, 0, Map.of(), "數據不足，無法分析週期性");
+        }
+
+        // 按行業分組
+        Map<String, List<IndustryDailyEntity>> byIndustry = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : entities) {
+            byIndustry.computeIfAbsent(e.getIndustry(), k -> new ArrayList<>()).add(e);
+        }
+
+        // 按日期分組（用於計算每日景氣度）
+        Map<LocalDate, List<IndustryDailyEntity>> byDate = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : entities) {
+            byDate.computeIfAbsent(e.getTradeDate(), k -> new ArrayList<>()).add(e);
+        }
+
+        // 預計算每個交易日的景氣度 Map
+        Map<LocalDate, Map<String, Double>> dailyProsperity = new LinkedHashMap<>();
+        for (Map.Entry<LocalDate, List<IndustryDailyEntity>> entry : byDate.entrySet()) {
+            dailyProsperity.put(entry.getKey(), computeProsperityMap(entry.getValue()));
+        }
+
+        Map<String, ProsperitySeasonalityDto.MonthlyPattern> industryPatterns = new LinkedHashMap<>();
+
+        for (String industry : byIndustry.keySet()) {
+            // 收集該行業所有交易日的景氣度
+            List<double[]> monthValues = new ArrayList<>(); // [month, prosperity]
+            List<double[]> weekdayValues = new ArrayList<>(); // [weekday, prosperity]
+            List<Double> allValues = new ArrayList<>();
+
+            for (Map.Entry<LocalDate, Map<String, Double>> dp : dailyProsperity.entrySet()) {
+                Double val = dp.getValue().get(industry);
+                if (val == null) continue;
+
+                int month = dp.getKey().getMonthValue();
+                int weekday = dp.getKey().getDayOfWeek().getValue(); // 1=Monday, 7=Sunday
+
+                monthValues.add(new double[]{month, val});
+                weekdayValues.add(new double[]{weekday, val});
+                allValues.add(val);
+            }
+
+            if (allValues.isEmpty()) continue;
+
+            // 計算月度平均
+            Map<Integer, Double> monthlyAvg = new LinkedHashMap<>();
+            Map<Integer, List<Double>> monthlyBuckets = new LinkedHashMap<>();
+            for (double[] mv : monthValues) {
+                int m = (int) mv[0];
+                monthlyBuckets.computeIfAbsent(m, k -> new ArrayList<>()).add(mv[1]);
+            }
+            for (Map.Entry<Integer, List<Double>> me : monthlyBuckets.entrySet()) {
+                double avg = me.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0);
+                monthlyAvg.put(me.getKey(), Math.round(avg * 100.0) / 100.0);
+            }
+
+            // 計算星期平均
+            Map<Integer, Double> weekdayAvg = new LinkedHashMap<>();
+            Map<Integer, List<Double>> weekdayBuckets = new LinkedHashMap<>();
+            for (double[] wv : weekdayValues) {
+                int w = (int) wv[0];
+                if (w <= 5) { // 只取週一至週五
+                    weekdayBuckets.computeIfAbsent(w, k -> new ArrayList<>()).add(wv[1]);
+                }
+            }
+            for (Map.Entry<Integer, List<Double>> we : weekdayBuckets.entrySet()) {
+                double avg = we.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0);
+                weekdayAvg.put(we.getKey(), Math.round(avg * 100.0) / 100.0);
+            }
+
+            // 找最佳/最差月份
+            int bestMonth = 1, worstMonth = 1;
+            double bestAvg = -1, worstAvg = 999;
+            for (Map.Entry<Integer, Double> me : monthlyAvg.entrySet()) {
+                if (me.getValue() > bestAvg) {
+                    bestAvg = me.getValue();
+                    bestMonth = me.getKey();
+                }
+                if (me.getValue() < worstAvg) {
+                    worstAvg = me.getValue();
+                    worstMonth = me.getKey();
+                }
+            }
+
+            // 計算季節性強度（月度方差 / 總方差）
+            double overallAvg = allValues.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+            double totalVariance = allValues.stream()
+                    .mapToDouble(v -> Math.pow(v - overallAvg, 2)).sum() / allValues.size();
+            double monthlyVariance = 0;
+            for (Map.Entry<Integer, List<Double>> me : monthlyBuckets.entrySet()) {
+                double mAvg = me.getValue().stream().mapToDouble(Double::doubleValue).average().orElse(0);
+                monthlyVariance += me.getValue().size() * Math.pow(mAvg - overallAvg, 2);
+            }
+            monthlyVariance /= allValues.size();
+            double seasonalityStrength = totalVariance > 0 ? monthlyVariance / totalVariance : 0;
+            seasonalityStrength = Math.min(1.0, Math.max(0.0, seasonalityStrength));
+
+            industryPatterns.put(industry, new ProsperitySeasonalityDto.MonthlyPattern(
+                    industry,
+                    monthlyAvg,
+                    weekdayAvg,
+                    bestMonth, worstMonth,
+                    Math.round(bestAvg * 100.0) / 100.0,
+                    Math.round(worstAvg * 100.0) / 100.0,
+                    Math.round(seasonalityStrength * 1000.0) / 1000.0,
+                    Math.round(overallAvg * 100.0) / 100.0
+            ));
+        }
+
+        // 找出季節性最強的行業
+        List<Map.Entry<String, ProsperitySeasonalityDto.MonthlyPattern>> sortedBySeasonality =
+                new ArrayList<>(industryPatterns.entrySet());
+        sortedBySeasonality.sort((a, b) -> Double.compare(
+                b.getValue().seasonalityStrength(), a.getValue().seasonalityStrength()));
+
+        String summary = String.format(
+                "分析區間 %s ~ %s，共 %d 個數據點，%d 個行業。" +
+                "季節性最強：%s（強度 %.2f，最佳月份 %d月，最差月份 %d月）。",
+                start, end, entities.size(), industryPatterns.size(),
+                sortedBySeasonality.isEmpty() ? "無" : sortedBySeasonality.get(0).getKey(),
+                sortedBySeasonality.isEmpty() ? 0 : sortedBySeasonality.get(0).getValue().seasonalityStrength(),
+                sortedBySeasonality.isEmpty() ? 0 : sortedBySeasonality.get(0).getValue().bestMonth(),
+                sortedBySeasonality.isEmpty() ? 0 : sortedBySeasonality.get(0).getValue().worstMonth()
+        );
+
+        return new ProsperitySeasonalityDto(
+                start + " ~ " + end,
+                entities.size(),
+                industryPatterns,
+                summary
+        );
     }
 
     /** 計算指定日期列表的景氣度 Map（industry -> prosperityIndex）。 */

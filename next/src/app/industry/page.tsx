@@ -16,8 +16,10 @@ import { IndustryCapitalFlowSankey } from '@/components/industry/IndustryCapital
 import { ProsperityBenchmarkCompare } from '@/components/industry/ProsperityBenchmarkCompare';
 import { RotationPredictionChart } from '@/components/industry/RotationPredictionChart';
 import { RotationBacktestChart } from '@/components/industry/RotationBacktestChart';
+import { RotationAutoMlPanel } from '@/components/industry/RotationAutoMlPanel';
 import { ProsperityHeatmapMatrix } from '@/components/industry/ProsperityHeatmapMatrix';
 import { ProsperityAlertsPanel } from '@/components/industry/ProsperityAlertsPanel';
+import { ProsperitySeasonalityPanel } from '@/components/industry/ProsperitySeasonalityPanel';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
@@ -42,6 +44,7 @@ import {
   Layers,
   Target,
   AlertTriangle,
+  Zap,
 } from 'lucide-react';
 import type { IndustryDailyDto, IndexDailyDto } from '@/lib/api/types';
 import { agentApi, type IndustryNewsItem } from '@/lib/api/agent';
@@ -61,8 +64,10 @@ type ViewType =
   | 'prosperityBenchmark'
   | 'rotationPrediction'
   | 'rotationBacktest'
+  | 'rotationAutoMl'
   | 'prosperityHeatmap'
-  | 'prosperityAlerts';
+  | 'prosperityAlerts'
+  | 'prosperitySeasonality';
 
 /** 視圖分組 */
 type ViewGroup = 'snapshot' | 'trend' | 'advanced';
@@ -90,8 +95,10 @@ const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp; group: Vie
   { key: 'prosperityBenchmark', label: '景氣度vs大盤', icon: Layers, group: 'advanced' },
   { key: 'rotationPrediction', label: '輪動預測', icon: Sparkles, group: 'advanced' },
   { key: 'rotationBacktest', label: '預測回測', icon: Target, group: 'advanced' },
+  { key: 'rotationAutoMl', label: 'AutoML調參', icon: Zap, group: 'advanced' },
   { key: 'prosperityHeatmap', label: '景氣度熱力圖', icon: Grid3x3, group: 'advanced' },
   { key: 'prosperityAlerts', label: '景氣度預警', icon: AlertTriangle, group: 'advanced' },
+  { key: 'prosperitySeasonality', label: '景氣度週期', icon: Calendar, group: 'advanced' },
 ];
 
 function formatDateInput(d: Date) {
@@ -222,8 +229,10 @@ export default function IndustryPage() {
     if (view === 'prosperityBenchmark') return <ProsperityBenchmarkCompare rangeStart={rangeStart} rangeEnd={rangeEnd} />;
     if (view === 'rotationPrediction') return <RotationPredictionChart />;
     if (view === 'rotationBacktest') return <RotationBacktestChart />;
+    if (view === 'rotationAutoMl') return <RotationAutoMlPanel />;
     if (view === 'prosperityHeatmap') return <ProsperityHeatmapMatrix rangeStart={rangeStart} rangeEnd={rangeEnd} />;
     if (view === 'prosperityAlerts') return <ProsperityAlertsPanel />;
+    if (view === 'prosperitySeasonality') return <ProsperitySeasonalityPanel />;
     return null;
   };
 

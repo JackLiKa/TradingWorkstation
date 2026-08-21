@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import type { ProsperityAlertDto } from '@/lib/api/types';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { RefreshCw, AlertTriangle, TrendingUp, TrendingDown, ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
+import { RefreshCw, AlertTriangle, TrendingUp, TrendingDown, ArrowUpCircle, ArrowDownCircle, Bell, Mail } from 'lucide-react';
 
 const THRESHOLD_OPTIONS = [5.0, 10.0, 15.0, 20.0];
 
@@ -25,6 +25,8 @@ const SEVERITY_CONFIG: Record<string, { label: string; color: string }> = {
 
 export function ProsperityAlertsPanel() {
   const [threshold, setThreshold] = useState(10.0);
+  const [notifySending, setNotifySending] = useState(false);
+  const [notifyResult, setNotifyResult] = useState<string | null>(null);
 
   const key = `/stock/industry-prosperity/alerts?threshold=${threshold}`;
   const { data, error, isLoading, mutate, isValidating } = useSWR<ProsperityAlertDto>(
@@ -32,6 +34,20 @@ export function ProsperityAlertsPanel() {
     () => api.prosperityAlerts(threshold),
     { revalidateOnFocus: false, dedupingInterval: 60_000 }
   );
+
+  const handleSendNotification = async () => {
+    setNotifySending(true);
+    setNotifyResult(null);
+    try {
+      const result = await api.prosperityAlerts(threshold, true);
+      setNotifyResult(`已觸發通知（${result.alerts.length} 條預警），郵件/Webhook 將異步發送。`);
+    } catch (e) {
+      setNotifyResult(`通知發送失敗：${String(e)}`);
+    } finally {
+      setNotifySending(false);
+      setTimeout(() => setNotifyResult(null), 5000);
+    }
+  };
 
   const stats = useMemo(() => {
     if (!data || !data.alerts) return null;
@@ -67,7 +83,29 @@ export function ProsperityAlertsPanel() {
           <RefreshCw className={`w-3 h-3 ${isValidating ? 'animate-spin' : ''}`} />
           刷新
         </button>
+        {data && data.alerts.length > 0 && (
+          <button
+            onClick={handleSendNotification}
+            disabled={notifySending}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50"
+          >
+            {notifySending ? (
+              <RefreshCw className="w-3 h-3 animate-spin" />
+            ) : (
+              <Bell className="w-3 h-3" />
+            )}
+            發送通知
+          </button>
+        )}
       </div>
+
+      {/* 通知結果提示 */}
+      {notifyResult && (
+        <div className="rounded-md border border-accent/30 bg-accent/5 p-2 text-xs text-accent flex items-center gap-2">
+          <Mail className="w-3 h-3" />
+          {notifyResult}
+        </div>
+      )}
 
       {/* 統計摘要 */}
       {stats && (

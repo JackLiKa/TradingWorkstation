@@ -16,7 +16,9 @@ import type {
   IndustryProsperityDto,
   RotationPredictionDto,
   RotationBacktestDto,
+  RotationAutoMlDto,
   ProsperityAlertDto,
+  ProsperitySeasonalityDto,
   CandlestickDto,
   ScreenerResultDto,
   ScreenerCriteriaDto,
@@ -76,9 +78,22 @@ export const api = {
       `/stock/rotation-prediction/backtest?lookbackDays=${lookbackDays}&forwardDays=${forwardDays}&backtestDays=${backtestDays}`
     ),
 
+  // ===== 輪動預測 AutoML 自動調參 =====
+  rotationAutoMl: (backtestDays = 90) =>
+    apiFetch<RotationAutoMlDto>(`/stock/rotation-prediction/automl?backtestDays=${backtestDays}`),
+
   // ===== 行業景氣度異常預警 =====
-  prosperityAlerts: (threshold = 10.0) =>
-    apiFetch<ProsperityAlertDto>(`/stock/industry-prosperity/alerts?threshold=${threshold}`),
+  prosperityAlerts: (threshold = 10.0, notify = false) =>
+    apiFetch<ProsperityAlertDto>(
+      `/stock/industry-prosperity/alerts?threshold=${threshold}${notify ? '&notify=true' : ''}`
+    ),
+
+  // ===== 通知服務測試 =====
+  testNotification: () => apiFetch<string>(`/system/notification/test`),
+
+  // ===== 行業景氣度週期性分析 =====
+  prosperitySeasonality: (months = 12) =>
+    apiFetch<ProsperitySeasonalityDto>(`/stock/industry-prosperity/seasonality?months=${months}`),
 
   // ===== 行業景氣度指標 =====
   industryProsperity: (tradeDate?: string) =>

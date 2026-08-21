@@ -150,6 +150,43 @@ export interface ProsperityAlertDto {
   summary: string;
 }
 
+/** 輪動預測 AutoML 結果 */
+export interface RotationAutoMlDto {
+  bestLookbackDays: number;
+  bestForwardDays: number;
+  bestHitRate: number;
+  bestExcessReturn: number;
+  bestCompositeScore: number;
+  summary: string;
+  combinations: {
+    lookbackDays: number;
+    forwardDays: number;
+    hitRate: number;
+    avgExcessReturn: number;
+    avgLeaderReturn: number;
+    totalPredictions: number;
+    compositeScore: number;
+  }[];
+}
+
+/** 行業景氣度週期性分析 */
+export interface ProsperitySeasonalityDto {
+  analysisPeriod: string;
+  totalDataPoints: number;
+  industries: Record<string, {
+    industry: string;
+    monthlyAvg: Record<number, number>;
+    weekdayAvg: Record<number, number>;
+    bestMonth: number;
+    worstMonth: number;
+    bestMonthAvg: number;
+    worstMonthAvg: number;
+    seasonalityStrength: number;
+    overallAvg: number;
+  }>;
+  summary: string;
+}
+
 /** 漲跌幅最大的熱門股票（用於波動列表展示） */
 export interface HotSymbolDto {
   code: string;

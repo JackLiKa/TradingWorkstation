@@ -22,9 +22,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class SystemController {
 
     private final SystemService systemService;
+    private final NotificationService notificationService;
 
-    public SystemController(SystemService systemService) {
+    public SystemController(SystemService systemService, NotificationService notificationService) {
         this.systemService = systemService;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -59,5 +61,16 @@ public class SystemController {
     @PutMapping("/database")
     public ApiResponse<DatabaseConfigDto> updateConfig(@Valid @RequestBody DatabaseConfigUpdateDto update) {
         return ApiResponse.ok(systemService.updateConfig(update));
+    }
+
+    /**
+     * 測試通知服務（郵件/Webhook 配置驗證）。
+     *
+     * @return 通知服務狀態與測試結果
+     */
+    @Operation(summary = "測試通知服務（郵件/Webhook 配置驗證）")
+    @GetMapping("/notification/test")
+    public ApiResponse<String> testNotification() {
+        return ApiResponse.ok(notificationService.testNotification());
     }
 }

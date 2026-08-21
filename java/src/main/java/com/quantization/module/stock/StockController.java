@@ -6,7 +6,9 @@ import com.quantization.module.stock.dto.IndustryDailyDto;
 import com.quantization.module.stock.dto.IndustryProsperityDto;
 import com.quantization.module.stock.dto.RotationPredictionDto;
 import com.quantization.module.stock.dto.RotationBacktestDto;
+import com.quantization.module.stock.dto.RotationAutoMlDto;
 import com.quantization.module.stock.dto.ProsperityAlertDto;
+import com.quantization.module.stock.dto.ProsperitySeasonalityDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexHistoryBatchRequestDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
@@ -44,16 +46,19 @@ public class StockController {
     private final StockIndustryRepository industryRepository;
     private final IndexDailyRepository indexDailyRepository;
     private final IndexMetadataRepository indexMetadataRepository;
+    private final com.quantization.module.system.NotificationService notificationService;
 
     public StockController(
             StockService stockService,
             StockIndustryRepository industryRepository,
             IndexDailyRepository indexDailyRepository,
-            IndexMetadataRepository indexMetadataRepository) {
+            IndexMetadataRepository indexMetadataRepository,
+            com.quantization.module.system.NotificationService notificationService) {
         this.stockService = stockService;
         this.industryRepository = industryRepository;
         this.indexDailyRepository = indexDailyRepository;
         this.indexMetadataRepository = indexMetadataRepository;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -264,6 +269,19 @@ public class StockController {
     }
 
     /**
+     * 輪動預測 AutoML 自動調參 — 自動尋找最佳 lookback/forward 組合。
+     *
+     * @param backtestDays 回測總天數（默認 90）
+     * @return AutoML 結果 DTO
+     */
+    @Operation(summary = "輪動預測 AutoML 自動調參")
+    @GetMapping("/rotation-prediction/automl")
+    public ApiResponse<RotationAutoMlDto> rotationPredictionAutoMl(
+            @RequestParam(required = false, defaultValue = "90") int backtestDays) {
+        return ApiResponse.ok(stockService.autoTuneRotationPrediction(backtestDays));
+    }
+
+    /**
      * 行業景氣度異常預警 — 檢測景氣度突變與等級躍遷。
      *
      * @param threshold 突變閾值（默認 10.0）
@@ -272,8 +290,42 @@ public class StockController {
     @Operation(summary = "行業景氣度異常預警（突變與等級躍遷）")
     @GetMapping("/industry-prosperity/alerts")
     public ApiResponse<ProsperityAlertDto> prosperityAlerts(
-            @RequestParam(required = false, defaultValue = "10.0") double threshold) {
-        return ApiResponse.ok(stockService.prosperityAlerts(threshold));
+            @RequestParam(required = false, defaultValue = "10.0") double threshold,
+            @RequestParam(required = false, defaultValue = "false") boolean notify) {
+        ProsperityAlertDto result = stockService.prosperityAlerts(threshold);
+        // 若請求通知且有預警，異步發送郵件/Webhook
+        if (notify && !result.alerts().isEmpty()) {
+            java.util.List<java.util.Map<String, Object>> alertMaps = new java.util.ArrayList<>();
+            for (ProsperityAlertDto.AlertEntry a : result.alerts()) {
+                java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                m.put("industry", a.industry());
+                m.put("alertType", a.alertType());
+                m.put("alertTypeName", a.alertTypeName());
+                m.put("severity", a.severity());
+                m.put("message", a.message());
+                m.put("yesterdayProsperity", a.yesterdayProsperity());
+                m.put("todayProsperity", a.todayProsperity());
+                m.put("change", a.change());
+                m.put("yesterdayGrade", a.yesterdayGrade());
+                m.put("todayGrade", a.todayGrade());
+                alertMaps.add(m);
+            }
+            notificationService.sendProsperityAlertNotification(result.analysisDate(), result.summary(), alertMaps);
+        }
+        return ApiResponse.ok(result);
+    }
+
+    /**
+     * 行業景氣度週期性分析 — 檢測季節性模式與週期規律。
+     *
+     * @param months 分析回溯月數（默認 12）
+     * @return 週期性分析 DTO
+     */
+    @Operation(summary = "行業景氣度週期性分析（季節性模式）")
+    @GetMapping("/industry-prosperity/seasonality")
+    public ApiResponse<ProsperitySeasonalityDto> prosperitySeasonality(
+            @RequestParam(required = false, defaultValue = "12") int months) {
+        return ApiResponse.ok(stockService.prosperitySeasonality(months));
     }
 
     // ===== 指數歷史（市場形態識別）=====
