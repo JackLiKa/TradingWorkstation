@@ -378,6 +378,59 @@ class BackendClient:
             logger.warning(f"獲取數據範圍失敗: {e}")
             return None, None
 
+    async def get_industry_daily(self, trade_date: str = None) -> list[dict[str, Any]]:
+        """獲取指定交易日的行業日聚合數據。
+
+        數據來自 industry_daily 表，含行業平均漲跌幅、成交、漲跌家數等。
+
+        Args:
+            trade_date: 交易日期 YYYY-MM-DD，為空時使用最新交易日
+
+        Returns:
+            list[dict]: 行業聚合列表
+        """
+        params = {}
+        if trade_date:
+            params["tradeDate"] = trade_date
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/stock/industry-daily",
+                params=params,
+                timeout=15,
+            )
+            if not data.get("success"):
+                return []
+            return data.get("data", [])
+        except Exception as e:
+            logger.warning(f"獲取行業日聚合失敗: {e}")
+            return []
+
+    async def get_industry_daily_range(self, industry: str, start: str, end: str) -> list[dict[str, Any]]:
+        """獲取指定行業在日期區間內的日聚合數據。
+
+        Args:
+            industry: 行業名稱
+            start: 起始日期 YYYY-MM-DD
+            end: 結束日期 YYYY-MM-DD
+
+        Returns:
+            list[dict]: 行業聚合序列
+        """
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/stock/industry-daily/range",
+                params={"industry": industry, "start": start, "end": end},
+                timeout=15,
+            )
+            if not data.get("success"):
+                return []
+            return data.get("data", [])
+        except Exception as e:
+            logger.warning(f"獲取行業區間聚合失敗: {e}")
+            return []
+
     async def get_industries(self, code: str = None, industry: str = None) -> list[dict[str, Any]]:
         """查詢股票行業分類數據。"""
         params = {}

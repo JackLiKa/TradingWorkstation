@@ -5,7 +5,8 @@
 2. 騰訊財經 qt.gtimg.cn — 備用指數行情
 3. 後端 dashboard API — 數據庫中的股票統計
 4. 後端 sector-performance API — 多日板塊表現（10日行情分析）
-5. 東方財富 np-listapi.eastmoney.com — 財經新聞抓取
+5. 後端 industry-daily API — 行業日聚合（行業漲跌/成交/漲跌家數）
+6. 東方財富 np-listapi.eastmoney.com — 財經新聞抓取
 
 所有數據源都是公共免費 API，無需 API Key。
 """
@@ -51,6 +52,7 @@ class MarketDataClient:
                 "market_breadth": {...},  # 綜合/規模/風格廣度（10大類指數）
                 "rotation": {...},  # 行業與風格輪動信號
                 "sector_performance": [...],  # 多日板塊表現（10日）
+                "industry_daily": [...],  # 最新交易日行業聚合（漲跌/成交/家數）
                 "news": [...],  # 財經新聞列表
                 "timestamp": "2026-08-18 22:30:00",
             }
@@ -76,6 +78,9 @@ class MarketDataClient:
         # 獲取多日板塊表現（10日）
         sector_performance = await self._get_sector_performance_multi_day(10)
 
+        # 獲取最新交易日行業聚合
+        industry_daily = await self._get_industry_daily()
+
         # 獲取財經新聞
         news = await self._get_market_news()
 
@@ -86,6 +91,7 @@ class MarketDataClient:
             "market_breadth": market_breadth,
             "rotation": rotation,
             "sector_performance": sector_performance,
+            "industry_daily": industry_daily,
             "news": news,
             "timestamp": _now_str(),
         }
@@ -390,6 +396,40 @@ class MarketDataClient:
         except Exception as e:
             logger.warning(f"輪動信號獲取失敗: {e}")
             return {}
+
+    async def _get_industry_daily(self, trade_date: str = None) -> list[dict[str, Any]]:
+        """從後端獲取行業日聚合數據（行業漲跌/成交/漲跌家數）。
+
+        用於識別當日強弱行業、行業熱度與資金流向。
+
+        Args:
+            trade_date: 交易日期 YYYY-MM-DD，為空時使用最新交易日
+
+        Returns:
+            list[dict]: 行業聚合列表，每項含 tradeDate/industry/avgPctChg/
+                        totalAmount/risingCount/fallingCount/stockCount 等
+        """
+        try:
+            from app.services.backend_client import backend_client
+
+            data = await backend_client.get_industry_daily(trade_date)
+            logger.info(f"獲取 {len(data)} 條行業日聚合數據")
+            return data
+        except Exception as e:
+            logger.warning(f"行業日聚合獲取失敗: {e}")
+            return []
+
+    async def _get_industry_daily_range(self, industry: str, start: str, end: str) -> list[dict[str, Any]]:
+        """從後端獲取指定行業在日期區間內的聚合數據。"""
+        try:
+            from app.services.backend_client import backend_client
+
+            data = await backend_client.get_industry_daily_range(industry, start, end)
+            logger.info(f"獲取 {industry} 區間 {start}~{end} 共 {len(data)} 條")
+            return data
+        except Exception as e:
+            logger.warning(f"行業區間聚合獲取失敗: {e}")
+            return []
 
     async def _get_market_news(self, page_size: int = 20) -> list[dict[str, Any]]:
         """從東方財經抓取最新財經新聞（A股市場要聞）。

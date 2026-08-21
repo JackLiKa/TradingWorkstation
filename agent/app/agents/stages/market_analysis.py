@@ -49,6 +49,9 @@ PROMPT_TEMPLATE = """請分析當前 A 股市場環境，識別市場形態並�
 {breadth_text}
 {rotation_text}
 
+## 行業日聚合（最新交易日）
+{industry_text}
+
 ## 歷史優化記錄
 {history_text}
 
@@ -106,6 +109,10 @@ class MarketAnalysisStage(BaseStage):
         breadth_text = _format_market_breadth(market_breadth)
         rotation_text = _format_rotation(rotation)
 
+        # 獲取最新交易日行業聚合
+        industry_daily = await market_data_client._get_industry_daily()
+        industry_text = _format_industry_daily(industry_daily)
+
         # 構建歷史摘要
         history_text = ""
         for h in history[-3:]:
@@ -122,6 +129,7 @@ class MarketAnalysisStage(BaseStage):
             regime_days=regime_days,
             breadth_text=breadth_text,
             rotation_text=rotation_text,
+            industry_text=industry_text,
             history_text=history_text if history_text else "無（首輪）",
             prev_reflection=prev_reflection if prev_reflection else "無（首輪）",
             few_shot=get_few_shot("market_analysis"),
@@ -164,5 +172,26 @@ def _format_regime(regime: dict) -> str:
             pct = d.get("pct_chg", 0)
             arrow = "↑" if pct > 0 else "↓" if pct < 0 else "→"
             lines.append(f"  {date}: 收盤{close} {arrow} {pct}%")
+
+    return "\n".join(lines)
+
+
+def _format_industry_daily(data: list[dict[str, Any]]) -> str:
+    """格式化行業日聚合數據為 prompt 可讀文本。"""
+    if not data:
+        return "數據不足，無法提供行業聚合"
+
+    lines = [f"交易日: {data[0].get('tradeDate', '')}", ""]
+    lines.append("行業名稱 | 平均漲跌幅(%) | 上漲家數 | 下跌家數 | 總成交金額 | 個股數")
+    for item in data[:30]:  # 限制前 30 個行業避免 token 過多
+        industry = item.get("industry", "")
+        avg = item.get("avgPctChg")
+        avg_str = f"{avg:.4f}" if avg is not None else "N/A"
+        rising = item.get("risingCount", 0)
+        falling = item.get("fallingCount", 0)
+        amount = item.get("totalAmount")
+        amount_str = f"{amount:.2f}" if amount is not None else "N/A"
+        count = item.get("stockCount", 0)
+        lines.append(f"{industry} | {avg_str} | {rising} | {falling} | {amount_str} | {count}")
 
     return "\n".join(lines)
