@@ -455,6 +455,32 @@ class BackendClient:
             logger.warning(f"獲取全部行業區間聚合失敗: {e}")
             return []
 
+    async def get_industry_prosperity(self, trade_date: str = None) -> list[dict[str, Any]]:
+        """獲取行業景氣度指標（綜合評分）。
+
+        Args:
+            trade_date: 交易日期 YYYY-MM-DD，為空時取最新交易日
+
+        Returns:
+            list[dict]: 行業景氣度列表（按 prosperityIndex 倒序）
+        """
+        try:
+            params = {}
+            if trade_date:
+                params["tradeDate"] = trade_date
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/stock/industry-prosperity",
+                params=params,
+                timeout=15,
+            )
+            if not data.get("success"):
+                return []
+            return data.get("data", [])
+        except Exception as e:
+            logger.warning(f"獲取行業景氣度失敗: {e}")
+            return []
+
     async def get_industries(self, code: str = None, industry: str = None) -> list[dict[str, Any]]:
         """查詢股票行業分類數據。"""
         params = {}

@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -507,6 +508,107 @@ public class StockService {
             return 50.0; // 所有值相同時給中間分
         }
         return (value - min) / (max - min) * 100.0;
+    }
+
+    /**
+     * 計算日期區間內每個交易日的行業景氣度（用於歷史趨勢圖）。
+     *
+     * @param start 起始日期
+     * @param end   結束日期
+     * @param topN  每個日期返回的行業數（按景氣度倒序），默認 15
+     * @return 行業景氣度 DTO 列表（按日期升序、景氣度倒序）
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'prosperity-range-' + #p0 + '-' + #p1 + '-' + #p2")
+    public List<IndustryProsperityDto> industryProsperityRange(LocalDate start, LocalDate end, int topN) {
+        List<IndustryDailyEntity> allEntities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(start, end);
+
+        if (allEntities.isEmpty()) {
+            return List.of();
+        }
+
+        // 按日期分組
+        Map<LocalDate, List<IndustryDailyEntity>> byDate = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : allEntities) {
+            byDate.computeIfAbsent(e.getTradeDate(), k -> new ArrayList<>()).add(e);
+        }
+
+        List<IndustryProsperityDto> result = new ArrayList<>();
+        for (Map.Entry<LocalDate, List<IndustryDailyEntity>> entry : byDate.entrySet()) {
+            List<IndustryDailyEntity> entities = entry.getValue();
+
+            // 提取各維度數據用於標準化
+            double[] pctChgs = entities.stream()
+                    .mapToDouble(e -> e.getAvgPctChg() != null ? e.getAvgPctChg().doubleValue() : 0.0)
+                    .toArray();
+            double[] amounts = entities.stream()
+                    .mapToDouble(e -> e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0)
+                    .toArray();
+            double[] turns = entities.stream()
+                    .mapToDouble(e -> e.getAvgTurn() != null ? e.getAvgTurn().doubleValue() : 0.0)
+                    .toArray();
+            double[] breadths = entities.stream()
+                    .mapToDouble(e -> {
+                        int rising = e.getRisingCount() != null ? e.getRisingCount() : 0;
+                        int falling = e.getFallingCount() != null ? e.getFallingCount() : 0;
+                        int total = rising + falling;
+                        return total > 0 ? (double) rising / total * 100.0 : 50.0;
+                    })
+                    .toArray();
+
+            double pctMin = min(pctChgs), pctMax = max(pctChgs);
+            double amtMin = min(amounts), amtMax = max(amounts);
+            double turnMin = min(turns), turnMax = max(turns);
+            double breadthMin = min(breadths), breadthMax = max(breadths);
+
+            List<IndustryProsperityDto> dayResults = entities.stream().map(e -> {
+                double pctChg = e.getAvgPctChg() != null ? e.getAvgPctChg().doubleValue() : 0.0;
+                double amount = e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0;
+                double turn = e.getAvgTurn() != null ? e.getAvgTurn().doubleValue() : 0.0;
+                int rising = e.getRisingCount() != null ? e.getRisingCount() : 0;
+                int falling = e.getFallingCount() != null ? e.getFallingCount() : 0;
+                int total = rising + falling;
+                double breadth = total > 0 ? (double) rising / total * 100.0 : 50.0;
+
+                double momentumScore = normalize(pctChg, pctMin, pctMax);
+                double capitalScore = normalize(amount, amtMin, amtMax);
+                double activityScore = normalize(turn, turnMin, turnMax);
+                double breadthScore = normalize(breadth, breadthMin, breadthMax);
+
+                double prosperityIndex = momentumScore * 0.35
+                        + capitalScore * 0.25
+                        + activityScore * 0.20
+                        + breadthScore * 0.20;
+
+                String grade = prosperityIndex >= 80 ? "繁榮"
+                        : prosperityIndex >= 65 ? "景氣"
+                        : prosperityIndex >= 50 ? "平穩"
+                        : prosperityIndex >= 35 ? "低迷"
+                        : "衰退";
+
+                return new IndustryProsperityDto(
+                        e.getTradeDate(),
+                        e.getIndustry(),
+                        pctChg,
+                        amount,
+                        turn,
+                        rising,
+                        falling,
+                        Math.round(momentumScore * 100.0) / 100.0,
+                        Math.round(capitalScore * 100.0) / 100.0,
+                        Math.round(activityScore * 100.0) / 100.0,
+                        Math.round(breadthScore * 100.0) / 100.0,
+                        Math.round(prosperityIndex * 100.0) / 100.0,
+                        grade
+                );
+            }).sorted((a, b) -> Double.compare(b.prosperityIndex(), a.prosperityIndex()))
+                    .limit(topN)
+                    .toList();
+
+            result.addAll(dayResults);
+        }
+
+        return result;
     }
 
     private static double min(double[] arr) {

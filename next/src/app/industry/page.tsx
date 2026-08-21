@@ -11,25 +11,68 @@ import { RotationHistoryChart } from '@/components/industry/RotationHistoryChart
 import { IndustryCorrelationHeatmap } from '@/components/industry/IndustryCorrelationHeatmap';
 import { IndustryCapitalFlowTrend } from '@/components/industry/IndustryCapitalFlowTrend';
 import { IndustryProsperityChart } from '@/components/industry/IndustryProsperityChart';
+import { IndustryProsperityTrend } from '@/components/industry/IndustryProsperityTrend';
+import { IndustryCapitalFlowSankey } from '@/components/industry/IndustryCapitalFlowSankey';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
-import { Calendar, RefreshCw, TrendingUp, DollarSign, BarChart3, Activity, RotateCcw, BarChart2, Newspaper, RefreshCcw, Grid3x3, Waves, Gauge } from 'lucide-react';
+import {
+  Calendar,
+  RefreshCw,
+  TrendingUp,
+  DollarSign,
+  BarChart3,
+  Activity,
+  RotateCcw,
+  BarChart2,
+  Newspaper,
+  RefreshCcw,
+  Grid3x3,
+  Waves,
+  Gauge,
+  GitBranch,
+  LayoutGrid,
+  LineChart,
+} from 'lucide-react';
 import type { IndustryDailyDto, IndexDailyDto } from '@/lib/api/types';
 import { agentApi, type IndustryNewsItem } from '@/lib/api/agent';
 
 /** 可視化類型 */
-type ViewType = 'heatmap' | 'capital' | 'risingFalling' | 'trend' | 'rotation' | 'correlation' | 'capitalTrend' | 'prosperity';
+type ViewType =
+  | 'heatmap'
+  | 'capital'
+  | 'risingFalling'
+  | 'prosperity'
+  | 'trend'
+  | 'rotation'
+  | 'capitalTrend'
+  | 'prosperityTrend'
+  | 'correlation'
+  | 'capitalMigration';
 
-const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp }[] = [
-  { key: 'heatmap', label: '行業熱力圖', icon: TrendingUp },
-  { key: 'capital', label: '資金流向', icon: DollarSign },
-  { key: 'risingFalling', label: '漲跌家數', icon: BarChart3 },
-  { key: 'trend', label: '行業走勢', icon: Activity },
-  { key: 'rotation', label: '輪動信號', icon: RefreshCcw },
-  { key: 'correlation', label: '相關性矩陣', icon: Grid3x3 },
-  { key: 'capitalTrend', label: '資金趨勢', icon: Waves },
-  { key: 'prosperity', label: '景氣度', icon: Gauge },
+/** 視圖分組 */
+type ViewGroup = 'snapshot' | 'trend' | 'advanced';
+
+const VIEW_GROUPS: { group: ViewGroup; label: string; icon: typeof LayoutGrid }[] = [
+  { group: 'snapshot', label: '即時概覽', icon: LayoutGrid },
+  { group: 'trend', label: '歷史趨勢', icon: LineChart },
+  { group: 'advanced', label: '進階分析', icon: GitBranch },
+];
+
+const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp; group: ViewGroup }[] = [
+  // 即時概覽
+  { key: 'heatmap', label: '行業熱力圖', icon: TrendingUp, group: 'snapshot' },
+  { key: 'capital', label: '資金流向', icon: DollarSign, group: 'snapshot' },
+  { key: 'risingFalling', label: '漲跌家數', icon: BarChart3, group: 'snapshot' },
+  { key: 'prosperity', label: '景氣度', icon: Gauge, group: 'snapshot' },
+  // 歷史趨勢
+  { key: 'trend', label: '行業走勢', icon: Activity, group: 'trend' },
+  { key: 'rotation', label: '輪動信號', icon: RefreshCcw, group: 'trend' },
+  { key: 'capitalTrend', label: '資金趨勢', icon: Waves, group: 'trend' },
+  { key: 'prosperityTrend', label: '景氣度趨勢', icon: Gauge, group: 'trend' },
+  // 進階分析
+  { key: 'correlation', label: '相關性矩陣', icon: Grid3x3, group: 'advanced' },
+  { key: 'capitalMigration', label: '資金遷移', icon: GitBranch, group: 'advanced' },
 ];
 
 function formatDateInput(d: Date) {
@@ -39,6 +82,12 @@ function formatDateInput(d: Date) {
 export default function IndustryPage() {
   const [view, setView] = useState<ViewType>('heatmap');
   const [tradeDate, setTradeDate] = useState<string>('');
+
+  // 當前視圖所屬分組
+  const currentGroup: ViewGroup = useMemo(() => {
+    const v = VIEWS.find((x) => x.key === view);
+    return v ? v.group : 'snapshot';
+  }, [view]);
 
   const dailyKey = `/stock/industry-daily${tradeDate ? `?tradeDate=${tradeDate}` : ''}`;
   const {
@@ -149,6 +198,8 @@ export default function IndustryPage() {
     if (view === 'correlation') return <IndustryCorrelationHeatmap rangeStart={rangeStart} rangeEnd={rangeEnd} />;
     if (view === 'capitalTrend') return <IndustryCapitalFlowTrend rangeStart={rangeStart} rangeEnd={rangeEnd} />;
     if (view === 'prosperity') return <IndustryProsperityChart />;
+    if (view === 'prosperityTrend') return <IndustryProsperityTrend rangeStart={rangeStart} rangeEnd={rangeEnd} />;
+    if (view === 'capitalMigration') return <IndustryCapitalFlowSankey rangeStart={rangeStart} rangeEnd={rangeEnd} />;
     return null;
   };
 
@@ -178,8 +229,15 @@ export default function IndustryPage() {
     return <IndustryTrendChart data={trendData} news={newsData?.news ?? []} benchmark={benchmarkData ?? []} benchmarkLabel="上證綜指" />;
   };
 
+  // 切換分組時自動選擇該組的第一個視圖
+  const switchGroup = (group: ViewGroup) => {
+    const firstView = VIEWS.find((v) => v.group === group);
+    if (firstView) setView(firstView.key);
+  };
+
   return (
     <div className="space-y-4 p-4 md:p-6 max-w-7xl mx-auto">
+      {/* 頁面標題 + 日期選擇 */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-slate-100">{title}</h1>
@@ -202,6 +260,7 @@ export default function IndustryPage() {
         </div>
       </div>
 
+      {/* 統計摘要卡片 */}
       {summary && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="rounded-lg border border-border bg-bg-panel p-3">
@@ -226,14 +285,36 @@ export default function IndustryPage() {
         </div>
       )}
 
+      {/* 視圖分組導航（一級分類） */}
+      <div className="flex flex-wrap gap-2 border-b border-border pb-2">
+        {VIEW_GROUPS.map(({ group, label, icon: Icon }) => {
+          const active = currentGroup === group;
+          return (
+            <button
+              key={group}
+              onClick={() => switchGroup(group)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                active
+                  ? 'bg-accent/15 text-accent border border-accent/30'
+                  : 'text-slate-400 hover:text-slate-100 hover:bg-bg-hover border border-transparent'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 視圖子導航（二級分類，僅顯示當前分組的視圖） */}
       <div className="flex flex-wrap gap-2">
-        {VIEWS.map(({ key, label, icon: Icon }) => {
+        {VIEWS.filter((v) => v.group === currentGroup).map(({ key, label, icon: Icon }) => {
           const active = view === key;
           return (
             <button
               key={key}
               onClick={() => setView(key)}
-              className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors ${
                 active
                   ? 'bg-accent/10 text-accent'
                   : 'text-slate-400 hover:text-slate-100 hover:bg-bg-hover'
@@ -246,6 +327,7 @@ export default function IndustryPage() {
         })}
       </div>
 
+      {/* 走勢視圖的行業選擇器 + 日期區間 */}
       {view === 'trend' && (
         <div className="flex flex-col md:flex-row flex-wrap gap-2 rounded-md border border-border bg-bg-panel p-3">
           <select
@@ -289,6 +371,29 @@ export default function IndustryPage() {
         </div>
       )}
 
+      {/* 歷史趨勢/進階分析視圖的日期區間選擇器 */}
+      {(view === 'correlation' || view === 'capitalTrend' || view === 'prosperityTrend' || view === 'capitalMigration') && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-bg-panel p-3">
+          <span className="text-sm text-muted">分析區間：</span>
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={rangeStart}
+              onChange={(e) => setRangeStart(e.target.value)}
+              className="bg-bg-base text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
+            />
+            <span className="text-muted">~</span>
+            <input
+              type="date"
+              value={rangeEnd}
+              onChange={(e) => setRangeEnd(e.target.value)}
+              className="bg-bg-base text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 主圖表區域 */}
       <div className="w-full min-h-[300px]">
         {view === 'trend' ? renderTrend() : renderChart()}
       </div>

@@ -431,6 +431,81 @@ class MarketDataClient:
             logger.warning(f"行業區間聚合獲取失敗: {e}")
             return []
 
+    async def get_industry_prosperity(self) -> dict[str, Any]:
+        """獲取行業景氣度指標，格式化為 prompt 可注入文本。
+
+        用於 Agent 策略生成時參考景氣度評分選擇行業。
+
+        Returns:
+            dict: {
+                "top_prosperous": [{"industry": ..., "index": ..., "grade": ...}, ...],
+                "bottom_prosperous": [...],
+                "text": "可注入 prompt 的文本摘要",
+            }
+        """
+        try:
+            from app.services.backend_client import backend_client
+
+            data = await backend_client.get_industry_prosperity()
+            if not data:
+                return {"top_prosperous": [], "bottom_prosperous": [], "text": ""}
+
+            # 取景氣度最高和最低的各 10 個行業
+            top = data[:10]
+            bottom = data[-10:] if len(data) >= 10 else []
+
+            top_list = [
+                {
+                    "industry": d.get("industry", ""),
+                    "index": d.get("prosperityIndex", 0),
+                    "grade": d.get("grade", ""),
+                    "avgPctChg": d.get("avgPctChg", 0),
+                }
+                for d in top
+            ]
+            bottom_list = [
+                {
+                    "industry": d.get("industry", ""),
+                    "index": d.get("prosperityIndex", 0),
+                    "grade": d.get("grade", ""),
+                    "avgPctChg": d.get("avgPctChg", 0),
+                }
+                for d in bottom
+            ]
+
+            # 構建 prompt 文本
+            lines = ["## 行業景氣度指標（綜合評分，0-100）"]
+            lines.append("評分維度：動量(漲跌幅,35%) + 資金(成交額,25%) + 活躍(換手率,20%) + 廣度(漲跌家數比,20%)")
+            lines.append("等級：繁榮(≥80) / 景氣(≥65) / 平穩(≥50) / 低迷(≥35) / 衰退(<35)")
+            lines.append("")
+            lines.append("### 景氣度最高行業（建議優先聚焦）")
+            for d in top:
+                lines.append(
+                    f"- {d.get('industry', '')}: 景氣度 {d.get('prosperityIndex', 0):.1f} "
+                    f"({d.get('grade', '')}), 漲跌幅 {d.get('avgPctChg', 0):.3f}%"
+                )
+            if bottom:
+                lines.append("")
+                lines.append("### 景氣度最低行業（建議避開）")
+                for d in bottom:
+                    lines.append(
+                        f"- {d.get('industry', '')}: 景氣度 {d.get('prosperityIndex', 0):.1f} "
+                        f"({d.get('grade', '')}), 漲跌幅 {d.get('avgPctChg', 0):.3f}%"
+                    )
+            lines.append("")
+            lines.append("建議：若需聚焦行業，優先選擇景氣度 ≥ 65 的「繁榮」或「景氣」等級行業；避免選擇「低迷」或「衰退」等級行業。")
+
+            text = "\n".join(lines)
+            logger.info(f"行業景氣度獲取完成: top={len(top_list)}, bottom={len(bottom_list)}")
+            return {
+                "top_prosperous": top_list,
+                "bottom_prosperous": bottom_list,
+                "text": text,
+            }
+        except Exception as e:
+            logger.warning(f"行業景氣度獲取失敗: {e}")
+            return {"top_prosperous": [], "bottom_prosperous": [], "text": ""}
+
     async def get_industry_correlation(self, days: int = 30) -> dict[str, Any]:
         """計算行業間相關性矩陣，識別高相關行業對。
 

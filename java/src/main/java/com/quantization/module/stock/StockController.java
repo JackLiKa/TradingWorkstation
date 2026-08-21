@@ -213,6 +213,23 @@ public class StockController {
         return ApiResponse.ok(stockService.industryProsperity(tradeDate));
     }
 
+    /**
+     * 行業景氣度歷史趨勢 — 指定日期區間內每個交易日的行業景氣度。
+     *
+     * @param start 起始日期
+     * @param end   結束日期
+     * @param topN  每個日期返回的行業數（默認 15）
+     * @return 行業景氣度 DTO 列表（按日期升序、景氣度倒序）
+     */
+    @Operation(summary = "行業景氣度歷史趨勢（多日對比）")
+    @GetMapping("/industry-prosperity/range")
+    public ApiResponse<List<IndustryProsperityDto>> industryProsperityRange(
+            @RequestParam LocalDate start,
+            @RequestParam LocalDate end,
+            @RequestParam(required = false, defaultValue = "15") int topN) {
+        return ApiResponse.ok(stockService.industryProsperityRange(start, end, topN));
+    }
+
     // ===== 指數歷史（市場形態識別）=====
 
     /**

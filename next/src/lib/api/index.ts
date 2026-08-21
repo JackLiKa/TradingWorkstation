@@ -67,6 +67,9 @@ export const api = {
   industryProsperity: (tradeDate?: string) =>
     apiFetch<IndustryProsperityDto[]>(`/stock/industry-prosperity${tradeDate ? `?tradeDate=${tradeDate}` : ''}`),
 
+  industryProsperityRange: (start: string, end: string, topN = 15) =>
+    apiFetch<IndustryProsperityDto[]>(`/stock/industry-prosperity/range?start=${start}&end=${end}&topN=${topN}`),
+
   // ===== Chart K線圖 =====
   candlestick: (params: URLSearchParams) => apiFetch<CandlestickDto>(`/chart/candlestick?${params.toString()}`),
   olderCandlestick: (params: URLSearchParams) => apiFetch<CandlestickDto>(`/chart/candlestick/older?${params.toString()}`),
