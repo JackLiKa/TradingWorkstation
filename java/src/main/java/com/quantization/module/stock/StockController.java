@@ -9,6 +9,8 @@ import com.quantization.module.stock.dto.RotationBacktestDto;
 import com.quantization.module.stock.dto.RotationAutoMlDto;
 import com.quantization.module.stock.dto.ProsperityAlertDto;
 import com.quantization.module.stock.dto.ProsperitySeasonalityDto;
+import com.quantization.module.stock.dto.ProsperityMarkovDto;
+import com.quantization.module.stock.dto.ProsperityForecastDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexHistoryBatchRequestDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
@@ -326,6 +328,34 @@ public class StockController {
     public ApiResponse<ProsperitySeasonalityDto> prosperitySeasonality(
             @RequestParam(required = false, defaultValue = "12") int months) {
         return ApiResponse.ok(stockService.prosperitySeasonality(months));
+    }
+
+    /**
+     * 行業景氣度 Markov 狀態轉移模型 — 預測等級轉換概率。
+     *
+     * @param months 分析回溯月數（默認 12）
+     * @return Markov 分析 DTO
+     */
+    @Operation(summary = "行業景氣度 Markov 狀態轉移模型")
+    @GetMapping("/industry-prosperity/markov")
+    public ApiResponse<ProsperityMarkovDto> prosperityMarkov(
+            @RequestParam(required = false, defaultValue = "12") int months) {
+        return ApiResponse.ok(stockService.prosperityMarkov(months));
+    }
+
+    /**
+     * 行業景氣度多模型預測 — ARIMA + Holt-Winters + 線性回歸。
+     *
+     * @param months       分析回溯月數（默認 6）
+     * @param forecastDays 預測天數（默認 5）
+     * @return 多模型預測 DTO
+     */
+    @Operation(summary = "行業景氣度多模型預測（ARIMA + Holt-Winters + 線性回歸）")
+    @GetMapping("/industry-prosperity/forecast")
+    public ApiResponse<ProsperityForecastDto> prosperityForecast(
+            @RequestParam(required = false, defaultValue = "6") int months,
+            @RequestParam(required = false, defaultValue = "5") int forecastDays) {
+        return ApiResponse.ok(stockService.prosperityForecast(months, forecastDays));
     }
 
     // ===== 指數歷史（市場形態識別）=====

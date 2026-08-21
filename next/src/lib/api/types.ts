@@ -187,6 +187,44 @@ export interface ProsperitySeasonalityDto {
   summary: string;
 }
 
+/** 行業景氣度 Markov 狀態轉移模型 */
+export interface ProsperityMarkovDto {
+  analysisDate: string;
+  totalTransitions: number;
+  industries: Record<string, {
+    industry: string;
+    transitionMatrix: number[][];
+    currentState: number;
+    currentStateName: string;
+    nextProbabilities: Record<number, number>;
+    steadyState: Record<number, number>;
+    transitionCount: number;
+    mostLikelyNext: string;
+    mostLikelyNextProb: number;
+  }>;
+  summary: string;
+}
+
+/** 行業景氣度多模型預測 */
+export interface ProsperityForecastDto {
+  analysisDate: string;
+  forecastDays: number;
+  industries: Record<string, {
+    industry: string;
+    arimaForecast: number[];
+    holtWintersForecast: number[];
+    linearForecast: number[];
+    ensembleForecast: number[];
+    currentProsperity: number;
+    arimaTrend: string;
+    holtWintersTrend: string;
+    linearTrend: string;
+    consensusTrend: string;
+    forecastDates: string[];
+  }>;
+  summary: string;
+}
+
 /** 漲跌幅最大的熱門股票（用於波動列表展示） */
 export interface HotSymbolDto {
   code: string;

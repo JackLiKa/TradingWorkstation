@@ -12,6 +12,8 @@ import com.quantization.module.stock.dto.RotationBacktestDto;
 import com.quantization.module.stock.dto.RotationAutoMlDto;
 import com.quantization.module.stock.dto.ProsperityAlertDto;
 import com.quantization.module.stock.dto.ProsperitySeasonalityDto;
+import com.quantization.module.stock.dto.ProsperityMarkovDto;
+import com.quantization.module.stock.dto.ProsperityForecastDto;
 import com.quantization.module.stock.dto.RotationSignalDto;
 import com.quantization.module.stock.dto.SectorPerformanceDto;
 import com.quantization.module.stock.dto.SearchResultDto;
@@ -1469,6 +1471,563 @@ public class StockService {
                 industryPatterns,
                 summary
         );
+    }
+
+    /**
+     * 行業景氣度 Markov 狀態轉移模型 — 預測等級轉換概率。
+     *
+     * 將景氣度分為 5 個狀態：1=衰退, 2=低迷, 3=平穩, 4=景氣, 5=繁榮
+     * 基於歷史等級轉換構建一階 Markov 轉移矩陣。
+     *
+     * @param months 分析回溯月數（默認 12）
+     * @return Markov 分析 DTO
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'prosperity-markov-' + #p0")
+    public ProsperityMarkovDto prosperityMarkov(int months) {
+        LocalDate end = LocalDate.now();
+        LocalDate start = end.minusMonths(months);
+
+        List<IndustryDailyEntity> entities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(start, end);
+
+        if (entities.isEmpty()) {
+            return new ProsperityMarkovDto(end.toString(), 0, Map.of(), "數據不足，無法構建 Markov 模型");
+        }
+
+        // 按日期分組
+        Map<LocalDate, List<IndustryDailyEntity>> byDate = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : entities) {
+            byDate.computeIfAbsent(e.getTradeDate(), k -> new ArrayList<>()).add(e);
+        }
+
+        List<LocalDate> sortedDates = new ArrayList<>(byDate.keySet());
+        sortedDates.sort(LocalDate::compareTo);
+
+        if (sortedDates.size() < 3) {
+            return new ProsperityMarkovDto(end.toString(), 0, Map.of(), "交易日不足，無法構建 Markov 模型");
+        }
+
+        // 預計算每個交易日的景氣度 Map
+        Map<LocalDate, Map<String, Double>> dailyProsperity = new LinkedHashMap<>();
+        for (LocalDate date : sortedDates) {
+            dailyProsperity.put(date, computeProsperityMap(byDate.get(date)));
+        }
+
+        // 按行業收集每日景氣度序列
+        Map<String, List<LocalDate>> industryDates = new LinkedHashMap<>();
+        Map<String, List<Double>> industrySeries = new LinkedHashMap<>();
+        for (LocalDate date : sortedDates) {
+            Map<String, Double> dp = dailyProsperity.get(date);
+            for (Map.Entry<String, Double> e : dp.entrySet()) {
+                industryDates.computeIfAbsent(e.getKey(), k -> new ArrayList<>()).add(date);
+                industrySeries.computeIfAbsent(e.getKey(), k -> new ArrayList<>()).add(e.getValue());
+            }
+        }
+
+        Map<String, ProsperityMarkovDto.IndustryMarkov> result = new LinkedHashMap<>();
+        int totalTransitions = 0;
+
+        for (String industry : industrySeries.keySet()) {
+            List<Double> series = industrySeries.get(industry);
+            if (series.size() < 3) continue;
+
+            // 將景氣度轉為等級序列
+            int[] gradeSeries = new int[series.size()];
+            for (int i = 0; i < series.size(); i++) {
+                gradeSeries[i] = gradeLevel(prosperityGrade(series.get(i)));
+            }
+
+            // 構建 5x5 轉移計數矩陣
+            int[][] counts = new int[5][5];
+            for (int i = 0; i < gradeSeries.length - 1; i++) {
+                int from = gradeSeries[i] - 1; // 0-indexed
+                int to = gradeSeries[i + 1] - 1;
+                if (from >= 0 && from < 5 && to >= 0 && to < 5) {
+                    counts[from][to]++;
+                    totalTransitions++;
+                }
+            }
+
+            // 轉為概率矩陣
+            double[][] matrix = new double[5][5];
+            for (int i = 0; i < 5; i++) {
+                int rowSum = 0;
+                for (int j = 0; j < 5; j++) rowSum += counts[i][j];
+                for (int j = 0; j < 5; j++) {
+                    matrix[i][j] = rowSum > 0 ? (double) counts[i][j] / rowSum : 0.0;
+                    matrix[i][j] = Math.round(matrix[i][j] * 10000.0) / 10000.0;
+                }
+                // 若該行全零（無數據），設為均勻分布
+                if (rowSum == 0) {
+                    for (int j = 0; j < 5; j++) matrix[i][j] = 0.2;
+                }
+            }
+
+            // 當前等級
+            int currentState = gradeSeries[gradeSeries.length - 1];
+            String currentStateName = gradeName(currentState);
+
+            // 下一日各等級概率
+            Map<Integer, Double> nextProb = new LinkedHashMap<>();
+            int currentIdx = currentState - 1;
+            for (int j = 0; j < 5; j++) {
+                nextProb.put(j + 1, matrix[currentIdx][j]);
+            }
+
+            // 找最可能的下一等級
+            int mostLikelyNext = 1;
+            double mostLikelyProb = 0;
+            for (int j = 0; j < 5; j++) {
+                if (matrix[currentIdx][j] > mostLikelyProb) {
+                    mostLikelyProb = matrix[currentIdx][j];
+                    mostLikelyNext = j + 1;
+                }
+            }
+
+            // 計算穩態分布（迭代法：P^n 收斂）
+            Map<Integer, Double> steadyState = computeSteadyState(matrix);
+
+            int transitionCount = 0;
+            for (int i = 0; i < 5; i++) {
+                for (int j = 0; j < 5; j++) transitionCount += counts[i][j];
+            }
+
+            result.put(industry, new ProsperityMarkovDto.IndustryMarkov(
+                    industry,
+                    matrix,
+                    currentState,
+                    currentStateName,
+                    nextProb,
+                    steadyState,
+                    transitionCount,
+                    gradeName(mostLikelyNext),
+                    Math.round(mostLikelyProb * 1000.0) / 1000.0
+            ));
+        }
+
+        String summary = String.format(
+                "分析區間 %s ~ %s，共 %d 次等級轉換，%d 個行業。",
+                start, end, totalTransitions, result.size()
+        );
+
+        return new ProsperityMarkovDto(end.toString(), totalTransitions, result, summary);
+    }
+
+    /** 計算 Markov 鏈的穩態分布（迭代法）。 */
+    private Map<Integer, Double> computeSteadyState(double[][] matrix) {
+        // 初始均勻分布
+        double[] state = {0.2, 0.2, 0.2, 0.2, 0.2};
+        // 迭代 1000 次或收斂
+        for (int iter = 0; iter < 1000; iter++) {
+            double[] newState = new double[5];
+            for (int j = 0; j < 5; j++) {
+                for (int i = 0; i < 5; i++) {
+                    newState[j] += state[i] * matrix[i][j];
+                }
+            }
+            // 檢查收斂
+            double maxDiff = 0;
+            for (int i = 0; i < 5; i++) {
+                maxDiff = Math.max(maxDiff, Math.abs(newState[i] - state[i]));
+            }
+            System.arraycopy(newState, 0, state, 0, 5);
+            if (maxDiff < 1e-8) break;
+        }
+
+        Map<Integer, Double> result = new LinkedHashMap<>();
+        for (int i = 0; i < 5; i++) {
+            result.put(i + 1, Math.round(state[i] * 10000.0) / 10000.0);
+        }
+        return result;
+    }
+
+    /** 等級數值轉名稱。 */
+    private static String gradeName(int level) {
+        return switch (level) {
+            case 5 -> "繁榮";
+            case 4 -> "景氣";
+            case 3 -> "平穩";
+            case 2 -> "低迷";
+            case 1 -> "衰退";
+            default -> "未知";
+        };
+    }
+
+    /**
+     * 行業景氣度多模型預測 — 整合 ARIMA、Holt-Winters、線性回歸。
+     *
+     * 三個模型均為純 Java 實作，CPU 秒級運算：
+     * 1. ARIMA：簡化版 AR(2) + 一階差分
+     * 2. Holt-Winters：三重指數平滑
+     * 3. 線性回歸：OLS 趨勢預測
+     *
+     * @param months        分析回溯月數（默認 6）
+     * @param forecastDays  預測天數（默認 5）
+     * @return 多模型預測 DTO
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'prosperity-forecast-' + #p0 + '-' + #p1")
+    public ProsperityForecastDto prosperityForecast(int months, int forecastDays) {
+        LocalDate end = LocalDate.now();
+        LocalDate start = end.minusMonths(months);
+
+        List<IndustryDailyEntity> entities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(start, end);
+
+        if (entities.isEmpty()) {
+            return new ProsperityForecastDto(end.toString(), forecastDays, Map.of(), "數據不足，無法預測");
+        }
+
+        // 按日期分組
+        Map<LocalDate, List<IndustryDailyEntity>> byDate = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : entities) {
+            byDate.computeIfAbsent(e.getTradeDate(), k -> new ArrayList<>()).add(e);
+        }
+
+        List<LocalDate> sortedDates = new ArrayList<>(byDate.keySet());
+        sortedDates.sort(LocalDate::compareTo);
+
+        if (sortedDates.size() < 10) {
+            return new ProsperityForecastDto(end.toString(), forecastDays, Map.of(), "交易日不足，無法預測（需至少 10 日）");
+        }
+
+        // 預計算每日景氣度
+        Map<LocalDate, Map<String, Double>> dailyProsperity = new LinkedHashMap<>();
+        for (LocalDate date : sortedDates) {
+            dailyProsperity.put(date, computeProsperityMap(byDate.get(date)));
+        }
+
+        // 按行業收集序列
+        Map<String, List<Double>> industrySeries = new LinkedHashMap<>();
+        for (LocalDate date : sortedDates) {
+            Map<String, Double> dp = dailyProsperity.get(date);
+            for (Map.Entry<String, Double> e : dp.entrySet()) {
+                industrySeries.computeIfAbsent(e.getKey(), k -> new ArrayList<>()).add(e.getValue());
+            }
+        }
+
+        // 生成預測日期（跳過週末）
+        List<String> forecastDates = new ArrayList<>();
+        LocalDate forecastDate = sortedDates.get(sortedDates.size() - 1);
+        int added = 0;
+        while (added < forecastDays) {
+            forecastDate = forecastDate.plusDays(1);
+            int dow = forecastDate.getDayOfWeek().getValue();
+            if (dow <= 5) {
+                forecastDates.add(forecastDate.toString());
+                added++;
+            }
+        }
+
+        Map<String, ProsperityForecastDto.IndustryForecast> result = new LinkedHashMap<>();
+
+        for (Map.Entry<String, List<Double>> entry : industrySeries.entrySet()) {
+            String industry = entry.getKey();
+            List<Double> series = entry.getValue();
+            if (series.size() < 10) continue;
+
+            double[] data = series.stream().mapToDouble(Double::doubleValue).toArray();
+
+            // 1. ARIMA 預測（簡化版 AR(2) + 一階差分）
+            double[] arimaForecast = forecastARIMA(data, forecastDays);
+
+            // 2. Holt-Winters 預測（三重指數平滑，季節週期=5）
+            double[] hwForecast = forecastHoltWinters(data, forecastDays, 5);
+
+            // 3. 線性回歸預測
+            double[] linearForecast = forecastLinearRegression(data, forecastDays);
+
+            // 4. 整合預測（加權平均：ARIMA 0.35, Holt-Winters 0.35, 線性回歸 0.30）
+            double[] ensemble = new double[forecastDays];
+            for (int i = 0; i < forecastDays; i++) {
+                ensemble[i] = arimaForecast[i] * 0.35 + hwForecast[i] * 0.35 + linearForecast[i] * 0.30;
+                ensemble[i] = Math.max(0, Math.min(100, ensemble[i]));
+            }
+
+            // 趨勢判斷
+            double currentVal = data[data.length - 1];
+            String arimaTrend = judgeTrend(currentVal, arimaForecast[arimaForecast.length - 1]);
+            String hwTrend = judgeTrend(currentVal, hwForecast[hwForecast.length - 1]);
+            String linearTrend = judgeTrend(currentVal, linearForecast[linearForecast.length - 1]);
+            String consensusTrend = consensusTrend(arimaTrend, hwTrend, linearTrend);
+
+            result.put(industry, new ProsperityForecastDto.IndustryForecast(
+                    industry,
+                    toList(arimaForecast),
+                    toList(hwForecast),
+                    toList(linearForecast),
+                    toList(ensemble),
+                    Math.round(currentVal * 100.0) / 100.0,
+                    arimaTrend,
+                    hwTrend,
+                    linearTrend,
+                    consensusTrend,
+                    forecastDates
+            ));
+        }
+
+        // 找共識上升最多的行業
+        List<Map.Entry<String, ProsperityForecastDto.IndustryForecast>> sorted = new ArrayList<>(result.entrySet());
+        sorted.sort((a, b) -> {
+            double aDelta = a.getValue().ensembleForecast().get(forecastDays - 1) - a.getValue().currentProsperity();
+            double bDelta = b.getValue().ensembleForecast().get(forecastDays - 1) - b.getValue().currentProsperity();
+            return Double.compare(bDelta, aDelta);
+        });
+
+        String summary = String.format(
+                "分析區間 %s ~ %s，預測未來 %d 日，%d 個行業。" +
+                "共識上升最強：%s（%s）。共識下降最強：%s（%s）。",
+                start, end, forecastDays, result.size(),
+                sorted.isEmpty() ? "無" : sorted.get(0).getKey(),
+                sorted.isEmpty() ? "" : sorted.get(0).getValue().consensusTrend(),
+                sorted.isEmpty() ? "無" : sorted.get(sorted.size() - 1).getKey(),
+                sorted.isEmpty() ? "" : sorted.get(sorted.size() - 1).getValue().consensusTrend()
+        );
+
+        return new ProsperityForecastDto(end.toString(), forecastDays, result, summary);
+    }
+
+    /** ARIMA 簡化版預測：AR(2) + 一階差分。 */
+    private double[] forecastARIMA(double[] data, int steps) {
+        int n = data.length;
+        if (n < 4) {
+            double last = n > 0 ? data[n - 1] : 50.0;
+            double[] result = new double[steps];
+            for (int i = 0; i < steps; i++) result[i] = last;
+            return result;
+        }
+
+        // 一階差分
+        double[] diff = new double[n - 1];
+        for (int i = 0; i < n - 1; i++) {
+            diff[i] = data[i + 1] - data[i];
+        }
+
+        // AR(2) on differenced data: diff[t] = a*diff[t-1] + b*diff[t-2] + c
+        // 用最小二乘法估計 a, b, c
+        double[] ar2 = fitAR2(diff);
+
+        // 預測差分
+        double[] forecastDiff = new double[steps];
+        double prevDiff1 = diff[diff.length - 1];
+        double prevDiff2 = diff.length > 1 ? diff[diff.length - 2] : 0;
+        for (int i = 0; i < steps; i++) {
+            forecastDiff[i] = ar2[0] * prevDiff1 + ar2[1] * prevDiff2 + ar2[2];
+            prevDiff2 = prevDiff1;
+            prevDiff1 = forecastDiff[i];
+        }
+
+        // 反差分還原
+        double[] forecast = new double[steps];
+        double lastVal = data[n - 1];
+        for (int i = 0; i < steps; i++) {
+            lastVal += forecastDiff[i];
+            forecast[i] = Math.max(0, Math.min(100, lastVal));
+        }
+        return forecast;
+    }
+
+    /** AR(2) 係數估計（最小二乘法）。 */
+    private double[] fitAR2(double[] data) {
+        int n = data.length;
+        if (n < 4) return new double[]{0, 0, 0};
+
+        // 構建回歸矩陣: y = X * beta
+        // y[i] = data[i+2], X[i] = [data[i+1], data[i], 1]
+        int m = n - 2;
+        double[][] X = new double[m][3];
+        double[] y = new double[m];
+        for (int i = 0; i < m; i++) {
+            X[i][0] = data[i + 1];
+            X[i][1] = data[i];
+            X[i][2] = 1;
+            y[i] = data[i + 2];
+        }
+
+        // 正規方程: beta = (X^T X)^-1 X^T y
+        // X^T X (3x3)
+        double[][] XtX = new double[3][3];
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                for (int k = 0; k < m; k++) {
+                    XtX[i][j] += X[k][i] * X[k][j];
+                }
+            }
+        }
+        // X^T y (3x1)
+        double[] Xty = new double[3];
+        for (int i = 0; i < 3; i++) {
+            for (int k = 0; k < m; k++) {
+                Xty[i] += X[k][i] * y[k];
+            }
+        }
+        // 解 3x3 線性方程組（高斯消去法）
+        return solveLinearSystem(XtX, Xty);
+    }
+
+    /** Holt-Winters 三重指數平滑預測。 */
+    private double[] forecastHoltWinters(double[] data, int steps, int seasonLength) {
+        int n = data.length;
+        if (n < seasonLength * 2) {
+            // 數據不足，用簡單移動平均
+            double avg = 0;
+            int lookback = Math.min(5, n);
+            for (int i = n - lookback; i < n; i++) avg += data[i];
+            avg /= lookback;
+            double[] result = new double[steps];
+            for (int i = 0; i < steps; i++) result[i] = avg;
+            return result;
+        }
+
+        double alpha = 0.3; // 水平平滑係數
+        double beta = 0.1;  // 趨勢平滑係數
+        double gamma = 0.2; // 季節平滑係數
+
+        // 初始化
+        double level = 0;
+        for (int i = 0; i < seasonLength; i++) level += data[i];
+        level /= seasonLength;
+
+        double trend = 0;
+        for (int i = 0; i < seasonLength; i++) {
+            trend += (data[seasonLength + i] - data[i]);
+        }
+        trend /= seasonLength;
+
+        double[] seasonals = new double[seasonLength];
+        for (int i = 0; i < seasonLength; i++) {
+            seasonals[i] = data[i] - level;
+        }
+
+        // 迭代更新
+        for (int i = seasonLength; i < n; i++) {
+            double val = data[i];
+            double lastLevel = level;
+            int seasonIdx = i % seasonLength;
+
+            level = alpha * (val - seasonals[seasonIdx]) + (1 - alpha) * (level + trend);
+            trend = beta * (level - lastLevel) + (1 - beta) * trend;
+            seasonals[seasonIdx] = gamma * (val - level) + (1 - gamma) * seasonals[seasonIdx];
+        }
+
+        // 預測
+        double[] forecast = new double[steps];
+        for (int i = 0; i < steps; i++) {
+            int seasonIdx = (n + i) % seasonLength;
+            forecast[i] = Math.max(0, Math.min(100, level + (i + 1) * trend + seasonals[seasonIdx]));
+        }
+        return forecast;
+    }
+
+    /** 線性回歸預測（OLS）。 */
+    private double[] forecastLinearRegression(double[] data, int steps) {
+        int n = data.length;
+        if (n < 3) {
+            double last = n > 0 ? data[n - 1] : 50.0;
+            double[] result = new double[steps];
+            for (int i = 0; i < steps; i++) result[i] = last;
+            return result;
+        }
+
+        // OLS: y = a + b * x
+        double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        for (int i = 0; i < n; i++) {
+            sumX += i;
+            sumY += data[i];
+            sumXY += i * data[i];
+            sumX2 += (double) i * i;
+        }
+        double meanX = sumX / n;
+        double meanY = sumY / n;
+
+        double b = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        double a = meanY - b * meanX;
+
+        // 預測
+        double[] forecast = new double[steps];
+        for (int i = 0; i < steps; i++) {
+            forecast[i] = Math.max(0, Math.min(100, a + b * (n + i)));
+        }
+        return forecast;
+    }
+
+    /** 判斷趨勢。 */
+    private static String judgeTrend(double current, double forecast) {
+        double delta = forecast - current;
+        if (delta > 3) return "上升";
+        if (delta < -3) return "下降";
+        return "平穩";
+    }
+
+    /** 三模型共識趨勢（多數決）。 */
+    private static String consensusTrend(String a, String b, String c) {
+        int up = 0, down = 0, flat = 0;
+        if ("上升".equals(a)) up++;
+        else if ("下降".equals(a)) down++;
+        else flat++;
+        if ("上升".equals(b)) up++;
+        else if ("下降".equals(b)) down++;
+        else flat++;
+        if ("上升".equals(c)) up++;
+        else if ("下降".equals(c)) down++;
+        else flat++;
+
+        if (up >= 2) return "上升";
+        if (down >= 2) return "下降";
+        return "平穩";
+    }
+
+    /** 高斯消去法解線性方程組 Ax=b。 */
+    private static double[] solveLinearSystem(double[][] A, double[] b) {
+        int n = b.length;
+        // 增廣矩陣
+        double[][] aug = new double[n][n + 1];
+        for (int i = 0; i < n; i++) {
+            System.arraycopy(A[i], 0, aug[i], 0, n);
+            aug[i][n] = b[i];
+        }
+        // 前向消去
+        for (int col = 0; col < n; col++) {
+            // 部分選主元
+            int maxRow = col;
+            for (int row = col + 1; row < n; row++) {
+                if (Math.abs(aug[row][col]) > Math.abs(aug[maxRow][col])) {
+                    maxRow = row;
+                }
+            }
+            double[] tmp = aug[col];
+            aug[col] = aug[maxRow];
+            aug[maxRow] = tmp;
+
+            if (Math.abs(aug[col][col]) < 1e-12) continue; // 奇異
+
+            for (int row = col + 1; row < n; row++) {
+                double factor = aug[row][col] / aug[col][col];
+                for (int j = col; j <= n; j++) {
+                    aug[row][j] -= factor * aug[col][j];
+                }
+            }
+        }
+        // 回代
+        double[] x = new double[n];
+        for (int i = n - 1; i >= 0; i--) {
+            x[i] = aug[i][n];
+            for (int j = i + 1; j < n; j++) {
+                x[i] -= aug[i][j] * x[j];
+            }
+            if (Math.abs(aug[i][i]) > 1e-12) {
+                x[i] /= aug[i][i];
+            }
+        }
+        return x;
+    }
+
+    /** double[] 轉 List<Double>（四捨五入到小數點 2 位）。 */
+    private static List<Double> toList(double[] arr) {
+        List<Double> list = new ArrayList<>(arr.length);
+        for (double v : arr) {
+            list.add(Math.round(v * 100.0) / 100.0);
+        }
+        return list;
     }
 
     /** 計算指定日期列表的景氣度 Map（industry -> prosperityIndex）。 */

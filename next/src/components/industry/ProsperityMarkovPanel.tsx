@@ -1,0 +1,324 @@
+'use client';
+
+import { useMemo, useState } from 'react';
+import ReactECharts from 'echarts-for-react';
+import useSWR from 'swr';
+import { api } from '@/lib/api';
+import type { ProsperityMarkovDto } from '@/lib/api/types';
+import { ChartSkeleton } from '@/components/ui/Skeleton';
+import { ErrorState } from '@/components/ui/ErrorState';
+import { RefreshCw, GitBranch, ArrowRight } from 'lucide-react';
+
+const MONTH_OPTIONS = [6, 12, 24, 36];
+const GRADE_NAMES = ['衰退', '低迷', '平穩', '景氣', '繁榮'];
+const GRADE_COLORS = ['#1e40af', '#3b82f6', '#eab308', '#f97316', '#ef4444'];
+
+export function ProsperityMarkovPanel() {
+  const [months, setMonths] = useState(12);
+  const [selectedIndustry, setSelectedIndustry] = useState<string>('');
+
+  const key = `/stock/industry-prosperity/markov?months=${months}`;
+  const { data, error, isLoading, mutate, isValidating } = useSWR<ProsperityMarkovDto>(
+    key,
+    () => api.prosperityMarkov(months),
+    { revalidateOnFocus: false, dedupingInterval: 300_000 }
+  );
+
+  const industries = useMemo(() => {
+    if (!data || !data.industries) return [];
+    return Object.keys(data.industries).sort();
+  }, [data]);
+
+  useMemo(() => {
+    if (industries.length > 0 && !selectedIndustry) {
+      setSelectedIndustry(industries[0]);
+    }
+  }, [industries, selectedIndustry]);
+
+  // 轉移矩陣熱力圖
+  const matrixOption = useMemo(() => {
+    if (!data || !selectedIndustry || !data.industries[selectedIndustry]) return null;
+    const markov = data.industries[selectedIndustry];
+    const matrix = markov.transitionMatrix;
+
+    const heatmapData: [number, number, number][] = [];
+    for (let i = 0; i < 5; i++) {
+      for (let j = 0; j < 5; j++) {
+        heatmapData.push([j, i, matrix[i][j]]);
+      }
+    }
+
+    return {
+      title: {
+        text: `${selectedIndustry} — 等級轉移矩陣`,
+        left: 'center',
+        textStyle: { color: '#e2e8f0', fontSize: 14 },
+      },
+      tooltip: {
+        position: 'top',
+        formatter: (params: any) => {
+          const from = GRADE_NAMES[params.value[1]];
+          const to = GRADE_NAMES[params.value[0]];
+          const prob = (params.value[2] * 100).toFixed(1);
+          return `從「${from}」到「${to}」<br/>概率: ${prob}%`;
+        },
+      },
+      grid: { left: '12%', right: '5%', bottom: '15%', top: '15%' },
+      xAxis: {
+        type: 'category',
+        data: GRADE_NAMES,
+        name: '轉移至',
+        nameLocation: 'middle',
+        nameGap: 30,
+        axisLabel: { color: '#94a3b8' },
+        splitArea: { show: true },
+      },
+      yAxis: {
+        type: 'category',
+        data: GRADE_NAMES,
+        name: '當前等級',
+        axisLabel: { color: '#94a3b8' },
+        splitArea: { show: true },
+      },
+      visualMap: {
+        min: 0,
+        max: 1,
+        calculable: true,
+        orient: 'horizontal',
+        left: 'center',
+        bottom: '2%',
+        textStyle: { color: '#94a3b8' },
+        inRange: { color: ['#1e293b', '#3b82f6', '#22c55e', '#eab308', '#ef4444'] },
+      },
+      series: [
+        {
+          type: 'heatmap',
+          data: heatmapData,
+          label: {
+            show: true,
+            color: '#fff',
+            fontSize: 11,
+            formatter: (p: any) => `${(p.value[2] * 100).toFixed(0)}%`,
+          },
+        },
+      ],
+    };
+  }, [data, selectedIndustry]);
+
+  // 下一日等級概率柱狀圖
+  const nextProbOption = useMemo(() => {
+    if (!data || !selectedIndustry || !data.industries[selectedIndustry]) return null;
+    const markov = data.industries[selectedIndustry];
+
+    const probData = GRADE_NAMES.map((name, i) => ({
+      value: (markov.nextProbabilities[i + 1] ?? 0) * 100,
+      itemStyle: { color: GRADE_COLORS[i] },
+    }));
+
+    return {
+      title: {
+        text: `下一日等級概率（當前：${markov.currentStateName}）`,
+        left: 'center',
+        textStyle: { color: '#e2e8f0', fontSize: 14 },
+      },
+      tooltip: {
+        formatter: (params: any) => `${params.name}<br/>概率: ${params.value.toFixed(1)}%`,
+      },
+      grid: { left: '5%', right: '5%', bottom: '10%', top: '15%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: GRADE_NAMES,
+        axisLabel: { color: '#94a3b8' },
+        axisLine: { lineStyle: { color: '#334155' } },
+      },
+      yAxis: {
+        type: 'value',
+        name: '概率(%)',
+        max: 100,
+        axisLabel: { color: '#94a3b8', formatter: (v: number) => `${v}%` },
+        splitLine: { lineStyle: { color: '#1e293b' } },
+      },
+      series: [
+        {
+          type: 'bar',
+          data: probData,
+          label: {
+            show: true,
+            position: 'top',
+            color: '#94a3b8',
+            fontSize: 11,
+            formatter: (p: any) => `${p.value.toFixed(1)}%`,
+          },
+        },
+      ],
+    };
+  }, [data, selectedIndustry]);
+
+  // 穩態分布圖
+  const steadyStateOption = useMemo(() => {
+    if (!data || !selectedIndustry || !data.industries[selectedIndustry]) return null;
+    const markov = data.industries[selectedIndustry];
+
+    const steadyData = GRADE_NAMES.map((name, i) => ({
+      value: (markov.steadyState[i + 1] ?? 0) * 100,
+      itemStyle: { color: GRADE_COLORS[i] },
+    }));
+
+    return {
+      title: {
+        text: '穩態分布（長期均衡）',
+        left: 'center',
+        textStyle: { color: '#e2e8f0', fontSize: 14 },
+      },
+      tooltip: {
+        formatter: (params: any) => `${params.name}<br/>穩態概率: ${params.value.toFixed(1)}%`,
+      },
+      grid: { left: '5%', right: '5%', bottom: '10%', top: '15%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: GRADE_NAMES,
+        axisLabel: { color: '#94a3b8' },
+        axisLine: { lineStyle: { color: '#334155' } },
+      },
+      yAxis: {
+        type: 'value',
+        name: '概率(%)',
+        max: 100,
+        axisLabel: { color: '#94a3b8', formatter: (v: number) => `${v}%` },
+        splitLine: { lineStyle: { color: '#1e293b' } },
+      },
+      series: [
+        {
+          type: 'bar',
+          data: steadyData,
+          label: {
+            show: true,
+            position: 'top',
+            color: '#94a3b8',
+            fontSize: 11,
+            formatter: (p: any) => `${p.value.toFixed(1)}%`,
+          },
+        },
+      ],
+    };
+  }, [data, selectedIndustry]);
+
+  return (
+    <div className="space-y-3">
+      {/* 參數選擇器 */}
+      <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-bg-panel p-3">
+        <div className="flex items-center gap-2">
+          <GitBranch className="w-4 h-4 text-accent" />
+          <span className="text-sm text-muted">Markov 狀態轉移模型</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted">分析區間：</span>
+          {MONTH_OPTIONS.map((m) => (
+            <button
+              key={m}
+              onClick={() => setMonths(m)}
+              className={`px-2 py-1 rounded text-xs transition-colors ${
+                months === m ? 'bg-accent/10 text-accent' : 'text-slate-400 hover:text-slate-100 hover:bg-bg-hover'
+              }`}
+            >
+              {m}月
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => mutate()}
+          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-bg-hover"
+        >
+          <RefreshCw className={`w-3 h-3 ${isValidating ? 'animate-spin' : ''}`} />
+          刷新
+        </button>
+      </div>
+
+      {/* 摘要 */}
+      {data && (
+        <div className="rounded-md border border-border bg-bg-panel p-3 text-sm text-slate-300">
+          {data.summary}
+        </div>
+      )}
+
+      {isLoading && <ChartSkeleton />}
+      {error && <ErrorState message={String(error)} onRetry={() => mutate()} />}
+
+      {/* 行業選擇器 */}
+      {!isLoading && !error && industries.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg-panel p-3">
+          <span className="text-sm text-muted">選擇行業：</span>
+          <select
+            value={selectedIndustry}
+            onChange={(e) => setSelectedIndustry(e.target.value)}
+            className="bg-bg-panel text-sm text-slate-100 rounded border border-border px-3 py-1.5 outline-none min-w-[200px]"
+          >
+            {industries.map((ind) => (
+              <option key={ind} value={ind}>
+                {ind}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* 當前狀態 + 預測摘要 */}
+      {!isLoading && !error && data && selectedIndustry && data.industries[selectedIndustry] && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="rounded-lg border border-border bg-bg-panel p-3">
+            <p className="text-xs text-muted mb-1">當前等級</p>
+            <p className="text-lg font-semibold text-slate-100">
+              {data.industries[selectedIndustry].currentStateName}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border bg-bg-panel p-3">
+            <p className="text-xs text-muted mb-1">最可能下一等級</p>
+            <div className="flex items-center gap-1">
+              <span className="text-lg font-semibold text-accent">
+                {data.industries[selectedIndustry].mostLikelyNext}
+              </span>
+              <ArrowRight className="w-3 h-3 text-muted" />
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-bg-panel p-3">
+            <p className="text-xs text-muted mb-1">轉換概率</p>
+            <p className="text-lg font-semibold text-accent">
+              {(data.industries[selectedIndustry].mostLikelyNextProb * 100).toFixed(1)}%
+            </p>
+          </div>
+          <div className="rounded-lg border border-border bg-bg-panel p-3">
+            <p className="text-xs text-muted mb-1">歷史轉換次數</p>
+            <p className="text-lg font-semibold text-slate-100">
+              {data.industries[selectedIndustry].transitionCount}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 轉移矩陣熱力圖 */}
+      {!isLoading && !error && matrixOption && (
+        <div className="rounded-lg border border-border bg-bg-panel p-4 h-[400px]">
+          <ReactECharts option={matrixOption} style={{ width: '100%', height: '100%' }} />
+        </div>
+      )}
+
+      {/* 下一日概率 + 穩態分布 */}
+      {!isLoading && !error && nextProbOption && steadyStateOption && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div className="rounded-lg border border-border bg-bg-panel p-4 h-[300px]">
+            <ReactECharts option={nextProbOption} style={{ width: '100%', height: '100%' }} />
+          </div>
+          <div className="rounded-lg border border-border bg-bg-panel p-4 h-[300px]">
+            <ReactECharts option={steadyStateOption} style={{ width: '100%', height: '100%' }} />
+          </div>
+        </div>
+      )}
+
+      <p className="text-xs text-muted">
+        Markov 一階狀態轉移模型：將景氣度分為 5 個等級（衰退/低迷/平穩/景氣/繁榮），
+        基於歷史等級轉換構建轉移矩陣。穩態分布表示長期均衡下各行業在各等級的停留概率。
+        轉換概率 ≥ 50% 表示該轉換較可能發生。
+      </p>
+    </div>
+  );
+}

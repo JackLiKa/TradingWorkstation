@@ -19,6 +19,8 @@ import type {
   RotationAutoMlDto,
   ProsperityAlertDto,
   ProsperitySeasonalityDto,
+  ProsperityMarkovDto,
+  ProsperityForecastDto,
   CandlestickDto,
   ScreenerResultDto,
   ScreenerCriteriaDto,
@@ -94,6 +96,16 @@ export const api = {
   // ===== 行業景氣度週期性分析 =====
   prosperitySeasonality: (months = 12) =>
     apiFetch<ProsperitySeasonalityDto>(`/stock/industry-prosperity/seasonality?months=${months}`),
+
+  // ===== 行業景氣度 Markov 狀態轉移模型 =====
+  prosperityMarkov: (months = 12) =>
+    apiFetch<ProsperityMarkovDto>(`/stock/industry-prosperity/markov?months=${months}`),
+
+  // ===== 行業景氣度多模型預測 =====
+  prosperityForecast: (months = 6, forecastDays = 5) =>
+    apiFetch<ProsperityForecastDto>(
+      `/stock/industry-prosperity/forecast?months=${months}&forecastDays=${forecastDays}`
+    ),
 
   // ===== 行業景氣度指標 =====
   industryProsperity: (tradeDate?: string) =>
