@@ -3,6 +3,7 @@ package com.quantization.module.stock;
 import com.quantization.config.CacheConfig;
 import com.quantization.module.stock.dto.HotSymbolDto;
 import com.quantization.module.stock.dto.IndustryDailyDto;
+import com.quantization.module.stock.dto.IndustryProsperityDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
 import com.quantization.module.stock.dto.MarketBreadthDto;
@@ -406,6 +407,122 @@ public class StockService {
                         start, end).stream()
                 .map(IndustryDailyDto::from)
                 .toList();
+    }
+
+    /**
+     * 計算指定日期的行業景氣度指標（基於漲跌幅、成交額、換手率、漲跌家數綜合評分）。
+     *
+     * 評分維度（每維 0-100，加權綜合為 prosperityIndex）：
+     * - momentumScore (權重 0.35): avgPctChg 標準化
+     * - capitalScore (權重 0.25): totalAmount 標準化
+     * - activityScore (權重 0.20): avgTurn 標準化
+     * - breadthScore (權重 0.20): risingCount / (risingCount + fallingCount) 標準化
+     *
+     * @param tradeDate 交易日期，為空時取最新交易日
+     * @return 行業景氣度 DTO 列表（按 prosperityIndex 倒序）
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'prosperity-' + (#p0 != null ? #p0.toString() : 'latest')")
+    public List<IndustryProsperityDto> industryProsperity(LocalDate tradeDate) {
+        LocalDate target = tradeDate != null ? tradeDate : latestIndustryDailyDate();
+        List<IndustryDailyEntity> entities = industryDailyRepository
+                .findByTradeDateOrderByAvgPctChgDesc(target);
+
+        if (entities.isEmpty()) {
+            return List.of();
+        }
+
+        // 提取各維度數據用於標準化
+        double[] pctChgs = entities.stream()
+                .mapToDouble(e -> e.getAvgPctChg() != null ? e.getAvgPctChg().doubleValue() : 0.0)
+                .toArray();
+        double[] amounts = entities.stream()
+                .mapToDouble(e -> e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0)
+                .toArray();
+        double[] turns = entities.stream()
+                .mapToDouble(e -> e.getAvgTurn() != null ? e.getAvgTurn().doubleValue() : 0.0)
+                .toArray();
+        double[] breadths = entities.stream()
+                .mapToDouble(e -> {
+                    int rising = e.getRisingCount() != null ? e.getRisingCount() : 0;
+                    int falling = e.getFallingCount() != null ? e.getFallingCount() : 0;
+                    int total = rising + falling;
+                    return total > 0 ? (double) rising / total * 100.0 : 50.0;
+                })
+                .toArray();
+
+        // 計算各維度的 min/max 用於標準化
+        double pctMin = min(pctChgs), pctMax = max(pctChgs);
+        double amtMin = min(amounts), amtMax = max(amounts);
+        double turnMin = min(turns), turnMax = max(turns);
+        double breadthMin = min(breadths), breadthMax = max(breadths);
+
+        return entities.stream().map(e -> {
+            double pctChg = e.getAvgPctChg() != null ? e.getAvgPctChg().doubleValue() : 0.0;
+            double amount = e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0;
+            double turn = e.getAvgTurn() != null ? e.getAvgTurn().doubleValue() : 0.0;
+            int rising = e.getRisingCount() != null ? e.getRisingCount() : 0;
+            int falling = e.getFallingCount() != null ? e.getFallingCount() : 0;
+            int total = rising + falling;
+            double breadth = total > 0 ? (double) rising / total * 100.0 : 50.0;
+
+            // 標準化到 0-100
+            double momentumScore = normalize(pctChg, pctMin, pctMax);
+            double capitalScore = normalize(amount, amtMin, amtMax);
+            double activityScore = normalize(turn, turnMin, turnMax);
+            double breadthScore = normalize(breadth, breadthMin, breadthMax);
+
+            // 加權綜合
+            double prosperityIndex = momentumScore * 0.35
+                    + capitalScore * 0.25
+                    + activityScore * 0.20
+                    + breadthScore * 0.20;
+
+            String grade = prosperityIndex >= 80 ? "繁榮"
+                    : prosperityIndex >= 65 ? "景氣"
+                    : prosperityIndex >= 50 ? "平穩"
+                    : prosperityIndex >= 35 ? "低迷"
+                    : "衰退";
+
+            return new IndustryProsperityDto(
+                    e.getTradeDate(),
+                    e.getIndustry(),
+                    pctChg,
+                    amount,
+                    turn,
+                    rising,
+                    falling,
+                    Math.round(momentumScore * 100.0) / 100.0,
+                    Math.round(capitalScore * 100.0) / 100.0,
+                    Math.round(activityScore * 100.0) / 100.0,
+                    Math.round(breadthScore * 100.0) / 100.0,
+                    Math.round(prosperityIndex * 100.0) / 100.0,
+                    grade
+            );
+        }).sorted((a, b) -> Double.compare(b.prosperityIndex(), a.prosperityIndex())).toList();
+    }
+
+    /** 將值標準化到 0-100 區間。 */
+    private static double normalize(double value, double min, double max) {
+        if (max == min) {
+            return 50.0; // 所有值相同時給中間分
+        }
+        return (value - min) / (max - min) * 100.0;
+    }
+
+    private static double min(double[] arr) {
+        double m = Double.MAX_VALUE;
+        for (double v : arr) {
+            if (v < m) m = v;
+        }
+        return m;
+    }
+
+    private static double max(double[] arr) {
+        double m = -Double.MAX_VALUE;
+        for (double v : arr) {
+            if (v > m) m = v;
+        }
+        return m;
     }
 
     // ------------------------------------------------------------------------

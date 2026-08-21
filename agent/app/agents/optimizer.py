@@ -44,6 +44,7 @@ from app.core.metrics import (
     record_rag_operation,
 )
 from app.services.backend_client import backend_client
+from app.services.market_data_client import market_data_client
 from app.services.experience_store import (
     format_experiences_for_prompt,
     is_rag_available,
@@ -66,6 +67,72 @@ _strategy_stage = StrategyGenerationStage()
 _reflection_stage = BacktestReflectionStage()
 _prompt_stage = PromptGenerationStage()
 _judge = JudgeAI(pass_threshold=60.0)
+
+# 行業相關性快取（避免每輪重複計算）
+_industry_corr_cache: dict[str, Any] = {"data": None, "ts": 0.0}
+_INDUSTRY_CORR_TTL = 600.0  # 10 分鐘快取
+
+
+async def _get_industry_correlation_cached() -> dict[str, Any]:
+    """獲取行業相關性分析（帶快取，避免每輪重複計算）。"""
+    import time as _time
+
+    now = _time.time()
+    if _industry_corr_cache["data"] and (now - _industry_corr_cache["ts"]) < _INDUSTRY_CORR_TTL:
+        return _industry_corr_cache["data"]
+    try:
+        data = await market_data_client.get_industry_correlation(days=30)
+        _industry_corr_cache["data"] = data
+        _industry_corr_cache["ts"] = now
+        return data
+    except Exception as e:
+        logger.warning(f"行業相關性快取獲取失敗: {e}")
+        return {"high_corr_pairs": [], "industry_groups": [], "text": ""}
+
+
+async def _dedup_high_corr_industries(criteria: dict[str, Any]) -> dict[str, Any]:
+    """後處理：若 criteria.industries 中包含高相關行業對，保留較強的一個。
+
+    策略：
+    1. 獲取行業相關性分析（帶快取）
+    2. 若 industries 中存在高相關對（相關係數 >= 0.7），保留第一個（通常是 AI 優先選擇的）
+    3. 在 reasoning 中不額外修改（由 AI 自行解釋）
+    4. 降級：相關性數據不可用時直接返回原 criteria
+    """
+    industries = criteria.get("industries")
+    if not industries or not isinstance(industries, list) or len(industries) <= 1:
+        return criteria
+
+    corr_data = await _get_industry_correlation_cached()
+    high_corr_pairs = corr_data.get("high_corr_pairs", [])
+    if not high_corr_pairs:
+        return criteria
+
+    # 構建高相關映射
+    corr_map: dict[str, set[str]] = {}
+    for pair in high_corr_pairs:
+        a, b = pair.get("a", ""), pair.get("b", "")
+        if a and b:
+            corr_map.setdefault(a, set()).add(b)
+            corr_map.setdefault(b, set()).add(a)
+
+    # 貪心去重：遍歷 industries，若與已保留的行業高相關則移除
+    kept: list[str] = []
+    removed: list[str] = []
+    for ind in industries:
+        is_high_corr = any(ind in corr_map.get(k, set()) for k in kept)
+        if is_high_corr:
+            removed.append(ind)
+        else:
+            kept.append(ind)
+
+    if removed:
+        logger.info(f"行業相關性後處理: 移除高相關行業 {removed}，保留 {kept}")
+        new_criteria = dict(criteria)
+        new_criteria["industries"] = kept
+        return new_criteria
+
+    return criteria
 
 
 async def _load_best_strategy_from_db(latest_trade_date: str | None = None) -> tuple[dict, dict, float, int | None]:
@@ -328,6 +395,9 @@ async def run_optimization_loop():
                 parsed = {}
                 strategy_reasoning = "JSON 提取失敗，使用上一輪條件繼續"
                 new_criteria = state.current_criteria
+
+            # === 行業相關性後處理：避免高相關行業過度集中 ===
+            new_criteria = await _dedup_high_corr_industries(new_criteria)
 
             # === 回測（非 AI） ===
             state.status_message = f"第 {iteration} 輪：運行回測中..."

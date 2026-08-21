@@ -431,6 +431,30 @@ class BackendClient:
             logger.warning(f"獲取行業區間聚合失敗: {e}")
             return []
 
+    async def get_all_industry_daily_range(self, start: str, end: str) -> list[dict[str, Any]]:
+        """獲取日期區間內全部行業的日聚合數據（用於相關性矩陣計算）。
+
+        Args:
+            start: 起始日期 YYYY-MM-DD
+            end: 結束日期 YYYY-MM-DD
+
+        Returns:
+            list[dict]: 全部行業聚合序列（按日期升序、行業升序）
+        """
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/stock/industry-daily/all-range",
+                params={"start": start, "end": end},
+                timeout=20,
+            )
+            if not data.get("success"):
+                return []
+            return data.get("data", [])
+        except Exception as e:
+            logger.warning(f"獲取全部行業區間聚合失敗: {e}")
+            return []
+
     async def get_industries(self, code: str = None, industry: str = None) -> list[dict[str, Any]]:
         """查詢股票行業分類數據。"""
         params = {}

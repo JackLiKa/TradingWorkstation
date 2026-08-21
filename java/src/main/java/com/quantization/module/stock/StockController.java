@@ -3,6 +3,7 @@ package com.quantization.module.stock;
 import com.quantization.common.api.ApiResponse;
 import com.quantization.module.stock.dto.HotSymbolDto;
 import com.quantization.module.stock.dto.IndustryDailyDto;
+import com.quantization.module.stock.dto.IndustryProsperityDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexHistoryBatchRequestDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
@@ -197,6 +198,19 @@ public class StockController {
             @RequestParam LocalDate start,
             @RequestParam LocalDate end) {
         return ApiResponse.ok(stockService.allIndustryDailyRange(start, end));
+    }
+
+    /**
+     * 行業景氣度指標 — 基於漲跌幅、成交額、換手率、漲跌家數綜合評分。
+     *
+     * @param tradeDate 交易日期，為空時取最新交易日
+     * @return 行業景氣度 DTO 列表（按景氣度倒序）
+     */
+    @Operation(summary = "行業景氣度指標（綜合評分）")
+    @GetMapping("/industry-prosperity")
+    public ApiResponse<List<IndustryProsperityDto>> industryProsperity(
+            @RequestParam(required = false) LocalDate tradeDate) {
+        return ApiResponse.ok(stockService.industryProsperity(tradeDate));
     }
 
     // ===== 指數歷史（市場形態識別）=====

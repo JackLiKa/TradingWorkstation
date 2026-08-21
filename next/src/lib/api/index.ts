@@ -13,6 +13,7 @@ import type {
   IndustryDailyDto,
   IndexDailyDto,
   RotationSignalDto,
+  IndustryProsperityDto,
   CandlestickDto,
   ScreenerResultDto,
   ScreenerCriteriaDto,
@@ -61,6 +62,10 @@ export const api = {
 
   // ===== 行業輪動信號 =====
   rotation: (days = 5) => apiFetch<RotationSignalDto>(`/stock/rotation?days=${days}`),
+
+  // ===== 行業景氣度指標 =====
+  industryProsperity: (tradeDate?: string) =>
+    apiFetch<IndustryProsperityDto[]>(`/stock/industry-prosperity${tradeDate ? `?tradeDate=${tradeDate}` : ''}`),
 
   // ===== Chart K線圖 =====
   candlestick: (params: URLSearchParams) => apiFetch<CandlestickDto>(`/chart/candlestick?${params.toString()}`),

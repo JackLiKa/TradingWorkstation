@@ -9,15 +9,17 @@ import { IndustryRisingFalling } from '@/components/industry/IndustryRisingFalli
 import { IndustryTrendChart } from '@/components/industry/IndustryTrendChart';
 import { RotationHistoryChart } from '@/components/industry/RotationHistoryChart';
 import { IndustryCorrelationHeatmap } from '@/components/industry/IndustryCorrelationHeatmap';
+import { IndustryCapitalFlowTrend } from '@/components/industry/IndustryCapitalFlowTrend';
+import { IndustryProsperityChart } from '@/components/industry/IndustryProsperityChart';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
-import { Calendar, RefreshCw, TrendingUp, DollarSign, BarChart3, Activity, RotateCcw, BarChart2, Newspaper, RefreshCcw, Grid3x3 } from 'lucide-react';
+import { Calendar, RefreshCw, TrendingUp, DollarSign, BarChart3, Activity, RotateCcw, BarChart2, Newspaper, RefreshCcw, Grid3x3, Waves, Gauge } from 'lucide-react';
 import type { IndustryDailyDto, IndexDailyDto } from '@/lib/api/types';
 import { agentApi, type IndustryNewsItem } from '@/lib/api/agent';
 
 /** 可視化類型 */
-type ViewType = 'heatmap' | 'capital' | 'risingFalling' | 'trend' | 'rotation' | 'correlation';
+type ViewType = 'heatmap' | 'capital' | 'risingFalling' | 'trend' | 'rotation' | 'correlation' | 'capitalTrend' | 'prosperity';
 
 const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp }[] = [
   { key: 'heatmap', label: '行業熱力圖', icon: TrendingUp },
@@ -26,6 +28,8 @@ const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp }[] = [
   { key: 'trend', label: '行業走勢', icon: Activity },
   { key: 'rotation', label: '輪動信號', icon: RefreshCcw },
   { key: 'correlation', label: '相關性矩陣', icon: Grid3x3 },
+  { key: 'capitalTrend', label: '資金趨勢', icon: Waves },
+  { key: 'prosperity', label: '景氣度', icon: Gauge },
 ];
 
 function formatDateInput(d: Date) {
@@ -143,6 +147,8 @@ export default function IndustryPage() {
     if (view === 'risingFalling') return <IndustryRisingFalling data={daily} />;
     if (view === 'rotation') return <RotationHistoryChart />;
     if (view === 'correlation') return <IndustryCorrelationHeatmap rangeStart={rangeStart} rangeEnd={rangeEnd} />;
+    if (view === 'capitalTrend') return <IndustryCapitalFlowTrend rangeStart={rangeStart} rangeEnd={rangeEnd} />;
+    if (view === 'prosperity') return <IndustryProsperityChart />;
     return null;
   };
 

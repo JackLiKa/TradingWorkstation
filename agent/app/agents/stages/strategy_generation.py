@@ -51,13 +51,15 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 
 {error_lessons}
 
+{correlation_text}
+
 {few_shot}
 
 ## 你的任務
 1. 根據上方「市場分析」「最新交易日行業強弱」和「上一輪反思結論」，調整選股條件
 2. 若領漲行業動能強勁，可適當提高 minPctChange / minReturn20 / minTurn 等動量條件，捕捉強勢股
 3. 若市場由弱勢行業主導或防禦信號明顯，則偏向低波動、低換手或高紅利風格
-4. **行業聚焦**：若某些行業連續多日領漲且資金集中，可在 criteria 中加入 "industries": ["行業名稱1", "行業名稱2"] 限制選股範圍至這些強勢行業（最多 3 個）；若無明確行業偏好則不要填寫 industries 字段
+4. **行業聚焦**：若某些行業連續多日領漲且資金集中，可在 criteria 中加入 "industries": ["行業名稱1", "行業名稱2"] 限制選股範圍至這些強勢行業（最多 3 個）；若無明確行業偏好則不要填寫 industries 字段。**重要**：若上方「行業相關性分析」指出某些行業對高度相關（相關係數 ≥ 0.7），應避免在 industries 中同時選擇這些高相關行業，以保持組合分散度
 5. 參考上方「歷史優化記錄」和 RAG 經驗（如有），避免重複歷史上效果差的策略
 6. 如有「歷史錯誤教訓」，確保不重複同類錯誤（特別是 JSON 格式錯誤）
 7. 每次只調整 1-3 個參數，不要大幅變動
@@ -188,6 +190,15 @@ class StrategyGenerationStage(BaseStage):
             logger.warning(f"[AI2] 獲取行業聚合失敗: {e}")
             industry_text = "數據不足，無法提供行業聚合"
 
+        # 獲取行業相關性分析，避免高相關行業過度集中
+        logger.info("[AI2] 獲取行業相關性分析...")
+        try:
+            corr_data = await market_data_client.get_industry_correlation(days=30)
+            correlation_text = corr_data.get("text", "")
+        except Exception as e:
+            logger.warning(f"[AI2] 行業相關性分析失敗: {e}")
+            correlation_text = ""
+
         # 注入歷史錯誤教訓（避免重複犯錯）
         from app.services import error_store
 
@@ -203,6 +214,7 @@ class StrategyGenerationStage(BaseStage):
             history_text=history_text if history_text else "無（首輪）",
             rag_experiences=rag_experiences if rag_experiences else "無（RAG 不可用或無相似經驗）",
             error_lessons=error_lessons if error_lessons else "無（無歷史錯誤記錄）",
+            correlation_text=correlation_text if correlation_text else "無（無高相關行業對或數據不足）",
             asof_date=asof_date,
             adjustflag=adjustflag,
             few_shot=get_few_shot("strategy_generation"),

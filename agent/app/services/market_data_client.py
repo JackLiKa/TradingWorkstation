@@ -431,6 +431,126 @@ class MarketDataClient:
             logger.warning(f"行業區間聚合獲取失敗: {e}")
             return []
 
+    async def get_industry_correlation(self, days: int = 30) -> dict[str, Any]:
+        """計算行業間相關性矩陣，識別高相關行業對。
+
+        用於 Agent 策略生成時避免高相關行業過度集中。
+
+        Args:
+            days: 回溯天數（默認 30 日）
+
+        Returns:
+            dict: {
+                "high_corr_pairs": [{"a": indA, "b": indB, "corr": 0.85}, ...],
+                "industry_groups": [[ind1, ind2, ...], ...],  # 高相關行業聚類
+                "text": "可注入 prompt 的文本摘要",
+            }
+        """
+        try:
+            from datetime import datetime, timedelta
+            from app.services.backend_client import backend_client
+
+            end = datetime.now().strftime("%Y-%m-%d")
+            start = (datetime.now() - timedelta(days=days + 10)).strftime("%Y-%m-%d")
+            data = await backend_client.get_all_industry_daily_range(start, end)
+            if not data or len(data) < 10:
+                return {"high_corr_pairs": [], "industry_groups": [], "text": ""}
+
+            # 按行業分組
+            industry_map: dict[str, dict[str, float]] = {}
+            for item in data:
+                ind = item.get("industry", "")
+                pct = item.get("avgPctChg")
+                date = item.get("tradeDate", "")
+                if not ind or pct is None or not date:
+                    continue
+                if ind not in industry_map:
+                    industry_map[ind] = {}
+                industry_map[ind][date] = float(pct)
+
+            if len(industry_map) < 2:
+                return {"high_corr_pairs": [], "industry_groups": [], "text": ""}
+
+            # 取波動率最大的 20 個行業
+            volatility_list = []
+            for ind, series in industry_map.items():
+                values = list(series.values())
+                if len(values) < 5:
+                    continue
+                mean = sum(values) / len(values)
+                variance = sum((v - mean) ** 2 for v in values) / len(values)
+                volatility_list.append((ind, variance ** 0.5, values, list(series.keys())))
+            volatility_list.sort(key=lambda x: x[1], reverse=True)
+            selected = volatility_list[:20]
+
+            if len(selected) < 2:
+                return {"high_corr_pairs": [], "industry_groups": [], "text": ""}
+
+            # 對齊日期
+            all_dates = set()
+            for s in selected:
+                all_dates.update(s[3])
+            sorted_dates = sorted(all_dates)
+
+            # 構建序列矩陣
+            series_data = []
+            for s in selected:
+                date_map = dict(zip(s[3], s[2]))
+                series_data.append([date_map.get(d, 0.0) for d in sorted_dates])
+
+            # 計算 Pearson 相關係數
+            n = len(selected)
+            corr_matrix = [[0.0] * n for _ in range(n)]
+            for i in range(n):
+                for j in range(n):
+                    if i == j:
+                        corr_matrix[i][j] = 1.0
+                    elif j > i:
+                        corr = _pearson_corr(series_data[i], series_data[j])
+                        corr_matrix[i][j] = corr
+                        corr_matrix[j][i] = corr
+
+            # 找出高相關行業對（>= 0.7）
+            high_corr_pairs = []
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if corr_matrix[i][j] >= 0.7:
+                        high_corr_pairs.append({
+                            "a": selected[i][0],
+                            "b": selected[j][0],
+                            "corr": round(corr_matrix[i][j], 3),
+                        })
+            high_corr_pairs.sort(key=lambda x: x["corr"], reverse=True)
+
+            # 構建行業聚類（簡單貪心：高相關的行業歸為一組）
+            industry_groups = _build_correlation_groups(high_corr_pairs)
+
+            # 構建 prompt 文本
+            text_lines = []
+            if high_corr_pairs:
+                text_lines.append("## 行業相關性分析（避免高相關行業過度集中）")
+                text_lines.append("以下行業對走勢高度相關（相關係數 ≥ 0.7），若在 industries 中同時選擇會降低分散度：")
+                for pair in high_corr_pairs[:8]:
+                    text_lines.append(f"- {pair['a']} × {pair['b']} (相關係數 {pair['corr']})")
+                if industry_groups:
+                    text_lines.append("")
+                    text_lines.append("高相關行業聚類（同組行業不宜同時聚焦）：")
+                    for i, group in enumerate(industry_groups[:5], 1):
+                        text_lines.append(f"  組{i}: {', '.join(group)}")
+                text_lines.append("")
+                text_lines.append("建議：若需聚焦多個行業，優先選擇不同聚類組的行業，提升組合分散度。")
+            text = "\n".join(text_lines)
+
+            logger.info(f"行業相關性計算完成: {len(high_corr_pairs)} 個高相關對, {len(industry_groups)} 個聚類組")
+            return {
+                "high_corr_pairs": high_corr_pairs,
+                "industry_groups": industry_groups,
+                "text": text,
+            }
+        except Exception as e:
+            logger.warning(f"行業相關性計算失敗: {e}")
+            return {"high_corr_pairs": [], "industry_groups": [], "text": ""}
+
     async def _get_market_news(self, page_size: int = 20) -> list[dict[str, Any]]:
         """從東方財經抓取最新財經新聞（A股市場要聞）。
 
@@ -542,6 +662,63 @@ def _safe_float(val) -> float:
         return float(val)
     except (ValueError, TypeError):
         return 0.0
+
+
+def _pearson_corr(x: list[float], y: list[float]) -> float:
+    """計算兩個序列的 Pearson 相關係數。"""
+    n = min(len(x), len(y))
+    if n < 2:
+        return 0.0
+    sx = x[:n]
+    sy = y[:n]
+    mean_x = sum(sx) / n
+    mean_y = sum(sy) / n
+    num = sum((sx[i] - mean_x) * (sy[i] - mean_y) for i in range(n))
+    dx = sum((v - mean_x) ** 2 for v in sx)
+    dy = sum((v - mean_y) ** 2 for v in sy)
+    denom = (dx * dy) ** 0.5
+    if denom == 0:
+        return 0.0
+    return num / denom
+
+
+def _build_correlation_groups(high_corr_pairs: list[dict]) -> list[list[str]]:
+    """根據高相關行業對構建聚類組（簡單貪心 union-find）。
+
+    Args:
+        high_corr_pairs: 高相關行業對列表，每項含 a/b/corr
+
+    Returns:
+        list[list[str]]: 聚類組列表，每組為高相關行業名稱列表
+    """
+    parent: dict[str, str] = {}
+
+    def find(s: str) -> str:
+        if s not in parent:
+            parent[s] = s
+            return s
+        while parent[s] != s:
+            parent[s] = parent[parent[s]]
+            s = parent[s]
+        return s
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for pair in high_corr_pairs:
+        union(pair["a"], pair["b"])
+
+    groups_map: dict[str, list[str]] = {}
+    for s in parent:
+        root = find(s)
+        groups_map.setdefault(root, []).append(s)
+
+    # 只保留長度 >= 2 的組
+    groups = [sorted(g) for g in groups_map.values() if len(g) >= 2]
+    groups.sort(key=lambda g: len(g), reverse=True)
+    return groups
 
 
 def _now_str() -> str:

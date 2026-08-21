@@ -55,6 +55,23 @@ export interface IndexDailyDto {
   pctChange: number | null;
 }
 
+/** 行業景氣度指標（綜合評分） */
+export interface IndustryProsperityDto {
+  tradeDate: string;
+  industry: string;
+  avgPctChg: number | null;
+  totalAmount: number | null;
+  avgTurn: number | null;
+  risingCount: number | null;
+  fallingCount: number | null;
+  momentumScore: number;
+  capitalScore: number;
+  activityScore: number;
+  breadthScore: number;
+  prosperityIndex: number;
+  grade: string;
+}
+
 /** 行業輪動信號數據 */
 export interface RotationSignalDto {
   days: number;
