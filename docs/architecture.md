@@ -13,15 +13,16 @@
 │  context-path: /TradingWorkstation │  │  端口 8100          │
 │  端口 8090                   │  │  AI 優化循環 + 評委     │
 │  ┌──────────────────────┐   │  │  + 監控 + 6 AI 節點     │
-│  │  controller (REST)   │   │  └─────────┬──────────────┘
-│  │  service (业务+指标)  │   │            │ 調用後端 API
-│  │  repository (JPA)    │   │←───────────┘
+│  │  controller (REST)   │   │  │  + 景氣度/輪動預測注入  │
+│  │  service (业务+指标)  │   │  └─────────┬──────────────┘
+│  │  repository (JPA)    │   │            │ 調用後端 API
 │  │  indicator 引擎      │   │
+│  │  notification 通知   │   │
 │  └──────────────────────┘   │
 └──────────────┬──────────────┘
                │
         ┌──────▼──────┐
-        │   MySQL      │  stock_daily / stock_industry / index_daily / index_metadata
+        │   MySQL      │  stock_daily / stock_industry / industry_daily / index_daily / index_metadata / backtest_strategy
         └──────────────┘
                ▲
         ┌──────┴──────┐
@@ -35,14 +36,14 @@
 |------|------|
 | `config` | 配置类（缓存、OpenAPI、Web、CORS）与 `@ConfigurationProperties` |
 | `common` | 跨切面：统一响应 `ApiResponse`/`PageResponse`、全局异常、工具类 |
-| `module.stock` | `stock_daily`/`stock_industry` 实体、仓储、行情查询、模糊搜索、行业分类 |
+| `module.stock` | `stock_daily`/`stock_industry`/`industry_daily` 实体、仓储、行情查询、模糊搜索、行业分类、行業景氣度分析、輪動預測、Markov 模型、多模型預測（ARIMA/Holt-Winters/線性回歸）、AutoML 調參、季節性分析、回測驗證 |
 | `module.indicator` | 指标引擎：MA/EMA/MACD/KDJ/RSI/BOLL/量比/区间收益/评分 |
 | `module.dashboard` | 总览面板：汇总指标、最新波动、K 线初始加载 |
 | `module.screener` | 选股器：条件筛选、评分排序 |
 | `module.backtest` | 回测：调仓回放、净值/超额曲线、统计（夏普比率、最大回撤） |
 | `module.chart` | K 线按需加载历史（分批拉取更早数据） |
 | `module.sync` | 数据同步：编排 Python Baostock 拉取并写入 |
-| `module.system` | 数据库配置校验、健康检查 |
+| `module.system` | 数据库配置校验、健康检查、**通知服務**（郵件 SMTP + Webhook，景氣度預警異步推送） |
 | `module.preference` | 用户偏好持久化 |
 
 ### 依赖方向
@@ -74,8 +75,8 @@ controller → service → repository / indicator引擎
 | `agents/stages/strategy_generation.py` | AI 2：策略生成（選股條件 JSON） |
 | `agents/stages/backtest_reflection.py` | AI 3：回測反思（績效分析 + 改進建議） |
 | `agents/stages/prompt_generation.py` | AI 4：提示詞生成（下一輪優化方向） |
-| `services/backend_client.py` | 後端 API 客戶端（回測、選股、行業數據） |
-| `services/market_data_client.py` | 實時行情數據客戶端（新浪財經 API） |
+| `services/backend_client.py` | 後端 API 客戶端（回測、選股、行業數據、景氣度、輪動預測、資金遷移） |
+| `services/market_data_client.py` | 實時行情數據客戶端（新浪財經 API + 景氣度/輪動預測格式化） |
 | `services/model_checker.py` | 模型可用性定時檢查 |
 | `api/routes.py` | FastAPI 路由層 |
 
@@ -98,7 +99,7 @@ f0（歷史最優策略）
 
 | 目录 | 职责 |
 |------|------|
-| `app/` | App Router 路由：dashboard / screener / agent / sync / settings |
+| `app/` | App Router 路由：dashboard / screener / agent / **industry** / sync / settings |
 | `components/layout` | Sidebar / Topbar / LoadingOverlay |
 | `components/ui` | shadcn/ui 基础组件 |
 | `components/dashboard` | 指标卡 / 波动列表 / 工具栏 / 日志 |
@@ -106,6 +107,7 @@ f0（歷史最優策略）
 | `components/screener` | 筛选面板 / 信号面板 / 结果表 / 详情 / 规则预览 |
 | `components/backtest` | 回测结果 / 调仓明细表 |
 | `components/agent` | Agent 狀態面板 / 工作流圖譜 / 監控面板 / 迭代卡片 / 評分趨勢 |
+| `components/industry` | **行業分析組件**（22 個視圖）：熱力圖 / 資金流向 / 景氣度 / 輪動預測 / 回測 / AutoML / Markov / 多模型預測 / 季節性 / 預警 / 輪動Markov 等 |
 | `components/sync` / `components/settings` | 同步面板 / 数据库配置表单 |
 | `components/common` | DataTable / StatusBadge / CopyButton |
 | `lib/api` | fetch 封装、与后端对齐的 TS 类型、各端点 |
@@ -124,3 +126,8 @@ f0（歷史最優策略）
 6. **前后端类型对齐**：`lib/api/types.ts` 与后端 DTO 字段一一对应，命名 camelCase。
 7. **AI 節點模塊化**：每個 AI 節點繼承 `BaseStage`，有獨立的 prompt 和 execute 邏輯；評委通過生命週期鉤子自動介入；監控通過 AOP 記錄節點事件。
 8. **LLM 降級策略**：Qoder lite（免費）→ Devin GLM-5.2 High（免費）→ 關閉 AI 優化。
+9. **行業景氣度分析**：基於 `industry_daily` 表計算 4 維度綜合評分（動量/資金/活躍度/廣度），分為 5 級等級（衰退/低迷/平穩/景氣/繁榮）。所有分析結果帶 Caffeine 緩存（5 分鐘 TTL），API 端點有參數邊界限制防止數據庫過載。
+10. **多模型預測**：ARIMA + Holt-Winters + 線性回歸三個輕量級 CPU 模型（純 Java 實作，無額外依賴，秒級運算），整合預測 = 加權平均，共識趨勢 = 多數決。避免 LSTM 等重型模型對硬件的依賴。
+11. **Markov 狀態轉移模型**：景氣度 Markov（5 狀態）+ 輪動 Markov（3 狀態），基於歷史轉換構建轉移矩陣，迭代法計算穩態分布。
+12. **通知服務**：`module.system` 中的 `NotificationService` 支援 SMTP 郵件 + Webhook 推送，所有推送方法異步（`@Async`），配置項環境驅動（`app.notification.*`），不硬編碼密鑰。
+13. **Agent 行業數據注入**：Agent 策略生成階段接收景氣度指標、資金遷移、輪動預測等上下文，輔助 AI 選擇強勢行業、避開弱勢行業。

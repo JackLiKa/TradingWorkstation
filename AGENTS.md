@@ -6,6 +6,8 @@
   - 入口：`src/main/java/com/quantization/QuantizationApplication.java`
   - 配置：`src/main/resources/application.yml`（从 `.env` 读取）
   - 模块：`com.quantization.module.{stock,indicator,dashboard,screener,backtest,chart,sync,system,preference}`
+  - 行業分析：`module.stock` 含行業景氣度、輪動預測、Markov 模型、多模型預測（ARIMA/Holt-Winters/線性回歸）、AutoML 調參、季節性分析、回測驗證
+  - 通知服務：`module.system` 含 `NotificationService`（SMTP 郵件 + Webhook，異步推送）
   - 构建：`mvn -DskipTests compile`（需 JDK 21）
   - 运行：`mvn spring-boot:run`，默认 `http://localhost:8090`，Swagger `/swagger-ui.html`
 - `next/` — 前端：Next.js 15.1.9 (App Router) + ECharts + shadcn/ui + Tailwind
@@ -17,7 +19,7 @@
   - 入口：`agent/app/main.py`
   - 配置：`agent/.env`（从 `agent/.env.example` 复制）
   - LLM 供應商：DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin（7 個供應商，按階段性價比路由）
-  - 測試：`cd agent && python -m pytest tests/`（114 個測試）
+  - 測試：`cd agent && python -m pytest tests/`（173 個測試）
   - 監控：`/api/agent/metrics`（Prometheus 指標端點）
   - 运行：`uvicorn app.main:app`，默认 `http://localhost:8100`，Swagger `/docs`
 - `ingestion/` — Python Baostock 数据采集脚本（由后端 sync 模块编排）
@@ -394,7 +396,7 @@ java -version  # 确认显示 21.x.x
 
 ### 后端 Caffeine 缓存
 
-后端使用 Caffeine 内存缓存（`CacheConfig.java`），涉及两个缓存：
+后端使用 Caffeine 内存缓存（`CacheConfig.java`），涉及以下缓存：
 
 | 缓存名              | TTL（秒）           | 缓存内容          | 清除触发条件         |
 |---------------------|---------------------|-------------------|----------------------|
@@ -404,6 +406,7 @@ java -version  # 确认显示 21.x.x
 | `marketBreadth`       | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 市場廣度分析         | TTL 过期自动清除     |
 | `rotationSignal`      | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 輪動信號分析         | TTL 过期自动清除     |
 | `sectorPerformance`   | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 多日板塊表現         | TTL 过期自动清除     |
+| `industryDailyCache`  | 300（5 分鐘）        | 行業景氣度/輪動預測/Markov/多模型預測/回測/AutoML/季節性等分析結果 | TTL 过期自动清除 |
 
 **缓存可能导致的错误现象：**
 

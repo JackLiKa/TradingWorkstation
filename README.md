@@ -34,11 +34,12 @@ Trading Workstation/
 
 | 层 | 选型 |
 |----|------|
-| 后端 | Java 21、Spring Boot 3.3.4、Spring Data JPA (Hibernate 6.5)、HikariCP、Caffeine、springdoc-openapi、Lombok |
+| 后端 | Java 21、Spring Boot 3.3.4、Spring Data JPA (Hibernate 6.5)、HikariCP、Caffeine、springdoc-openapi、Lombok、Spring Mail |
 | 前端 | Next.js 15.1.9 (App Router, 混合渲染)、React 19、TypeScript、Tailwind CSS、shadcn/ui、ECharts、SWR |
-| AI Agent | Python 3.10+、FastAPI、Uvicorn、LangGraph 风格优化循环、Devin/Qoder LLM API |
-| 数据库 | MySQL 8.0+（`stock_daily` / `index_daily` / `index_metadata` / `stock_industry`，A 股日线 + 540 个已验证指数） |
+| AI Agent | Python 3.10+、FastAPI、Uvicorn、LangGraph 风格优化循环、多模型 LLM 路由（7 供應商） |
+| 数据库 | MySQL 8.0+（`stock_daily` / `index_daily` / `index_metadata` / `stock_industry` / `industry_daily` / `backtest_strategy`，A 股日线 + 540 个已验证指数 + 行業日聚合） |
 | 数据同步 | Python Baostock 脚本 + `discover_indices.py` 动态发现 540 个有效指数（Java SyncService 通过 ProcessBuilder 编排） |
+| 通知服务 | Spring Mail (SMTP) + Webhook（景氣度預警推送，異步發送） |
 
 ## 服务端口总览
 
@@ -199,11 +200,58 @@ curl http://localhost:8100/api/agent/health
 
 - 六阶段 AI 优化循环：市场新闻分析 → 行业分析选股 → 市场分析 → 策略生成 → 回测反思 → Prompt 生成
 - 市场分析注入 540 个指数数据，支持市场形态、市场广度（market breadth）、行业与风格轮动（rotation）综合判断
+- 行業分析注入景氣度指標、資金遷移、輪動預測，輔助 AI 選擇強勢行業
 - 每阶段 Judge AI 评分 + 自动重试
 - 始终基于历史最优策略迭代
 - 工作流图谱可视化 + 系统监控面板
 - 评分趋势图 + 优化历史记录
 - 模型状态卡片（可展開查看詳情、手動檢查）
+
+### 行業分析（Industry Analysis）
+
+獨立的 `/industry` 頁面，提供 22 個視圖、3 個分組的深度行業分析：
+
+**即時概覽（4 個視圖）**
+- 行業熱力圖（Treemap，按漲跌幅著色）
+- 資金流向（Top 25 柱狀圖，億元單位）
+- 漲跌家數（堆疊柱狀圖）
+- 景氣度（4 維度綜合評分 + 5 級等級 + 排行表）
+
+**歷史趨勢（4 個視圖）**
+- 行業走勢（雙軸走勢 + 大盤疊加 + 新聞標記）
+- 輪動信號（回溯天數切換 + 多日趨勢對比 + 領漲/滯後對比）
+- 資金趨勢（多日成交額趨勢線 + 淨流入/流出摘要）
+- 景氣度趨勢（多日景氣度對比 + 上升/下降排行）
+
+**進階分析（14 個視圖）**
+- 相關性矩陣（Pearson 熱力圖 + 高相關行業對 + 聚類）
+- 資金遷移（桑基圖 + 流入/流出排行）
+- 景氣度 vs 大盤（雙軸疊加 + 相關係數 + 解讀建議）
+- 輪動預測（動量+資金+趨勢綜合評分 + 信心度 + Top 5 列表）
+- 預測回測（命中率 + 超額收益走勢 + 累計命中率 + 明細表）
+- AutoML 調參（15 組合搜尋 + 熱力圖 + 散點圖 + 明細表）
+- 景氣度熱力圖（多日×多行業矩陣 + 色階）
+- 景氣度預警（突變通知 + 等級躍遷 + 郵件/Webhook 推送）
+- 景氣度週期（季節性強度排行 + 月度/星期模式 + 最佳/最差月份）
+- Markov 轉移（5×5 等級轉移矩陣 + 下一日概率 + 穩態分布）
+- 多模型預測（ARIMA + Holt-Winters + 線性回歸 + 共識趨勢 + 走勢圖）
+- 預測回測（MAE + 方向準確率 + 等級命中率 + 超額收益）
+- 輪動 Markov（3×3 轉移矩陣 + 長期領漲概率排行 + 穩態分布）
+
+**景氣度預測模型矩陣**
+- Markov 狀態轉移（等級轉換概率 + 穩態分布）
+- ARIMA（AR(2) + 一階差分，捕捉自相關性）
+- Holt-Winters（三重指數平滑，捕捉趨勢 + 季節性）
+- 線性回歸（OLS 趨勢預測）
+- 輪動預測（動量+資金+趨勢綜合評分）
+- 季節性分析（月度/星期模式）
+- AutoML 自動調參（最佳參數搜尋）
+- 預測回測驗證（MAE + 方向準確率 + 等級命中率 + 超額收益）
+
+**通知服務**
+- 郵件推送（SMTP，景氣度預警明細）
+- Webhook 推送（JSON payload，可接企業微信/釘釘/Slack）
+- 異步發送，不阻塞調用方
 
 ### 数据同步（Sync）
 
@@ -211,6 +259,7 @@ curl http://localhost:8100/api/agent/health
 - `discover_indices.py` 从 Baostock `query_all_stock` 动态发现并验证指数代码，当前清单含 540 个有效指数（综合 / 规模 / 行业 / 策略 / 成长 / 价值 / 主题 / 基金 / 债券）
 - 指数元数据自动同步至 `index_metadata` 表
 - 三种复权（前复权/后复权/不复权）+ 指数数据 + 行业分类
+- 行業日聚合數據自動生成（`JOIN stock_daily × stock_industry` 按 `(date, industry)` 聚合寫入 `industry_daily`）
 - 前端同步进度可视化 + 取消功能
 
 ### 系统设置（Settings）
@@ -238,8 +287,8 @@ curl http://localhost:8100/api/agent/health
 
 ## 缓存说明
 
-- **后端 Caffeine**：`dashboardSummary`（60s TTL）、`dashboardMetrics`（30s TTL）、`indexMetadata` / `marketBreadth` / `rotationSignal` / `sectorPerformance`（30s TTL）。数据同步后等待 TTL 过期或重启后端。
-- **前端 SWR**：默认 `revalidateOnFocus`，可通过 `mutate()` 手动刷新。
+- **后端 Caffeine**：`dashboardSummary`（60s TTL）、`dashboardMetrics`（30s TTL）、`indexMetadata` / `marketBreadth` / `rotationSignal` / `sectorPerformance`（30s TTL）、`industryDailyCache`（行業景氣度/輪動預測/Markov/預測/回測等分析結果，5 分鐘 TTL）。数据同步后等待 TTL 过期或重启后端。
+- **前端 SWR**：默认 `revalidateOnFocus`，可通过 `mutate()` 手动刷新。行業分析視圖 `dedupingInterval` 設為 5 分鐘，避免頻繁重複請求。
 
 ## 常见问题
 

@@ -64,11 +64,11 @@ agent/
 │   ├── api/
 │   │   └── routes.py              # API 路由（含 /metrics + /providers）
 │   └── services/
-│       ├── backend_client.py      # 后端 REST API 客户端（連接池 + 重試 + 速率限制）
+│       ├── backend_client.py      # 后端 REST API 客户端（連接池 + 重試 + 速率限制 + 景氣度/輪動預測/資金遷移）
 │       ├── experience_store.py    # RAG 經驗存儲/檢索
 │       ├── vector_store.py        # Milvus Lite 向量數據庫
-│       └── market_data_client.py  # 市场数据客户端
-├── tests/                         # pytest 測試套件（125 個測試）
+│       └── market_data_client.py  # 市场数据客户端（含景氣度/輪動預測格式化）
+├── tests/                         # pytest 測試套件（173 個測試）
 ├── requirements.txt
 ├── requirements-dev.txt           # 測試依賴
 ├── pytest.ini
@@ -196,9 +196,24 @@ Swagger 文档：`http://localhost:8100/docs`
 
 评分越高策略越优。历史最优策略从后端数据库加载，确保重启后不丢失。
 
+## 行業數據注入
+
+Agent 策略生成階段（AI 2）接收以下行業分析上下文，輔助 AI 選擇強勢行業：
+
+| 數據源 | API | 用途 |
+|--------|-----|------|
+| 行業景氣度 | `/stock/industry-prosperity` | 4 維度綜合評分 + 5 級等級，選擇景氣度高的行業 |
+| 資金遷移 | `/stock/industry-capital-migration` | 桑基圖資金流向，參考資金流入行業 |
+| 輪動預測 | `/stock/rotation-prediction` | 動量+資金+趨勢綜合評分，優先預測領漲行業 |
+
+Prompt 中的佔位符：
+- `{industry_prosperity_text}` — 景氣度排行與等級
+- `{capital_migration_text}` — 資金遷移摘要
+- `{rotation_prediction_text}` — 輪動預測 Top 5 領漲 + Top 3 滯後
+
 ## 注意事项
 
 - Agent 依赖后端 REST API，必须先启动 Java 后端
 - 至少需要一个可用的 LLM API Key
 - 优化循环是长时间运行的任务，建议在后台运行
-- 每轮迭代结果会自动保存到后端数据库的 `saved_strategies` 表
+- 每轮迭代结果会自动保存到后端数据库的 `backtest_strategy` 表
