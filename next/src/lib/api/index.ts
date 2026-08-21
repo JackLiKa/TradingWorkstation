@@ -15,6 +15,8 @@ import type {
   RotationSignalDto,
   IndustryProsperityDto,
   RotationPredictionDto,
+  RotationBacktestDto,
+  ProsperityAlertDto,
   CandlestickDto,
   ScreenerResultDto,
   ScreenerCriteriaDto,
@@ -67,6 +69,16 @@ export const api = {
   // ===== 行業輪動預測 =====
   rotationPrediction: (lookbackDays = 20) =>
     apiFetch<RotationPredictionDto>(`/stock/rotation-prediction?lookbackDays=${lookbackDays}`),
+
+  // ===== 輪動預測回測 =====
+  rotationPredictionBacktest: (lookbackDays = 20, forwardDays = 5, backtestDays = 90) =>
+    apiFetch<RotationBacktestDto>(
+      `/stock/rotation-prediction/backtest?lookbackDays=${lookbackDays}&forwardDays=${forwardDays}&backtestDays=${backtestDays}`
+    ),
+
+  // ===== 行業景氣度異常預警 =====
+  prosperityAlerts: (threshold = 10.0) =>
+    apiFetch<ProsperityAlertDto>(`/stock/industry-prosperity/alerts?threshold=${threshold}`),
 
   // ===== 行業景氣度指標 =====
   industryProsperity: (tradeDate?: string) =>

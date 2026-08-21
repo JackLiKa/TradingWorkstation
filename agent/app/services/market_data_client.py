@@ -506,6 +506,63 @@ class MarketDataClient:
             logger.warning(f"行業景氣度獲取失敗: {e}")
             return {"top_prosperous": [], "bottom_prosperous": [], "text": ""}
 
+    async def get_rotation_prediction(self, lookback_days: int = 20) -> dict[str, Any]:
+        """獲取行業輪動預測，格式化為 prompt 可注入文本。
+
+        用於 Agent 策略生成時參考輪動預測選擇行業。
+
+        Args:
+            lookback_days: 回溯天數（默認 20）
+
+        Returns:
+            dict: {
+                "predicted_leaders": [...],
+                "predicted_laggards": [...],
+                "confidence": float,
+                "text": "可注入 prompt 的文本摘要",
+            }
+        """
+        try:
+            from app.services.backend_client import backend_client
+
+            data = await backend_client.get_rotation_prediction(lookback_days)
+            if not data:
+                return {"predicted_leaders": [], "predicted_laggards": [], "confidence": 0.0, "text": ""}
+
+            leaders = data.get("predictedLeaders", [])
+            laggards = data.get("predictedLaggards", [])
+            confidence = data.get("confidence", 0.0)
+
+            lines = ["## 行業輪動預測"]
+            lines.append(f"預測信心度：{confidence:.1f}%")
+            lines.append("以下行業預測為下一輪領漲（綜合動量+資金+趨勢評分）：")
+            for ind in leaders[:5]:
+                lines.append(
+                    f"- {ind.get('industry', '')}: 評分 {ind.get('score', 0):.1f} "
+                    f"(動量{ind.get('momentumScore', 0):.0f}/資金{ind.get('capitalScore', 0):.0f}/趨勢{ind.get('trendScore', 0):.0f})"
+                )
+            if laggards:
+                lines.append("")
+                lines.append("以下行業預測為下一輪滯後（建議避開）：")
+                for ind in laggards[:3]:
+                    lines.append(
+                        f"- {ind.get('industry', '')}: 評分 {ind.get('score', 0):.1f}"
+                    )
+            lines.append("")
+            lines.append("建議：可參考輪動預測選擇行業聚焦，優先考慮預測領漲的行業。")
+
+            text = "\n".join(lines)
+            logger.info(f"輪動預測獲取完成: leaders={len(leaders)}, confidence={confidence:.1f}%")
+            return {
+                "predicted_leaders": leaders,
+                "predicted_laggards": laggards,
+                "confidence": confidence,
+                "text": text,
+            }
+        except Exception as e:
+            logger.warning(f"輪動預測獲取失敗: {e}")
+            return {"predicted_leaders": [], "predicted_laggards": [], "confidence": 0.0, "text": ""}
+
     async def get_capital_migration(self, days: int = 10) -> dict[str, Any]:
         """計算行業間資金流向遷移（首尾交易日成交金額佔比變化）。
 

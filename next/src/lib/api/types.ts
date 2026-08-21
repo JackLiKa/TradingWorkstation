@@ -110,6 +110,46 @@ export interface RotationPredictionDto {
   confidence: number;
 }
 
+/** 輪動預測回測結果 */
+export interface RotationBacktestDto {
+  lookbackDays: number;
+  forwardDays: number;
+  totalPredictions: number;
+  hitCount: number;
+  hitRate: number;
+  avgLeaderReturn: number;
+  avgLaggardReturn: number;
+  avgExcessReturn: number;
+  summary: string;
+  entries: {
+    predictDate: string;
+    topPredicted: string;
+    actualTopIndustry: string;
+    predictedReturn: number;
+    marketAvgReturn: number;
+    excessReturn: number;
+    hit: boolean;
+  }[];
+}
+
+/** 行業景氣度異常預警 */
+export interface ProsperityAlertDto {
+  analysisDate: string;
+  alerts: {
+    industry: string;
+    alertType: 'surge' | 'plunge' | 'grade_up' | 'grade_down';
+    alertTypeName: string;
+    yesterdayProsperity: number;
+    todayProsperity: number;
+    change: number;
+    yesterdayGrade: string;
+    todayGrade: string;
+    severity: 'high' | 'medium' | 'low';
+    message: string;
+  }[];
+  summary: string;
+}
+
 /** 漲跌幅最大的熱門股票（用於波動列表展示） */
 export interface HotSymbolDto {
   code: string;

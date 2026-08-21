@@ -8,6 +8,8 @@ import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
 import com.quantization.module.stock.dto.MarketBreadthDto;
 import com.quantization.module.stock.dto.RotationPredictionDto;
+import com.quantization.module.stock.dto.RotationBacktestDto;
+import com.quantization.module.stock.dto.ProsperityAlertDto;
 import com.quantization.module.stock.dto.RotationSignalDto;
 import com.quantization.module.stock.dto.SectorPerformanceDto;
 import com.quantization.module.stock.dto.SearchResultDto;
@@ -22,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -727,6 +730,236 @@ public class StockService {
     private record PredictionScore(String industry, double momentum, double capitalFlow, double trendChange) {
     }
 
+    /**
+     * 行業輪動預測回測 — 驗證歷史預測準確率。
+     *
+     * 回測邏輯：
+     * 1. 取最近 backtestDays 的交易日列表
+     * 2. 對每個交易日 T（排除最近 forwardDays 日，因為無法驗證）：
+     *    - 用 T 之前 lookbackDays 的數據生成預測
+     *    - 計算 T → T+forwardDays 內各行業實際累計漲跌幅
+     *    - 檢查預測 Top 5 領漲是否在實際 Top 5 內（命中）
+     *    - 計算預測領漲行業的平均收益 vs 市場平均收益（超額收益）
+     * 3. 匯總命中率、平均超額收益
+     *
+     * @param lookbackDays  預測回溯天數
+     * @param forwardDays   前瞻驗證天數
+     * @param backtestDays  回測總天數
+     * @return 回測結果 DTO
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'rotation-backtest-' + #p0 + '-' + #p1 + '-' + #p2")
+    public RotationBacktestDto backtestRotationPrediction(int lookbackDays, int forwardDays, int backtestDays) {
+        LocalDate today = LocalDate.now();
+        LocalDate dataStart = today.minusDays(lookbackDays + backtestDays + forwardDays + 20);
+        LocalDate dataEnd = today;
+
+        List<IndustryDailyEntity> allEntities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(dataStart, dataEnd);
+
+        if (allEntities.isEmpty()) {
+            return new RotationBacktestDto(lookbackDays, forwardDays, 0, 0, 0, 0, 0, 0,
+                    "數據不足，無法回測", List.of());
+        }
+
+        // 按日期分組
+        Map<LocalDate, List<IndustryDailyEntity>> byDate = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : allEntities) {
+            byDate.computeIfAbsent(e.getTradeDate(), k -> new ArrayList<>()).add(e);
+        }
+
+        List<LocalDate> sortedDates = new ArrayList<>(byDate.keySet());
+        sortedDates.sort(LocalDate::compareTo);
+
+        if (sortedDates.size() < lookbackDays + forwardDays + 5) {
+            return new RotationBacktestDto(lookbackDays, forwardDays, 0, 0, 0, 0, 0, 0,
+                    "交易日不足，無法回測（需要至少 " + (lookbackDays + forwardDays + 5) + " 個交易日）", List.of());
+        }
+
+        // 回測窗口：從第 lookbackDays 個交易日開始，到倒數 forwardDays 個交易日結束
+        int startIdx = Math.max(lookbackDays, 5);
+        int endIdx = sortedDates.size() - forwardDays;
+
+        List<RotationBacktestDto.BacktestEntry> entries = new ArrayList<>();
+        int hitCount = 0;
+        double totalLeaderReturn = 0.0;
+        double totalLaggardReturn = 0.0;
+        double totalMarketReturn = 0.0;
+
+        // 每隔幾個交易日取樣一次（避免過多回測點）
+        int step = Math.max(1, (endIdx - startIdx) / 30); // 最多 30 個回測點
+
+        for (int i = startIdx; i < endIdx; i += step) {
+            LocalDate predictDate = sortedDates.get(i);
+            LocalDate actualEndDate = sortedDates.get(Math.min(i + forwardDays, sortedDates.size() - 1));
+
+            // 1. 用 predictDate 之前 lookbackDays 的數據生成預測
+            int windowStart = Math.max(0, i - lookbackDays);
+            List<IndustryDailyEntity> windowData = new ArrayList<>();
+            for (int j = windowStart; j <= i; j++) {
+                windowData.addAll(byDate.get(sortedDates.get(j)));
+            }
+
+            List<String> predictedTop5 = predictTopIndustries(windowData, 5);
+            if (predictedTop5.isEmpty()) continue;
+
+            // 2. 計算 predictDate → actualEndDate 內各行業實際累計漲跌幅
+            Map<String, Double> actualReturns = new HashMap<>();
+            for (int j = i + 1; j <= Math.min(i + forwardDays, sortedDates.size() - 1); j++) {
+                for (IndustryDailyEntity e : byDate.get(sortedDates.get(j))) {
+                    if (e.getAvgPctChg() != null) {
+                        actualReturns.merge(e.getIndustry(), e.getAvgPctChg().doubleValue(), Double::sum);
+                    }
+                }
+            }
+
+            if (actualReturns.isEmpty()) continue;
+
+            // 3. 找出實際 Top 5 行業
+            List<String> actualTop5 = actualReturns.entrySet().stream()
+                    .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                    .limit(5)
+                    .map(Map.Entry::getKey)
+                    .toList();
+
+            String actualTop = actualTop5.isEmpty() ? "無" : actualTop5.get(0);
+
+            // 4. 計算預測領漲行業的實際收益
+            String topPredicted = predictedTop5.get(0);
+            double predictedReturn = actualReturns.getOrDefault(topPredicted, 0.0);
+            double marketAvg = actualReturns.values().stream()
+                    .mapToDouble(Double::doubleValue).average().orElse(0.0);
+            double excessReturn = predictedReturn - marketAvg;
+
+            // 5. 命中判定：預測 Top 5 與實際 Top 5 有交集
+            boolean hit = predictedTop5.stream().anyMatch(actualTop5::contains);
+            if (hit) hitCount++;
+
+            totalLeaderReturn += predictedReturn;
+            totalMarketReturn += marketAvg;
+            entries.add(new RotationBacktestDto.BacktestEntry(
+                    predictDate.toString(),
+                    topPredicted,
+                    actualTop,
+                    Math.round(predictedReturn * 1000.0) / 1000.0,
+                    Math.round(marketAvg * 1000.0) / 1000.0,
+                    Math.round(excessReturn * 1000.0) / 1000.0,
+                    hit
+            ));
+        }
+
+        int total = entries.size();
+        double hitRate = total > 0 ? (double) hitCount / total * 100.0 : 0.0;
+        double avgLeaderReturn = total > 0 ? totalLeaderReturn / total : 0.0;
+        double avgMarketReturn = total > 0 ? totalMarketReturn / total : 0.0;
+        double avgExcessReturn = avgLeaderReturn - avgMarketReturn;
+
+        String summary = String.format(
+                "回測 %d 次（lookback=%d日, forward=%d日）。命中率 %.1f%%。" +
+                "預測領漲平均收益 %.3f%%，市場平均 %.3f%%，超額收益 %.3f%%。",
+                total, lookbackDays, forwardDays, hitRate,
+                avgLeaderReturn, avgMarketReturn, avgExcessReturn
+        );
+
+        return new RotationBacktestDto(
+                lookbackDays, forwardDays, total, hitCount,
+                Math.round(hitRate * 100.0) / 100.0,
+                Math.round(avgLeaderReturn * 1000.0) / 1000.0,
+                Math.round(avgMarketReturn * 1000.0) / 1000.0,
+                Math.round(avgExcessReturn * 1000.0) / 1000.0,
+                summary,
+                entries
+        );
+    }
+
+    /**
+     * 內部方法：用給定數據窗口預測 Top N 領漲行業。
+     * 邏輯與 predictRotation 相同，但不依賴當前日期。
+     */
+    private List<String> predictTopIndustries(List<IndustryDailyEntity> windowData, int topN) {
+        if (windowData == null || windowData.size() < 10) return List.of();
+
+        // 按行業分組
+        Map<String, List<IndustryDailyEntity>> byIndustry = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : windowData) {
+            byIndustry.computeIfAbsent(e.getIndustry(), k -> new ArrayList<>()).add(e);
+        }
+
+        // 按日期分組計算每日總成交額
+        Map<LocalDate, Double> dailyTotal = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : windowData) {
+            double amt = e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0;
+            dailyTotal.merge(e.getTradeDate(), amt, Double::sum);
+        }
+
+        List<LocalDate> dates = new ArrayList<>(dailyTotal.keySet());
+        dates.sort(LocalDate::compareTo);
+        if (dates.size() < 2) return List.of();
+
+        LocalDate firstDate = dates.get(0);
+        LocalDate lastDate = dates.get(dates.size() - 1);
+        double firstTotal = dailyTotal.get(firstDate);
+        double lastTotal = dailyTotal.get(lastDate);
+
+        List<PredictionScore> scores = new ArrayList<>();
+        for (Map.Entry<String, List<IndustryDailyEntity>> entry : byIndustry.entrySet()) {
+            List<IndustryDailyEntity> list = entry.getValue();
+            if (list.size() < 2) continue;
+
+            double momentum = 0.0;
+            for (IndustryDailyEntity e : list) {
+                if (e.getAvgPctChg() != null) momentum += e.getAvgPctChg().doubleValue();
+            }
+
+            double firstAmount = list.stream()
+                    .filter(e -> e.getTradeDate().equals(firstDate))
+                    .mapToDouble(e -> e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0)
+                    .findFirst().orElse(0.0);
+            double lastAmount = list.stream()
+                    .filter(e -> e.getTradeDate().equals(lastDate))
+                    .mapToDouble(e -> e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0)
+                    .findFirst().orElse(0.0);
+            double firstShare = firstTotal > 0 ? firstAmount / firstTotal : 0.0;
+            double lastShare = lastTotal > 0 ? lastAmount / lastTotal : 0.0;
+            double capitalFlow = (lastShare - firstShare) * 100.0;
+
+            int midPoint = list.size() / 2;
+            double firstHalfAvg = list.subList(0, Math.min(midPoint, list.size())).stream()
+                    .filter(e -> e.getAvgPctChg() != null)
+                    .mapToDouble(e -> e.getAvgPctChg().doubleValue())
+                    .average().orElse(0.0);
+            double lastHalfAvg = list.subList(midPoint, list.size()).stream()
+                    .filter(e -> e.getAvgPctChg() != null)
+                    .mapToDouble(e -> e.getAvgPctChg().doubleValue())
+                    .average().orElse(0.0);
+            double trendChange = lastHalfAvg - firstHalfAvg;
+
+            scores.add(new PredictionScore(entry.getKey(), momentum, capitalFlow, trendChange));
+        }
+
+        if (scores.isEmpty()) return List.of();
+
+        // 標準化
+        double momMin = scores.stream().mapToDouble(s -> s.momentum).min().orElse(0);
+        double momMax = scores.stream().mapToDouble(s -> s.momentum).max().orElse(0);
+        double capMin = scores.stream().mapToDouble(s -> s.capitalFlow).min().orElse(0);
+        double capMax = scores.stream().mapToDouble(s -> s.capitalFlow).max().orElse(0);
+        double trendMin = scores.stream().mapToDouble(s -> s.trendChange).min().orElse(0);
+        double trendMax = scores.stream().mapToDouble(s -> s.trendChange).max().orElse(0);
+
+        // 計算綜合評分並排序
+        List<Map.Entry<String, Double>> ranked = new ArrayList<>();
+        for (PredictionScore s : scores) {
+            double momScore = normalize(s.momentum, momMin, momMax);
+            double capScore = normalize(s.capitalFlow, capMin, capMax);
+            double trendScore = normalize(s.trendChange, trendMin, trendMax);
+            double composite = momScore * 0.40 + capScore * 0.35 + trendScore * 0.25;
+            ranked.add(Map.entry(s.industry, composite));
+        }
+
+        ranked.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
+        return ranked.stream().limit(topN).map(Map.Entry::getKey).toList();
+    }
+
     /** 將值標準化到 0-100 區間。 */
     private static double normalize(double value, double min, double max) {
         if (max == min) {
@@ -834,6 +1067,253 @@ public class StockService {
         }
 
         return result;
+    }
+
+    /**
+     * 行業景氣度異常預警 — 檢測最新交易日 vs 前一交易日的景氣度突變與等級躍遷。
+     *
+     * 預警類型：
+     * 1. surge（景氣度突升）：變化 ≥ threshold
+     * 2. plunge（景氣度突降）：變化 ≤ -threshold
+     * 3. grade_up（等級躍升）：等級從低到高
+     * 4. grade_down（等級躍降）：等級從高到低
+     *
+     * @param threshold 突變閾值（默認 10.0）
+     * @return 景氣度預警 DTO
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'prosperity-alert-' + #p0")
+    public ProsperityAlertDto prosperityAlerts(double threshold) {
+        LocalDate today = LocalDate.now();
+        LocalDate start = today.minusDays(10);
+
+        List<IndustryDailyEntity> entities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(start, today);
+
+        if (entities.isEmpty()) {
+            return new ProsperityAlertDto(today.toString(), List.of(), "數據不足，無法檢測異常");
+        }
+
+        // 按日期分組
+        Map<LocalDate, List<IndustryDailyEntity>> byDate = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : entities) {
+            byDate.computeIfAbsent(e.getTradeDate(), k -> new ArrayList<>()).add(e);
+        }
+
+        List<LocalDate> sortedDates = new ArrayList<>(byDate.keySet());
+        sortedDates.sort(LocalDate::compareTo);
+
+        if (sortedDates.size() < 2) {
+            return new ProsperityAlertDto(today.toString(), List.of(), "交易日不足，無法對比");
+        }
+
+        LocalDate latestDate = sortedDates.get(sortedDates.size() - 1);
+        LocalDate prevDate = sortedDates.get(sortedDates.size() - 2);
+
+        List<IndustryDailyEntity> todayEntities = byDate.get(latestDate);
+        List<IndustryDailyEntity> yesterdayEntities = byDate.get(prevDate);
+
+        // 計算今日和昨日的景氣度
+        Map<String, Double> todayProsperity = computeProsperityMap(todayEntities);
+        Map<String, Double> yesterdayProsperity = computeProsperityMap(yesterdayEntities);
+
+        List<ProsperityAlertDto.AlertEntry> alerts = new ArrayList<>();
+
+        for (String industry : todayProsperity.keySet()) {
+            Double todayVal = todayProsperity.get(industry);
+            Double yesterdayVal = yesterdayProsperity.get(industry);
+            if (todayVal == null || yesterdayVal == null) continue;
+
+            double change = todayVal - yesterdayVal;
+            String todayGrade = prosperityGrade(todayVal);
+            String yesterdayGrade = prosperityGrade(yesterdayVal);
+
+            String alertType = null;
+            String alertTypeName = null;
+            String severity = null;
+
+            // 景氣度突升
+            if (change >= threshold * 2) {
+                alertType = "surge";
+                alertTypeName = "景氣度突升";
+                severity = "high";
+            } else if (change >= threshold) {
+                alertType = "surge";
+                alertTypeName = "景氣度上升";
+                severity = "medium";
+            }
+
+            // 景氣度突降
+            if (change <= -threshold * 2) {
+                alertType = "plunge";
+                alertTypeName = "景氣度突降";
+                severity = "high";
+            } else if (change <= -threshold && alertType == null) {
+                alertType = "plunge";
+                alertTypeName = "景氣度下降";
+                severity = "medium";
+            }
+
+            // 等級躍遷
+            int todayGradeLevel = gradeLevel(todayGrade);
+            int yesterdayGradeLevel = gradeLevel(yesterdayGrade);
+            if (todayGradeLevel > yesterdayGradeLevel) {
+                // 等級躍升（如 低迷 → 景氣）
+                if (todayGradeLevel - yesterdayGradeLevel >= 2) {
+                    alerts.add(new ProsperityAlertDto.AlertEntry(
+                            industry, "grade_up", "等級躍升",
+                            Math.round(yesterdayVal * 100.0) / 100.0,
+                            Math.round(todayVal * 100.0) / 100.0,
+                            Math.round(change * 100.0) / 100.0,
+                            yesterdayGrade, todayGrade, "high",
+                            String.format("%s 等級從「%s」躍升到「%s」（景氣度 %.1f → %.1f）",
+                                    industry, yesterdayGrade, todayGrade, yesterdayVal, todayVal)
+                    ));
+                } else if (alertType == null) {
+                    alerts.add(new ProsperityAlertDto.AlertEntry(
+                            industry, "grade_up", "等級上升",
+                            Math.round(yesterdayVal * 100.0) / 100.0,
+                            Math.round(todayVal * 100.0) / 100.0,
+                            Math.round(change * 100.0) / 100.0,
+                            yesterdayGrade, todayGrade, "medium",
+                            String.format("%s 等級從「%s」上升到「%s」",
+                                    industry, yesterdayGrade, todayGrade)
+                    ));
+                }
+            } else if (todayGradeLevel < yesterdayGradeLevel) {
+                // 等級躍降
+                if (yesterdayGradeLevel - todayGradeLevel >= 2) {
+                    alerts.add(new ProsperityAlertDto.AlertEntry(
+                            industry, "grade_down", "等級躍降",
+                            Math.round(yesterdayVal * 100.0) / 100.0,
+                            Math.round(todayVal * 100.0) / 100.0,
+                            Math.round(change * 100.0) / 100.0,
+                            yesterdayGrade, todayGrade, "high",
+                            String.format("%s 等級從「%s」躍降到「%s」（景氣度 %.1f → %.1f）",
+                                    industry, yesterdayGrade, todayGrade, yesterdayVal, todayVal)
+                    ));
+                } else if (alertType == null) {
+                    alerts.add(new ProsperityAlertDto.AlertEntry(
+                            industry, "grade_down", "等級下降",
+                            Math.round(yesterdayVal * 100.0) / 100.0,
+                            Math.round(todayVal * 100.0) / 100.0,
+                            Math.round(change * 100.0) / 100.0,
+                            yesterdayGrade, todayGrade, "medium",
+                            String.format("%s 等級從「%s」下降到「%s」",
+                                    industry, yesterdayGrade, todayGrade)
+                    ));
+                }
+            }
+
+            // 景氣度突變（未伴隨等級變化時單獨記錄）
+            if (alertType != null && todayGradeLevel == yesterdayGradeLevel) {
+                String message = alertType.equals("surge")
+                        ? String.format("%s 景氣度突升 %.1f → %.1f（+%s）",
+                                industry, yesterdayVal, todayVal, String.format("%.1f", change))
+                        : String.format("%s 景氣度突降 %.1f → %.1f（%s）",
+                                industry, yesterdayVal, todayVal, String.format("%.1f", change));
+                alerts.add(new ProsperityAlertDto.AlertEntry(
+                        industry, alertType, alertTypeName,
+                        Math.round(yesterdayVal * 100.0) / 100.0,
+                        Math.round(todayVal * 100.0) / 100.0,
+                        Math.round(change * 100.0) / 100.0,
+                        yesterdayGrade, todayGrade, severity, message
+                ));
+            }
+        }
+
+        // 按嚴重程度和變化幅度排序
+        alerts.sort((a, b) -> {
+            int sa = severityRank(a.severity());
+            int sb = severityRank(b.severity());
+            if (sa != sb) return sb - sa;
+            return Double.compare(Math.abs(b.change()), Math.abs(a.change()));
+        });
+
+        String summary = String.format(
+                "分析日期 %s（對比 %s → %s）：共檢測到 %d 條預警（%d 條高嚴重度）。",
+                latestDate, prevDate, latestDate, alerts.size(),
+                alerts.stream().filter(a -> "high".equals(a.severity())).count()
+        );
+
+        return new ProsperityAlertDto(latestDate.toString(), alerts, summary);
+    }
+
+    /** 計算指定日期列表的景氣度 Map（industry -> prosperityIndex）。 */
+    private Map<String, Double> computeProsperityMap(List<IndustryDailyEntity> entities) {
+        if (entities == null || entities.isEmpty()) return Map.of();
+
+        double[] pctArr = entities.stream()
+                .mapToDouble(e -> e.getAvgPctChg() != null ? e.getAvgPctChg().doubleValue() : 0.0)
+                .toArray();
+        double[] amtArr = entities.stream()
+                .mapToDouble(e -> e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0)
+                .toArray();
+        double[] turnArr = entities.stream()
+                .mapToDouble(e -> e.getAvgTurn() != null ? e.getAvgTurn().doubleValue() : 0.0)
+                .toArray();
+
+        double pctMin = min(pctArr), pctMax = max(pctArr);
+        double amtMin = min(amtArr), amtMax = max(amtArr);
+        double turnMin = min(turnArr), turnMax = max(turnArr);
+
+        double totalRising = entities.stream()
+                .mapToDouble(e -> e.getRisingCount() != null ? e.getRisingCount().doubleValue() : 0.0)
+                .sum();
+        double totalFalling = entities.stream()
+                .mapToDouble(e -> e.getFallingCount() != null ? e.getFallingCount().doubleValue() : 0.0)
+                .sum();
+        double breadthBase = totalRising + totalFalling;
+
+        Map<String, Double> result = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : entities) {
+            double pctChg = e.getAvgPctChg() != null ? e.getAvgPctChg().doubleValue() : 0.0;
+            double amount = e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0;
+            double turn = e.getAvgTurn() != null ? e.getAvgTurn().doubleValue() : 0.0;
+            double rising = e.getRisingCount() != null ? e.getRisingCount().doubleValue() : 0.0;
+            double falling = e.getFallingCount() != null ? e.getFallingCount().doubleValue() : 0.0;
+            double breadth = breadthBase > 0 ? (rising + (breadthBase - falling)) / breadthBase * 50.0 : 50.0;
+
+            double momentumScore = normalize(pctChg, pctMin, pctMax);
+            double capitalScore = normalize(amount, amtMin, amtMax);
+            double activityScore = normalize(turn, turnMin, turnMax);
+            double breadthScore = normalize(breadth, 0, 100);
+
+            double prosperityIndex = momentumScore * 0.35 + capitalScore * 0.25
+                    + activityScore * 0.20 + breadthScore * 0.20;
+            result.put(e.getIndustry(), prosperityIndex);
+        }
+        return result;
+    }
+
+    /** 景氣度等級。 */
+    private static String prosperityGrade(double prosperityIndex) {
+        if (prosperityIndex >= 80) return "繁榮";
+        if (prosperityIndex >= 65) return "景氣";
+        if (prosperityIndex >= 50) return "平穩";
+        if (prosperityIndex >= 35) return "低迷";
+        return "衰退";
+    }
+
+    /** 等級數值化（越高越好）。 */
+    private static int gradeLevel(String grade) {
+        return switch (grade) {
+            case "繁榮" -> 5;
+            case "景氣" -> 4;
+            case "平穩" -> 3;
+            case "低迷" -> 2;
+            case "衰退" -> 1;
+            default -> 0;
+        };
+    }
+
+    /** 嚴重程度排序值。 */
+    private static int severityRank(String severity) {
+        return switch (severity) {
+            case "high" -> 3;
+            case "medium" -> 2;
+            case "low" -> 1;
+            default -> 0;
+        };
     }
 
     private static double min(double[] arr) {

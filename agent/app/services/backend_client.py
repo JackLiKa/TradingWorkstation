@@ -481,6 +481,29 @@ class BackendClient:
             logger.warning(f"獲取行業景氣度失敗: {e}")
             return []
 
+    async def get_rotation_prediction(self, lookback_days: int = 20) -> dict[str, Any]:
+        """獲取行業輪動預測結果。
+
+        Args:
+            lookback_days: 回溯天數（默認 20）
+
+        Returns:
+            dict: 輪動預測 DTO（含 predictedLeaders, predictedLaggards, confidence 等）
+        """
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/stock/rotation-prediction",
+                params={"lookbackDays": lookback_days},
+                timeout=15,
+            )
+            if not data.get("success"):
+                return {}
+            return data.get("data", {})
+        except Exception as e:
+            logger.warning(f"獲取輪動預測失敗: {e}")
+            return {}
+
     async def get_industries(self, code: str = None, industry: str = None) -> list[dict[str, Any]]:
         """查詢股票行業分類數據。"""
         params = {}

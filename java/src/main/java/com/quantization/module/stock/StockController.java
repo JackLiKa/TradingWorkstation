@@ -5,6 +5,8 @@ import com.quantization.module.stock.dto.HotSymbolDto;
 import com.quantization.module.stock.dto.IndustryDailyDto;
 import com.quantization.module.stock.dto.IndustryProsperityDto;
 import com.quantization.module.stock.dto.RotationPredictionDto;
+import com.quantization.module.stock.dto.RotationBacktestDto;
+import com.quantization.module.stock.dto.ProsperityAlertDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexHistoryBatchRequestDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
@@ -242,6 +244,36 @@ public class StockController {
     public ApiResponse<RotationPredictionDto> rotationPrediction(
             @RequestParam(required = false, defaultValue = "20") int lookbackDays) {
         return ApiResponse.ok(stockService.predictRotation(lookbackDays));
+    }
+
+    /**
+     * 行業輪動預測回測 — 驗證歷史預測準確率。
+     *
+     * @param lookbackDays  預測回溯天數（默認 20）
+     * @param forwardDays   前瞻驗證天數（默認 5）
+     * @param backtestDays  回測總天數（默認 90）
+     * @return 回測結果 DTO
+     */
+    @Operation(summary = "輪動預測回測（歷史預測準確率驗證）")
+    @GetMapping("/rotation-prediction/backtest")
+    public ApiResponse<RotationBacktestDto> rotationPredictionBacktest(
+            @RequestParam(required = false, defaultValue = "20") int lookbackDays,
+            @RequestParam(required = false, defaultValue = "5") int forwardDays,
+            @RequestParam(required = false, defaultValue = "90") int backtestDays) {
+        return ApiResponse.ok(stockService.backtestRotationPrediction(lookbackDays, forwardDays, backtestDays));
+    }
+
+    /**
+     * 行業景氣度異常預警 — 檢測景氣度突變與等級躍遷。
+     *
+     * @param threshold 突變閾值（默認 10.0）
+     * @return 景氣度預警 DTO
+     */
+    @Operation(summary = "行業景氣度異常預警（突變與等級躍遷）")
+    @GetMapping("/industry-prosperity/alerts")
+    public ApiResponse<ProsperityAlertDto> prosperityAlerts(
+            @RequestParam(required = false, defaultValue = "10.0") double threshold) {
+        return ApiResponse.ok(stockService.prosperityAlerts(threshold));
     }
 
     // ===== 指數歷史（市場形態識別）=====

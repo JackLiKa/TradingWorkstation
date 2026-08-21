@@ -15,7 +15,9 @@ import { IndustryProsperityTrend } from '@/components/industry/IndustryProsperit
 import { IndustryCapitalFlowSankey } from '@/components/industry/IndustryCapitalFlowSankey';
 import { ProsperityBenchmarkCompare } from '@/components/industry/ProsperityBenchmarkCompare';
 import { RotationPredictionChart } from '@/components/industry/RotationPredictionChart';
+import { RotationBacktestChart } from '@/components/industry/RotationBacktestChart';
 import { ProsperityHeatmapMatrix } from '@/components/industry/ProsperityHeatmapMatrix';
+import { ProsperityAlertsPanel } from '@/components/industry/ProsperityAlertsPanel';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
@@ -38,6 +40,8 @@ import {
   LineChart,
   Sparkles,
   Layers,
+  Target,
+  AlertTriangle,
 } from 'lucide-react';
 import type { IndustryDailyDto, IndexDailyDto } from '@/lib/api/types';
 import { agentApi, type IndustryNewsItem } from '@/lib/api/agent';
@@ -56,7 +60,9 @@ type ViewType =
   | 'capitalMigration'
   | 'prosperityBenchmark'
   | 'rotationPrediction'
-  | 'prosperityHeatmap';
+  | 'rotationBacktest'
+  | 'prosperityHeatmap'
+  | 'prosperityAlerts';
 
 /** 視圖分組 */
 type ViewGroup = 'snapshot' | 'trend' | 'advanced';
@@ -83,7 +89,9 @@ const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp; group: Vie
   { key: 'capitalMigration', label: '資金遷移', icon: GitBranch, group: 'advanced' },
   { key: 'prosperityBenchmark', label: '景氣度vs大盤', icon: Layers, group: 'advanced' },
   { key: 'rotationPrediction', label: '輪動預測', icon: Sparkles, group: 'advanced' },
+  { key: 'rotationBacktest', label: '預測回測', icon: Target, group: 'advanced' },
   { key: 'prosperityHeatmap', label: '景氣度熱力圖', icon: Grid3x3, group: 'advanced' },
+  { key: 'prosperityAlerts', label: '景氣度預警', icon: AlertTriangle, group: 'advanced' },
 ];
 
 function formatDateInput(d: Date) {
@@ -213,7 +221,9 @@ export default function IndustryPage() {
     if (view === 'capitalMigration') return <IndustryCapitalFlowSankey rangeStart={rangeStart} rangeEnd={rangeEnd} />;
     if (view === 'prosperityBenchmark') return <ProsperityBenchmarkCompare rangeStart={rangeStart} rangeEnd={rangeEnd} />;
     if (view === 'rotationPrediction') return <RotationPredictionChart />;
+    if (view === 'rotationBacktest') return <RotationBacktestChart />;
     if (view === 'prosperityHeatmap') return <ProsperityHeatmapMatrix rangeStart={rangeStart} rangeEnd={rangeEnd} />;
+    if (view === 'prosperityAlerts') return <ProsperityAlertsPanel />;
     return null;
   };
 
