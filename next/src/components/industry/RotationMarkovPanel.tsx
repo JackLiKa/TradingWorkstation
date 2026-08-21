@@ -7,7 +7,9 @@ import { api } from '@/lib/api';
 import type { RotationMarkovDto } from '@/lib/api/types';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { RefreshCw, GitBranch, ArrowRight, Crown } from 'lucide-react';
+import { GitBranch, ArrowRight, Crown } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
+import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 
 const LOOKBACK_OPTIONS = [15, 30, 60, 90];
 const STATE_NAMES = ['領漲', '中間', '滯後'];
@@ -23,6 +25,7 @@ export function RotationMarkovPanel() {
     () => api.rotationMarkov(lookbackDays),
     { revalidateOnFocus: false, dedupingInterval: 300_000 }
   );
+  const canRender = useDelayedRender(isLoading);
 
   const industries = useMemo(() => {
     if (!data || !data.industries) return [];
@@ -254,13 +257,11 @@ export function RotationMarkovPanel() {
             </button>
           ))}
         </div>
-        <button
+        <RefreshButton
           onClick={() => mutate()}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-bg-hover"
-        >
-          <RefreshCw className={`w-3 h-3 ${isValidating ? 'animate-spin' : ''}`} />
-          刷新
-        </button>
+          isLoading={isValidating}
+          className="ml-auto"
+        />
       </div>
 
       {/* 摘要 */}
@@ -270,13 +271,13 @@ export function RotationMarkovPanel() {
         </div>
       )}
 
-      {isLoading && <ChartSkeleton />}
+      {(isLoading || !canRender) && <ChartSkeleton />}
       {error && <ErrorState message={String(error)} onRetry={() => mutate()} />}
 
       {/* 長期領漲概率排行 */}
-      {!isLoading && !error && rankingOption && (
+      {!isLoading && !error && canRender && rankingOption && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[450px]">
-          <ReactECharts option={rankingOption} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={rankingOption} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 
@@ -335,16 +336,16 @@ export function RotationMarkovPanel() {
       )}
 
       {/* 轉移矩陣熱力圖 */}
-      {!isLoading && !error && matrixOption && (
+      {!isLoading && !error && canRender && matrixOption && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[350px]">
-          <ReactECharts option={matrixOption} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={matrixOption} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 
       {/* 下一期概率 + 穩態分布 */}
-      {!isLoading && !error && probOption && (
+      {!isLoading && !error && canRender && probOption && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[300px]">
-          <ReactECharts option={probOption} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={probOption} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 

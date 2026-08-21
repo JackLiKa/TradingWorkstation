@@ -7,7 +7,9 @@ import { api } from '@/lib/api';
 import type { RotationBacktestDto } from '@/lib/api/types';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { RefreshCw, Target, TrendingUp, Award } from 'lucide-react';
+import { Target, TrendingUp, Award } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
+import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 
 const LOOKBACK_OPTIONS = [10, 20, 30];
 const FORWARD_OPTIONS = [3, 5, 10];
@@ -24,6 +26,7 @@ export function RotationBacktestChart() {
     () => api.rotationPredictionBacktest(lookback, forward, backtestDays),
     { revalidateOnFocus: false, dedupingInterval: 120_000 }
   );
+  const canRender = useDelayedRender(isLoading);
 
   // 超額收益走勢圖
   const excessOption = useMemo(() => {
@@ -226,13 +229,11 @@ export function RotationBacktestChart() {
             </button>
           ))}
         </div>
-        <button
+        <RefreshButton
           onClick={() => mutate()}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-bg-hover"
-        >
-          <RefreshCw className={`w-3 h-3 ${isValidating ? 'animate-spin' : ''}`} />
-          刷新
-        </button>
+          isLoading={isValidating}
+          className="ml-auto"
+        />
       </div>
 
       {/* 回測摘要卡片 */}
@@ -285,20 +286,20 @@ export function RotationBacktestChart() {
         </div>
       )}
 
-      {isLoading && <ChartSkeleton />}
+      {(isLoading || !canRender) && <ChartSkeleton />}
       {error && <ErrorState message={String(error)} onRetry={() => mutate()} />}
 
       {/* 超額收益走勢圖 */}
-      {!isLoading && !error && excessOption && (
+      {!isLoading && !error && canRender && excessOption && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[450px]">
-          <ReactECharts option={excessOption} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={excessOption} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 
       {/* 累計命中率走勢圖 */}
-      {!isLoading && !error && hitRateOption && (
+      {!isLoading && !error && canRender && hitRateOption && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[350px]">
-          <ReactECharts option={hitRateOption} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={hitRateOption} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 

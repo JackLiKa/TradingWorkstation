@@ -55,10 +55,12 @@ export function IndustryTreemap({ data }: Props) {
             show: true,
             formatter: (params: any) => {
               const pct = params.data.avgPctChg;
+              const amt = params.value;
               const name = params.name;
               // 截斷長名稱
               const shortName = name.length > 8 ? name.slice(0, 8) + '…' : name;
-              return `${shortName}\n${pct.toFixed(2)}%`;
+              const amtStr = amt >= 1e8 ? `${(amt / 1e8).toFixed(1)}億` : `${(amt / 1e4).toFixed(0)}萬`;
+              return `${shortName}\n${pct.toFixed(2)}%\n${amtStr}`;
             },
             color: '#fff',
             fontSize: 10,

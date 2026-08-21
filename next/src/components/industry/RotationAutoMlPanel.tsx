@@ -7,7 +7,9 @@ import { api } from '@/lib/api';
 import type { RotationAutoMlDto } from '@/lib/api/types';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { RefreshCw, Zap, Award, Target } from 'lucide-react';
+import { Zap, Award, Target } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
+import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 
 const BACKTEST_OPTIONS = [60, 90, 180];
 
@@ -20,6 +22,7 @@ export function RotationAutoMlPanel() {
     () => api.rotationAutoMl(backtestDays),
     { revalidateOnFocus: false, dedupingInterval: 300_000 }
   );
+  const canRender = useDelayedRender(isLoading);
 
   // 參數組合熱力圖（lookback × forward → compositeScore）
   const heatmapOption = useMemo(() => {
@@ -193,13 +196,11 @@ export function RotationAutoMlPanel() {
             </button>
           ))}
         </div>
-        <button
+        <RefreshButton
           onClick={() => mutate()}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-bg-hover"
-        >
-          <RefreshCw className={`w-3 h-3 ${isValidating ? 'animate-spin' : ''}`} />
-          重新調參
-        </button>
+          isLoading={isValidating}
+          className="ml-auto"
+        />
       </div>
 
       {/* 最佳參數卡片 */}
@@ -239,20 +240,20 @@ export function RotationAutoMlPanel() {
         </div>
       )}
 
-      {isLoading && <ChartSkeleton />}
+      {(isLoading || !canRender) && <ChartSkeleton />}
       {error && <ErrorState message={String(error)} onRetry={() => mutate()} />}
 
       {/* 參數組合熱力圖 */}
-      {!isLoading && !error && heatmapOption && (
+      {!isLoading && !error && canRender && heatmapOption && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[400px]">
-          <ReactECharts option={heatmapOption} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={heatmapOption} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 
       {/* 散點圖 */}
-      {!isLoading && !error && scatterOption && (
+      {!isLoading && !error && canRender && scatterOption && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[400px]">
-          <ReactECharts option={scatterOption} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={scatterOption} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 

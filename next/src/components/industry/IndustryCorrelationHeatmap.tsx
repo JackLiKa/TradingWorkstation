@@ -7,7 +7,8 @@ import { api } from '@/lib/api';
 import type { IndustryDailyDto } from '@/lib/api/types';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { RefreshCw } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
+import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 
 const TOP_N_OPTIONS = [10, 15, 20, 30];
 
@@ -25,6 +26,7 @@ export function IndustryCorrelationHeatmap({ rangeStart, rangeEnd }: Props) {
     () => api.allIndustryDailyRange(rangeStart, rangeEnd),
     { revalidateOnFocus: false, dedupingInterval: 60_000 }
   );
+  const canRender = useDelayedRender(isLoading);
 
   // 計算行業相關性矩陣
   const { matrix, industries, stats } = useMemo(() => {
@@ -228,13 +230,11 @@ export function IndustryCorrelationHeatmap({ rangeStart, rangeEnd }: Props) {
             Top {n}
           </button>
         ))}
-        <button
+        <RefreshButton
           onClick={() => mutate()}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-bg-hover"
-        >
-          <RefreshCw className={`w-3 h-3 ${isValidating ? 'animate-spin' : ''}`} />
-          刷新
-        </button>
+          isLoading={isValidating}
+          className="ml-auto"
+        />
       </div>
 
       {/* 統計摘要 */}
@@ -261,11 +261,11 @@ export function IndustryCorrelationHeatmap({ rangeStart, rangeEnd }: Props) {
         </div>
       )}
 
-      {isLoading && <ChartSkeleton />}
+      {(isLoading || !canRender) && <ChartSkeleton />}
       {error && <ErrorState message={String(error)} onRetry={() => mutate()} />}
-      {!isLoading && !error && option && (
+      {!isLoading && !error && canRender && option && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[600px]">
-          <ReactECharts option={option} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={option} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 
