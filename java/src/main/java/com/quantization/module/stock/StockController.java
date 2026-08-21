@@ -2,6 +2,7 @@ package com.quantization.module.stock;
 
 import com.quantization.common.api.ApiResponse;
 import com.quantization.module.stock.dto.HotSymbolDto;
+import com.quantization.module.stock.dto.IndustryDailyDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexHistoryBatchRequestDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
@@ -148,6 +149,39 @@ public class StockController {
     @GetMapping("/industries/list")
     public ApiResponse<List<String>> industryList() {
         return ApiResponse.ok(industryRepository.findDistinctIndustries());
+    }
+
+    // ===== 行業日聚合 =====
+
+    /**
+     * 查詢指定交易日的行業聚合數據。
+     * 用於行業熱力圖、漲跌家數統計等。
+     *
+     * @param tradeDate 交易日期（可選，默認最新交易日）
+     * @return 行業聚合列表（按平均漲跌幅倒序）
+     */
+    @Operation(summary = "行業日聚合數據")
+    @GetMapping("/industry-daily")
+    public ApiResponse<List<IndustryDailyDto>> industryDaily(
+            @RequestParam(required = false) LocalDate tradeDate) {
+        return ApiResponse.ok(stockService.industryDailyByDate(tradeDate));
+    }
+
+    /**
+     * 查詢指定行業在日期區間內的聚合數據。
+     *
+     * @param industry 行業名稱
+     * @param start    起始日期
+     * @param end      結束日期
+     * @return 行業聚合列表（按日期升序）
+     */
+    @Operation(summary = "行業日聚合區間數據")
+    @GetMapping("/industry-daily/range")
+    public ApiResponse<List<IndustryDailyDto>> industryDailyRange(
+            @RequestParam String industry,
+            @RequestParam LocalDate start,
+            @RequestParam LocalDate end) {
+        return ApiResponse.ok(stockService.industryDailyRange(industry, start, end));
     }
 
     // ===== 指數歷史（市場形態識別）=====

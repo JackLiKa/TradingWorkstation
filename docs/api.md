@@ -32,6 +32,8 @@
 | GET | `/stock/market-breadth` | 市場廣度分析（綜合/規模/風格/行業），query: days（默認 10） |
 | GET | `/stock/rotation` | 輪動信號分析（行業/風格輪動），query: days（默認 10） |
 | GET | `/stock/sector-performance` | 多日板塊表現，query: days（默認 10） |
+| GET | `/stock/industry-daily` | 行業日聚合數據，query: tradeDate（可選，默認最新交易日） |
+| GET | `/stock/industry-daily/range` | 指定行業區間聚合，query: industry, start, end |
 
 ## K 线 chart
 

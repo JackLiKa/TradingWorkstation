@@ -2,6 +2,7 @@ package com.quantization.module.stock;
 
 import com.quantization.config.CacheConfig;
 import com.quantization.module.stock.dto.HotSymbolDto;
+import com.quantization.module.stock.dto.IndustryDailyDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
 import com.quantization.module.stock.dto.MarketBreadthDto;
@@ -35,14 +36,17 @@ public class StockService {
     private final StockDailyRepository repository;
     private final IndexDailyRepository indexDailyRepository;
     private final IndexMetadataRepository indexMetadataRepository;
+    private final IndustryDailyRepository industryDailyRepository;
 
     public StockService(
             StockDailyRepository repository,
             IndexDailyRepository indexDailyRepository,
-            IndexMetadataRepository indexMetadataRepository) {
+            IndexMetadataRepository indexMetadataRepository,
+            IndustryDailyRepository industryDailyRepository) {
         this.repository = repository;
         this.indexDailyRepository = indexDailyRepository;
         this.indexMetadataRepository = indexMetadataRepository;
+        this.industryDailyRepository = industryDailyRepository;
     }
 
     /**
@@ -348,6 +352,45 @@ public class StockService {
         );
 
         return new RotationSignalDto(days, industryRotation, styleRotation, leading, lagging, rotationStrength, summary);
+    }
+
+    // ------------------------------------------------------------------------
+    // 行業日聚合（新增）
+    // ------------------------------------------------------------------------
+
+    /**
+     * 查詢指定日期的行業聚合數據，按平均漲跌幅倒序（走緩存）。
+     *
+     * @param tradeDate 交易日期，為空時取資料庫最新交易日
+     * @return 行業聚合 DTO 列表
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "#p0 != null ? #p0.toString() : 'latest'")
+    public List<IndustryDailyDto> industryDailyByDate(LocalDate tradeDate) {
+        LocalDate target = tradeDate != null ? tradeDate : latestIndustryDailyDate();
+        return industryDailyRepository.findByTradeDateOrderByAvgPctChgDesc(target).stream()
+                .map(IndustryDailyDto::from)
+                .toList();
+    }
+
+    private LocalDate latestIndustryDailyDate() {
+        IndustryDailyEntity latest = industryDailyRepository.findFirstByOrderByTradeDateDesc();
+        return latest != null ? latest.getTradeDate() : LocalDate.now();
+    }
+
+    /**
+     * 查詢指定行業在日期區間內的聚合數據，按日期升序（走緩存）。
+     *
+     * @param industry 行業名稱
+     * @param start    起始日期
+     * @param end      結束日期
+     * @return 行業聚合 DTO 列表
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "#p0 + '-' + #p1 + '-' + #p2")
+    public List<IndustryDailyDto> industryDailyRange(String industry, LocalDate start, LocalDate end) {
+        return industryDailyRepository.findByIndustryAndTradeDateBetweenOrderByTradeDateAsc(
+                        industry, start, end).stream()
+                .map(IndustryDailyDto::from)
+                .toList();
     }
 
     // ------------------------------------------------------------------------

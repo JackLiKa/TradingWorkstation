@@ -30,9 +30,11 @@ public class CacheConfig {
     public static final String ROTATION_SIGNAL_CACHE = "rotationSignal";
     /** 多日板塊表現緩存名 */
     public static final String SECTOR_PERFORMANCE_CACHE = "sectorPerformance";
+    /** 行業日聚合緩存名 */
+    public static final String INDUSTRY_DAILY_CACHE = "industryDaily";
 
     /**
-     * 创建 Caffeine 缓存管理器，注册仪表盘、指數分析和板塊表現緩存。
+     * 创建 Caffeine 缓存管理器，注册仪表盘、指數分析、板塊表現和行業聚合緩存。
      *
      * @param properties 应用配置属性
      * @return 配置好的 CaffeineCacheManager
@@ -45,7 +47,8 @@ public class CacheConfig {
                 INDEX_METADATA_CACHE,
                 MARKET_BREADTH_CACHE,
                 ROTATION_SIGNAL_CACHE,
-                SECTOR_PERFORMANCE_CACHE
+                SECTOR_PERFORMANCE_CACHE,
+                INDUSTRY_DAILY_CACHE
         );
         manager.setCaffeine(Caffeine.newBuilder()
                 .expireAfterWrite(properties.getCache().getMetricsTtlSeconds(), TimeUnit.SECONDS)
