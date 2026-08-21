@@ -47,6 +47,28 @@ export interface IndustryDailyDto {
   minClose: number | null;
 }
 
+/** 指數日線數據（對應 index_daily 表） */
+export interface IndexDailyDto {
+  code: string;
+  tradeDate: string;
+  closePrice: number | null;
+  pctChange: number | null;
+}
+
+/** 行業輪動信號數據 */
+export interface RotationSignalDto {
+  days: number;
+  industryRotation: {
+    industry_l1: Record<string, number>;
+    industry_l2: Record<string, number>;
+  };
+  styleRotation: Record<string, number>;
+  leadingIndustries: { name: string; change: number }[];
+  laggingIndustries: { name: string; change: number }[];
+  rotationStrength: number | null;
+  summary: string;
+}
+
 /** 漲跌幅最大的熱門股票（用於波動列表展示） */
 export interface HotSymbolDto {
   code: string;

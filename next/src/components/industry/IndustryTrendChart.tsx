@@ -2,15 +2,17 @@
 
 import { useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
-import type { IndustryDailyDto } from '@/lib/api/types';
+import type { IndustryDailyDto, IndexDailyDto } from '@/lib/api/types';
 import type { IndustryNewsItem } from '@/lib/api/agent';
 
 interface Props {
   data: IndustryDailyDto[];
   news?: IndustryNewsItem[];
+  benchmark?: IndexDailyDto[];
+  benchmarkLabel?: string;
 }
 
-export function IndustryTrendChart({ data, news = [] }: Props) {
+export function IndustryTrendChart({ data, news = [], benchmark = [], benchmarkLabel = '上證綜指' }: Props) {
   const option = useMemo(() => {
     const sorted = [...data].sort(
       (a, b) => new Date(a.tradeDate).getTime() - new Date(b.tradeDate).getTime()
@@ -18,6 +20,13 @@ export function IndustryTrendChart({ data, news = [] }: Props) {
     const dates = sorted.map((d) => d.tradeDate);
     const pctValues = sorted.map((d) => (d.avgPctChg == null ? 0 : d.avgPctChg));
     const amountValues = sorted.map((d) => (d.totalAmount == null ? 0 : d.totalAmount));
+
+    // 大盤指數對齊到行業日期（缺失日期用 null）
+    const benchmarkMap = new Map(benchmark.map((b) => [b.tradeDate, b.pctChange]));
+    const benchmarkValues = dates.map((d) => {
+      const v = benchmarkMap.get(d);
+      return v == null ? null : v;
+    });
 
     // 構建新聞 markPoints：只標記在 dates 範圍內的新聞
     const dateSet = new Set(dates);
@@ -41,6 +50,59 @@ export function IndustryTrendChart({ data, news = [] }: Props) {
         };
       });
 
+    const seriesList: any[] = [
+      {
+        name: '平均漲跌幅',
+        type: 'line',
+        data: pctValues,
+        smooth: true,
+        yAxisIndex: 0,
+        itemStyle: { color: '#3b82f6' },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(59,130,246,0.4)' },
+              { offset: 1, color: 'rgba(59,130,246,0.05)' },
+            ],
+          },
+        },
+        markLine: {
+          data: [{ yAxis: 0, lineStyle: { color: '#64748b' } }],
+        },
+        markPoint: {
+          data: newsMarks,
+          symbol: 'pin',
+          symbolSize: 40,
+        },
+      },
+      {
+        name: '成交金額',
+        type: 'bar',
+        data: amountValues,
+        yAxisIndex: 1,
+        itemStyle: { color: '#f59e0b' },
+      },
+    ];
+
+    if (benchmark.length > 0) {
+      seriesList.push({
+        name: benchmarkLabel,
+        type: 'line',
+        data: benchmarkValues,
+        smooth: true,
+        yAxisIndex: 0,
+        itemStyle: { color: '#ef4444' },
+        lineStyle: { type: 'dashed', width: 1.5 },
+        symbol: 'circle',
+        symbolSize: 5,
+      });
+    }
+
     return {
       title: {
         text: '單一行業歷史走勢',
@@ -54,8 +116,10 @@ export function IndustryTrendChart({ data, news = [] }: Props) {
           const date = params[0].axisValue;
           const pct = params.find((p) => p.seriesName === '平均漲跌幅');
           const amount = params.find((p) => p.seriesName === '成交金額');
+          const bench = params.find((p) => p.seriesName === benchmarkLabel);
           const lines = [date];
-          if (pct) lines.push(`平均漲跌幅: ${pct.value.toFixed(3)}%`);
+          if (pct) lines.push(`平均漲跌幅: ${Number(pct.value).toFixed(3)}%`);
+          if (bench && bench.value != null) lines.push(`${benchmarkLabel}: ${Number(bench.value).toFixed(3)}%`);
           if (amount) lines.push(`成交金額: ${Number(amount.value).toLocaleString()}`);
           // 當日新聞
           const dayNews = news.filter((n) => n.date === date);
@@ -71,7 +135,7 @@ export function IndustryTrendChart({ data, news = [] }: Props) {
         },
       },
       legend: {
-        data: ['平均漲跌幅', '成交金額'],
+        data: benchmark.length > 0 ? ['平均漲跌幅', '成交金額', benchmarkLabel] : ['平均漲跌幅', '成交金額'],
         top: 28,
         textStyle: { color: '#94a3b8' },
       },
@@ -100,46 +164,9 @@ export function IndustryTrendChart({ data, news = [] }: Props) {
         { type: 'inside', start: 0, end: 100 },
         { type: 'slider', start: 0, end: 100, bottom: 10 },
       ],
-      series: [
-        {
-          name: '平均漲跌幅',
-          type: 'line',
-          data: pctValues,
-          smooth: true,
-          yAxisIndex: 0,
-          itemStyle: { color: '#3b82f6' },
-          areaStyle: {
-            color: {
-              type: 'linear',
-              x: 0,
-              y: 0,
-              x2: 0,
-              y2: 1,
-              colorStops: [
-                { offset: 0, color: 'rgba(59,130,246,0.4)' },
-                { offset: 1, color: 'rgba(59,130,246,0.05)' },
-              ],
-            },
-          },
-          markLine: {
-            data: [{ yAxis: 0, lineStyle: { color: '#64748b' } }],
-          },
-          markPoint: {
-            data: newsMarks,
-            symbol: 'pin',
-            symbolSize: 40,
-          },
-        },
-        {
-          name: '成交金額',
-          type: 'bar',
-          data: amountValues,
-          yAxisIndex: 1,
-          itemStyle: { color: '#f59e0b' },
-        },
-      ],
+      series: seriesList,
     };
-  }, [data, news]);
+  }, [data, news, benchmark, benchmarkLabel]);
 
   return (
     <div className="rounded-lg border border-border bg-bg-panel p-4 h-[500px]">

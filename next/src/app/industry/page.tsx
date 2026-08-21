@@ -7,21 +7,23 @@ import { IndustryTreemap } from '@/components/industry/IndustryTreemap';
 import { IndustryCapitalFlow } from '@/components/industry/IndustryCapitalFlow';
 import { IndustryRisingFalling } from '@/components/industry/IndustryRisingFalling';
 import { IndustryTrendChart } from '@/components/industry/IndustryTrendChart';
+import { RotationHistoryChart } from '@/components/industry/RotationHistoryChart';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
-import { Calendar, RefreshCw, TrendingUp, DollarSign, BarChart3, Activity, RotateCcw, BarChart2, Newspaper } from 'lucide-react';
-import type { IndustryDailyDto } from '@/lib/api/types';
+import { Calendar, RefreshCw, TrendingUp, DollarSign, BarChart3, Activity, RotateCcw, BarChart2, Newspaper, RefreshCcw } from 'lucide-react';
+import type { IndustryDailyDto, IndexDailyDto } from '@/lib/api/types';
 import { agentApi, type IndustryNewsItem } from '@/lib/api/agent';
 
 /** 可視化類型 */
-type ViewType = 'heatmap' | 'capital' | 'risingFalling' | 'trend';
+type ViewType = 'heatmap' | 'capital' | 'risingFalling' | 'trend' | 'rotation';
 
 const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp }[] = [
   { key: 'heatmap', label: '行業熱力圖', icon: TrendingUp },
   { key: 'capital', label: '資金流向', icon: DollarSign },
   { key: 'risingFalling', label: '漲跌家數', icon: BarChart3 },
   { key: 'trend', label: '行業走勢', icon: Activity },
+  { key: 'rotation', label: '輪動信號', icon: RefreshCcw },
 ];
 
 function formatDateInput(d: Date) {
@@ -86,6 +88,24 @@ export default function IndustryPage() {
     dedupingInterval: 300_000,
   });
 
+  // 載入大盤基準指數（上證綜指）用於疊加對比
+  const benchmarkDays = useMemo(() => {
+    const start = new Date(rangeStart);
+    const end = new Date(rangeEnd);
+    const diff = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 10);
+    return diff;
+  }, [rangeStart, rangeEnd]);
+  const benchmarkKey =
+    view === 'trend' && selectedIndustry
+      ? `/stock/index-history?code=sh.000001&days=${benchmarkDays}`
+      : null;
+  const {
+    data: benchmarkData,
+  } = useSWR<IndexDailyDto[]>(benchmarkKey, () => api.indexHistory('sh.000001', benchmarkDays), {
+    revalidateOnFocus: false,
+    dedupingInterval: 60_000,
+  });
+
   const industries = useMemo(() => {
     if (!daily) return [];
     return daily.map((d) => d.industry);
@@ -119,6 +139,7 @@ export default function IndustryPage() {
     if (view === 'heatmap') return <IndustryTreemap data={daily} />;
     if (view === 'capital') return <IndustryCapitalFlow data={daily} />;
     if (view === 'risingFalling') return <IndustryRisingFalling data={daily} />;
+    if (view === 'rotation') return <RotationHistoryChart />;
     return null;
   };
 
@@ -145,7 +166,7 @@ export default function IndustryPage() {
         </div>
       );
     }
-    return <IndustryTrendChart data={trendData} news={newsData?.news ?? []} />;
+    return <IndustryTrendChart data={trendData} news={newsData?.news ?? []} benchmark={benchmarkData ?? []} benchmarkLabel="上證綜指" />;
   };
 
   return (

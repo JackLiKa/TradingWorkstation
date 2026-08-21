@@ -11,6 +11,8 @@ import type {
   StockSuggestionDto,
   HotSymbolDto,
   IndustryDailyDto,
+  IndexDailyDto,
+  RotationSignalDto,
   CandlestickDto,
   ScreenerResultDto,
   ScreenerCriteriaDto,
@@ -49,6 +51,13 @@ export const api = {
   industryDailyRange: (industry: string, start: string, end: string) =>
     apiFetch<IndustryDailyDto[]>(`/stock/industry-daily/range?industry=${encodeURIComponent(industry)}&start=${start}&end=${end}`),
   industriesList: () => apiFetch<string[]>(`/stock/industries/list`),
+
+  // ===== 指數歷史 =====
+  indexHistory: (code: string, days = 30) =>
+    apiFetch<IndexDailyDto[]>(`/stock/index-history?code=${encodeURIComponent(code)}&days=${days}`),
+
+  // ===== 行業輪動信號 =====
+  rotation: (days = 5) => apiFetch<RotationSignalDto>(`/stock/rotation?days=${days}`),
 
   // ===== Chart K線圖 =====
   candlestick: (params: URLSearchParams) => apiFetch<CandlestickDto>(`/chart/candlestick?${params.toString()}`),

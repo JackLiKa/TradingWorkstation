@@ -5,7 +5,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, ChevronUp, Award, AlertCircle, Bot, TrendingUp, TrendingDown, Brain, Lightbulb, PenLine, BarChart3, Gavel, CheckCircle2, XCircle, Clock, Newspaper, Filter } from 'lucide-react';
+import { ChevronDown, ChevronUp, Award, AlertCircle, Bot, TrendingUp, TrendingDown, Brain, Lightbulb, PenLine, BarChart3, Gavel, CheckCircle2, XCircle, Clock, Newspaper, Filter, Layers } from 'lucide-react';
 import type { AgentIteration, StageResult } from '@/lib/api/types';
 
 /** AgentIterationCard 組件屬性 */
@@ -65,6 +65,12 @@ export function AgentIterationCard({ iteration, isBest, defaultExpanded = false 
           {!hasError && iteration.favorable_industries && iteration.favorable_industries.length > 0 && (
             <span className="text-xs text-teal-400 hidden sm:inline">
               {iteration.favorable_industries.length} 行業 · {iteration.filtered_codes?.length ?? 0} 股票
+            </span>
+          )}
+          {!hasError && Array.isArray(iteration.criteria?.industries) && (iteration.criteria!.industries as string[]).length > 0 && (
+            <span className="text-xs text-amber-400 hidden md:inline flex items-center gap-0.5">
+              <Layers className="w-3 h-3" />
+              聚焦 {(iteration.criteria!.industries as string[]).length} 行業
             </span>
           )}
           <span className="text-xs text-muted truncate">{new Date(iteration.timestamp).toLocaleTimeString('zh-TW')}</span>
@@ -289,6 +295,7 @@ function CriteriaCard({ criteria }: { criteria: Record<string, unknown> }) {
     priceAboveMa60: "價格>MA60",
     ma5AboveMa20: "MA5>MA20",
     ma20AboveMa60: "MA20>MA60",
+    industries: "行業聚焦",
   };
 
   const valueFormat: Record<string, (v: unknown) => string> = {
@@ -296,6 +303,7 @@ function CriteriaCard({ criteria }: { criteria: Record<string, unknown> }) {
     macdCrossSignal: (v) => ({ golden_cross: "金叉", death_cross: "死叉", none: "無", any: "任意" }[v as string] ?? String(v)),
     kdjCrossSignal: (v) => ({ golden_cross: "金叉", death_cross: "死叉", none: "無", any: "任意" }[v as string] ?? String(v)),
     bollPosition: (v) => ({ upper: "上軌", middle: "中軌", lower: "下軌", any: "任意" }[v as string] ?? String(v)),
+    industries: (v) => Array.isArray(v) ? v.join(', ') : String(v),
   };
 
   return (
@@ -388,9 +396,25 @@ function StrategySummary({ iteration, totalReturn, maxDrawdown, sharpe, excessRe
         </div>
       </div>
       {/* 選股條件摘要 */}
-      {iteration.criteria && Object.keys(iteration.criteria).length > 0 && (
+      {Boolean(iteration.criteria && Object.keys(iteration.criteria).length > 0) && (
         <div className="mt-2 pt-2 border-t border-border/50">
           <CriteriaCard criteria={iteration.criteria} />
+        </div>
+      )}
+      {/* 行業聚焦摘要 — 突出顯示 AI 選擇的強勢行業 */}
+      {Boolean(Array.isArray(iteration.criteria?.industries) && (iteration.criteria!.industries as string[]).length > 0) && (
+        <div className="mt-2 pt-2 border-t border-border/50">
+          <div className="flex items-center gap-1 mb-1">
+            <Layers className="w-3 h-3 text-teal-400" />
+            <span className="text-xs text-teal-400 font-medium">行業聚焦（策略僅在這些行業內選股）</span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {(iteration.criteria!.industries as string[]).map((ind) => (
+              <span key={ind} className="text-xs px-1.5 py-0.5 rounded bg-teal-500/15 text-teal-300 border border-teal-500/25">
+                {ind}
+              </span>
+            ))}
+          </div>
         </div>
       )}
     </div>
