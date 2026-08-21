@@ -15,6 +15,7 @@ from typing import Any
 from app.agents.few_shot import get_few_shot
 from app.agents.stages.base import BaseStage
 from app.services.backend_client import backend_client
+from app.services.market_data_client import market_data_client
 
 logger = logging.getLogger("agent.stage.industry")
 
@@ -23,8 +24,9 @@ SYSTEM_PROMPT = """你是一個專業的 A 股行業分析師，擅長將實時�
 
 你需要：
 1. 從行情新聞中提取利好行業關鍵詞
-2. 將關鍵詞與數據庫中的行業分類匹配（支持模糊匹配）
-3. 輸出利好行業列表和對應的股票代碼
+2. 結合「最新交易日行業強弱」數據，優先關注新聞提到且當日確實走強的行業
+3. 將關鍵詞與數據庫中的行業分類匹配（支持模糊匹配）
+4. 輸出利好行業列表和對應的股票代碼
 
 注意：行業分類可能很細（如 "J66證券期貨業"、"G56鐵路運輸業"），
 你需要能將新聞中的 "證券" 匹配到 "J66證券期貨業"。
@@ -41,6 +43,9 @@ PROMPT_TEMPLATE = """請根據行情新聞分析結果，結合數據庫行業�
 ## 行情新聞分析
 {market_news}
 
+## 最新交易日行業強弱（按平均漲跌幅排序）
+{industry_daily}
+
 ## 數據庫中的行業列表
 {industry_list}
 
@@ -51,8 +56,9 @@ PROMPT_TEMPLATE = """請根據行情新聞分析結果，結合數據庫行業�
 
 ## 你的任務
 1. 從行情新聞中識別利好行業關鍵詞（如「半導體」「新能源」「醫藥」）
-2. 將關鍵詞與上方「數據庫中的行業列表」模糊匹配（如「半導體」→「C39電子設備製造」）
-3. 從匹配行業的股票代碼中選取，filtered_codes 最多 50 個
+2. 結合「最新交易日行業強弱」：若新聞提到的行業同時出現在領漲前列，優先納入 favorable_industries
+3. 將關鍵詞與上方「數據庫中的行業列表」模糊匹配（如「半導體」→「C39電子設備製造」）
+4. 從匹配行業的股票代碼中選取，filtered_codes 最多 50 個
 
 【市場概念→行業映射】
 如果行情新聞中使用的是市場風格概念而非具體行業，按以下映射轉換後再匹配：
@@ -102,6 +108,11 @@ class IndustryAnalysisStage(BaseStage):
         """
         market_news = kwargs.get("market_news", "")
 
+        # === 從後端獲取最新交易日行業聚合 ===
+        logger.info("[AI0.5] 獲取行業日聚合...")
+        industry_daily = await market_data_client._get_industry_daily()
+        industry_daily_text = _format_industry_daily(industry_daily)
+
         # === 從後端獲取行業列表 ===
         logger.info("[AI0.5] 獲取數據庫行業數據...")
         industry_list = await backend_client.get_industry_list()
@@ -119,6 +130,7 @@ class IndustryAnalysisStage(BaseStage):
 
         prompt = PROMPT_TEMPLATE.format(
             market_news=market_news[:2000],  # 截斷避免 token 過多
+            industry_daily=industry_daily_text,
             industry_list=json.dumps(industry_list[:50], ensure_ascii=False, indent=2),
             industry_stocks=json.dumps(industry_stocks, ensure_ascii=False, indent=2),
             few_shot=get_few_shot("industry_analysis"),
@@ -127,6 +139,28 @@ class IndustryAnalysisStage(BaseStage):
         response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
         logger.info(f"[AI0.5 行業分析] {response[:100]}...")
         return response
+
+
+def _format_industry_daily(data: list[dict[str, Any]]) -> str:
+    """格式化行業日聚合數據為 prompt 可讀文本。"""
+    if not data:
+        return "數據不足，無法提供行業聚合"
+
+    lines = [f"交易日: {data[0].get('tradeDate', '')}", ""]
+    lines.append("行業名稱 | 平均漲跌幅(%) | 上漲家數 | 下跌家數 | 總成交金額 | 個股數")
+    # 取前 15 強勢 + 後 5 弱勢，避免 token 過多
+    for item in data[:15] + data[-5:]:
+        industry = item.get("industry", "")
+        avg = item.get("avgPctChg")
+        avg_str = f"{avg:.4f}" if avg is not None else "N/A"
+        rising = item.get("risingCount", 0)
+        falling = item.get("fallingCount", 0)
+        amount = item.get("totalAmount")
+        amount_str = f"{amount:.2f}" if amount is not None else "N/A"
+        count = item.get("stockCount", 0)
+        lines.append(f"{industry} | {avg_str} | {rising} | {falling} | {amount_str} | {count}")
+
+    return "\n".join(lines)
 
 
 def parse_industry_output(response: str) -> dict[str, Any]:
