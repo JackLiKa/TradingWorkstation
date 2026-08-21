@@ -27,6 +27,7 @@ import { RotationMarkovPanel } from '@/components/industry/RotationMarkovPanel';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
+import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 import {
   Calendar,
   RefreshCw,
@@ -139,6 +140,8 @@ export default function IndustryPage() {
     dedupingInterval: 60000,
   });
 
+  const dailyReady = useDelayedRender(dailyLoading);
+
   const latestDate = useMemo(() => {
     if (!daily || daily.length === 0) return '';
     return daily[0].tradeDate;
@@ -215,7 +218,7 @@ export default function IndustryPage() {
   const title = `行業分析 ${latestDate ? `(${latestDate})` : ''}`;
 
   const renderChart = () => {
-    if (dailyLoading) return <ChartSkeleton />;
+    if (dailyLoading || !dailyReady) return <ChartSkeleton />;
     if (dailyError) return <ErrorState message={String(dailyError)} onRetry={() => mutateDaily()} />;
     if (!daily || daily.length === 0) {
       return (

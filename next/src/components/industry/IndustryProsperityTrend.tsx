@@ -7,7 +7,8 @@ import { api } from '@/lib/api';
 import type { IndustryProsperityDto } from '@/lib/api/types';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { RefreshCw } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
+import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 
 const TOP_N_OPTIONS = [5, 8, 10, 15];
 
@@ -25,6 +26,8 @@ export function IndustryProsperityTrend({ rangeStart, rangeEnd }: Props) {
     () => api.industryProsperityRange(rangeStart, rangeEnd, topN),
     { revalidateOnFocus: false, dedupingInterval: 60_000 }
   );
+
+  const canRender = useDelayedRender(isLoading);
 
   // 計算每個行業的景氣度時間序列
   const { trendData, dates, industries, summary } = useMemo(() => {
@@ -60,16 +63,19 @@ export function IndustryProsperityTrend({ rangeStart, rangeEnd }: Props) {
       }
     }
 
-    // 計算每個行業的景氣度變化趨勢（首日 vs 末日）
+    // 計算每個行業的景氣度變化趨勢（首個可用日 vs 末個可用日）
+    // 修正：使用行業自身首個和末個有數據的日期，而非強制使用區間首末日
     const trendChanges = selectedIndustries.map((ind) => {
       const series = industrySeriesMap.get(ind);
-      if (!series) return { industry: ind, change: 0, first: 0, last: 0 };
-      const first = series.get(sortedDates[0]) ?? 0;
-      const last = series.get(lastDate) ?? 0;
+      if (!series || series.size === 0) return { industry: ind, change: 0, first: 0, last: 0 };
+      // 取該行業有數據的日期並排序
+      const indDates = Array.from(series.keys()).sort();
+      const first = series.get(indDates[0]) ?? 0;
+      const last = series.get(indDates[indDates.length - 1]) ?? 0;
       return { industry: ind, change: last - first, first, last };
     });
 
-    // 統計：上升/下降/穩定行業數
+    // 統計：上升/下降/穩定行業數（閾值 ±5）
     const rising = trendChanges.filter((t) => t.change > 5).length;
     const falling = trendChanges.filter((t) => t.change < -5).length;
     const stable = trendChanges.length - rising - falling;
@@ -184,13 +190,11 @@ export function IndustryProsperityTrend({ rangeStart, rangeEnd }: Props) {
             Top {n}
           </button>
         ))}
-        <button
+        <RefreshButton
           onClick={() => mutate()}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-bg-hover"
-        >
-          <RefreshCw className={`w-3 h-3 ${isValidating ? 'animate-spin' : ''}`} />
-          刷新
-        </button>
+          isLoading={isValidating}
+          className="ml-auto"
+        />
       </div>
 
       {/* 趨勢統計摘要 */}
@@ -211,11 +215,11 @@ export function IndustryProsperityTrend({ rangeStart, rangeEnd }: Props) {
         </div>
       )}
 
-      {isLoading && <ChartSkeleton />}
+      {(isLoading || !canRender) && <ChartSkeleton />}
       {error && <ErrorState message={String(error)} onRetry={() => mutate()} />}
-      {!isLoading && !error && option && (
+      {!isLoading && !error && canRender && option && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[500px]">
-          <ReactECharts option={option} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={option} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 

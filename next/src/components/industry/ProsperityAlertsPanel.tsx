@@ -7,6 +7,8 @@ import type { ProsperityAlertDto } from '@/lib/api/types';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { RefreshCw, AlertTriangle, TrendingUp, TrendingDown, ArrowUpCircle, ArrowDownCircle, Bell, Mail } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
+import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 
 const THRESHOLD_OPTIONS = [5.0, 10.0, 15.0, 20.0];
 
@@ -34,6 +36,7 @@ export function ProsperityAlertsPanel() {
     () => api.prosperityAlerts(threshold),
     { revalidateOnFocus: false, dedupingInterval: 60_000 }
   );
+  const canRender = useDelayedRender(isLoading);
 
   const handleSendNotification = async () => {
     setNotifySending(true);
@@ -76,13 +79,11 @@ export function ProsperityAlertsPanel() {
             </button>
           ))}
         </div>
-        <button
+        <RefreshButton
           onClick={() => mutate()}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-bg-hover"
-        >
-          <RefreshCw className={`w-3 h-3 ${isValidating ? 'animate-spin' : ''}`} />
-          刷新
-        </button>
+          isLoading={isValidating}
+          className="ml-auto"
+        />
         {data && data.alerts.length > 0 && (
           <button
             onClick={handleSendNotification}
@@ -148,11 +149,11 @@ export function ProsperityAlertsPanel() {
         </div>
       )}
 
-      {isLoading && <ChartSkeleton />}
+      {(isLoading || !canRender) && <ChartSkeleton />}
       {error && <ErrorState message={String(error)} onRetry={() => mutate()} />}
 
       {/* 預警列表 */}
-      {!isLoading && !error && data && data.alerts.length > 0 && (
+      {!isLoading && !error && canRender && data && data.alerts.length > 0 && (
         <div className="space-y-2">
           {data.alerts.map((alert, i) => {
             const config = ALERT_TYPE_CONFIG[alert.alertType] || ALERT_TYPE_CONFIG.surge;
@@ -197,7 +198,7 @@ export function ProsperityAlertsPanel() {
       )}
 
       {/* 無預警 */}
-      {!isLoading && !error && data && data.alerts.length === 0 && (
+      {!isLoading && !error && canRender && data && data.alerts.length === 0 && (
         <div className="rounded-lg border border-border bg-bg-panel p-8 text-center">
           <p className="text-sm text-muted mb-2">本期無景氣度異常預警</p>
           <p className="text-xs text-muted">

@@ -7,7 +7,9 @@ import { api } from '@/lib/api';
 import type { ProsperityMarkovDto } from '@/lib/api/types';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { RefreshCw, GitBranch, ArrowRight } from 'lucide-react';
+import { GitBranch, ArrowRight } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
+import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 
 const MONTH_OPTIONS = [6, 12, 24, 36];
 const GRADE_NAMES = ['衰退', '低迷', '平穩', '景氣', '繁榮'];
@@ -23,6 +25,7 @@ export function ProsperityMarkovPanel() {
     () => api.prosperityMarkov(months),
     { revalidateOnFocus: false, dedupingInterval: 300_000 }
   );
+  const canRender = useDelayedRender(isLoading);
 
   const industries = useMemo(() => {
     if (!data || !data.industries) return [];
@@ -225,13 +228,11 @@ export function ProsperityMarkovPanel() {
             </button>
           ))}
         </div>
-        <button
+        <RefreshButton
           onClick={() => mutate()}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-bg-hover"
-        >
-          <RefreshCw className={`w-3 h-3 ${isValidating ? 'animate-spin' : ''}`} />
-          刷新
-        </button>
+          isLoading={isValidating}
+          className="ml-auto"
+        />
       </div>
 
       {/* 摘要 */}
@@ -241,11 +242,11 @@ export function ProsperityMarkovPanel() {
         </div>
       )}
 
-      {isLoading && <ChartSkeleton />}
+      {(isLoading || !canRender) && <ChartSkeleton />}
       {error && <ErrorState message={String(error)} onRetry={() => mutate()} />}
 
       {/* 行業選擇器 */}
-      {!isLoading && !error && industries.length > 0 && (
+      {!isLoading && !error && canRender && industries.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg-panel p-3">
           <span className="text-sm text-muted">選擇行業：</span>
           <select
@@ -263,7 +264,7 @@ export function ProsperityMarkovPanel() {
       )}
 
       {/* 當前狀態 + 預測摘要 */}
-      {!isLoading && !error && data && selectedIndustry && data.industries[selectedIndustry] && (
+      {!isLoading && !error && canRender && data && selectedIndustry && data.industries[selectedIndustry] && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="rounded-lg border border-border bg-bg-panel p-3">
             <p className="text-xs text-muted mb-1">當前等級</p>
@@ -296,20 +297,20 @@ export function ProsperityMarkovPanel() {
       )}
 
       {/* 轉移矩陣熱力圖 */}
-      {!isLoading && !error && matrixOption && (
+      {!isLoading && !error && canRender && matrixOption && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[400px]">
-          <ReactECharts option={matrixOption} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={matrixOption} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 
       {/* 下一日概率 + 穩態分布 */}
-      {!isLoading && !error && nextProbOption && steadyStateOption && (
+      {!isLoading && !error && canRender && nextProbOption && steadyStateOption && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <div className="rounded-lg border border-border bg-bg-panel p-4 h-[300px]">
-            <ReactECharts option={nextProbOption} style={{ width: '100%', height: '100%' }} />
+            <ReactECharts option={nextProbOption} notMerge style={{ width: '100%', height: '100%' }} />
           </div>
           <div className="rounded-lg border border-border bg-bg-panel p-4 h-[300px]">
-            <ReactECharts option={steadyStateOption} style={{ width: '100%', height: '100%' }} />
+            <ReactECharts option={steadyStateOption} notMerge style={{ width: '100%', height: '100%' }} />
           </div>
         </div>
       )}

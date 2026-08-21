@@ -7,7 +7,8 @@ import { api } from '@/lib/api';
 import type { IndustryProsperityDto, IndexDailyDto } from '@/lib/api/types';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { RefreshCw } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
+import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 
 interface Props {
   rangeStart: string;
@@ -259,17 +260,16 @@ export function ProsperityBenchmarkCompare({ rangeStart, rangeEnd }: Props) {
 
   const isLoading = prosperityLoading || benchmarkLoading;
   const error = prosperityError || benchmarkError;
+  const canRender = useDelayedRender(isLoading);
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <button
+        <RefreshButton
           onClick={() => mutateProsperity()}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-bg-hover"
-        >
-          <RefreshCw className={`w-3 h-3 ${prosperityValidating ? 'animate-spin' : ''}`} />
-          刷新
-        </button>
+          isLoading={prosperityValidating}
+          className="ml-auto"
+        />
       </div>
 
       {/* 相關性摘要 */}
@@ -304,11 +304,11 @@ export function ProsperityBenchmarkCompare({ rangeStart, rangeEnd }: Props) {
         </div>
       )}
 
-      {isLoading && <ChartSkeleton />}
+      {(isLoading || !canRender) && <ChartSkeleton />}
       {error && <ErrorState message={String(error)} onRetry={() => mutateProsperity()} />}
-      {!isLoading && !error && option && (
+      {!isLoading && !error && canRender && option && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[500px]">
-          <ReactECharts option={option} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={option} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
       {!isLoading && !error && !option && (

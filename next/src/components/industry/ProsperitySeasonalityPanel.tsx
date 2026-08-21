@@ -7,7 +7,9 @@ import { api } from '@/lib/api';
 import type { ProsperitySeasonalityDto } from '@/lib/api/types';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
-import { RefreshCw, Calendar, TrendingUp, Flame } from 'lucide-react';
+import { Calendar, TrendingUp, Flame } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
+import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 
 const MONTH_OPTIONS = [6, 12, 24, 36];
 const MONTH_NAMES = ['', '1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
@@ -23,6 +25,7 @@ export function ProsperitySeasonalityPanel() {
     () => api.prosperitySeasonality(months),
     { revalidateOnFocus: false, dedupingInterval: 300_000 }
   );
+  const canRender = useDelayedRender(isLoading);
 
   const industries = useMemo(() => {
     if (!data || !data.industries) return [];
@@ -251,13 +254,11 @@ export function ProsperitySeasonalityPanel() {
             </button>
           ))}
         </div>
-        <button
+        <RefreshButton
           onClick={() => mutate()}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-bg-hover"
-        >
-          <RefreshCw className={`w-3 h-3 ${isValidating ? 'animate-spin' : ''}`} />
-          刷新
-        </button>
+          isLoading={isValidating}
+          className="ml-auto"
+        />
       </div>
 
       {/* 摘要 */}
@@ -267,18 +268,18 @@ export function ProsperitySeasonalityPanel() {
         </div>
       )}
 
-      {isLoading && <ChartSkeleton />}
+      {(isLoading || !canRender) && <ChartSkeleton />}
       {error && <ErrorState message={String(error)} onRetry={() => mutate()} />}
 
       {/* 季節性強度排行 */}
-      {!isLoading && !error && rankingOption && (
+      {!isLoading && !error && canRender && rankingOption && (
         <div className="rounded-lg border border-border bg-bg-panel p-4 h-[400px]">
-          <ReactECharts option={rankingOption} style={{ width: '100%', height: '100%' }} />
+          <ReactECharts option={rankingOption} notMerge style={{ width: '100%', height: '100%' }} />
         </div>
       )}
 
       {/* 行業選擇器 */}
-      {!isLoading && !error && industries.length > 0 && (
+      {!isLoading && !error && canRender && industries.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg-panel p-3">
           <span className="text-sm text-muted">選擇行業：</span>
           <select
@@ -296,19 +297,19 @@ export function ProsperitySeasonalityPanel() {
       )}
 
       {/* 月度模式 + 星期模式 */}
-      {!isLoading && !error && monthlyOption && (
+      {!isLoading && !error && canRender && monthlyOption && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <div className="rounded-lg border border-border bg-bg-panel p-4 h-[350px]">
-            <ReactECharts option={monthlyOption} style={{ width: '100%', height: '100%' }} />
+            <ReactECharts option={monthlyOption} notMerge style={{ width: '100%', height: '100%' }} />
           </div>
           <div className="rounded-lg border border-border bg-bg-panel p-4 h-[350px]">
-            <ReactECharts option={weekdayOption} style={{ width: '100%', height: '100%' }} />
+            <ReactECharts option={weekdayOption} notMerge style={{ width: '100%', height: '100%' }} />
           </div>
         </div>
       )}
 
       {/* 選中行業的季節性摘要卡片 */}
-      {!isLoading && !error && data && selectedIndustry && data.industries[selectedIndustry] && (
+      {!isLoading && !error && canRender && data && selectedIndustry && data.industries[selectedIndustry] && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="rounded-lg border border-border bg-bg-panel p-3">
             <div className="flex items-center gap-2 mb-1">
