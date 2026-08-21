@@ -4,6 +4,7 @@
 
 :root {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  color-scheme: dark;
 }
 
 html,
@@ -12,6 +13,19 @@ body {
   color: #e2e8f0;
   font-family: var(--font-sans);
   min-height: 100vh;
+}
+
+/* 確保原生表單控件（select 下拉、日期選擇器）在深色模式下正確渲染 */
+select,
+select option,
+input[type="date"],
+input[type="date"]::-webkit-calendar-picker-indicator {
+  color-scheme: dark;
+}
+
+select option {
+  background-color: #111c31;
+  color: #e2e8f0;
 }
 
 * {

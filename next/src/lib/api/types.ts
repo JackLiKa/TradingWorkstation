@@ -86,6 +86,30 @@ export interface RotationSignalDto {
   summary: string;
 }
 
+/** 行業輪動預測數據 */
+export interface RotationPredictionDto {
+  analysisDate: string;
+  predictionWindow: string;
+  predictedLeaders: {
+    industry: string;
+    score: number;
+    momentumScore: number;
+    capitalScore: number;
+    trendScore: number;
+    reason: string;
+  }[];
+  predictedLaggards: {
+    industry: string;
+    score: number;
+    momentumScore: number;
+    capitalScore: number;
+    trendScore: number;
+    reason: string;
+  }[];
+  predictionReasoning: string;
+  confidence: number;
+}
+
 /** 漲跌幅最大的熱門股票（用於波動列表展示） */
 export interface HotSymbolDto {
   code: string;

@@ -506,6 +506,106 @@ class MarketDataClient:
             logger.warning(f"行業景氣度獲取失敗: {e}")
             return {"top_prosperous": [], "bottom_prosperous": [], "text": ""}
 
+    async def get_capital_migration(self, days: int = 10) -> dict[str, Any]:
+        """計算行業間資金流向遷移（首尾交易日成交金額佔比變化）。
+
+        用於 Agent 策略生成時參考資金遷移方向選擇行業。
+
+        Args:
+            days: 回溯天數（默認 10 日）
+
+        Returns:
+            dict: {
+                "inflow_industries": [{"industry": ..., "change": ..., "amount": ...}, ...],
+                "outflow_industries": [...],
+                "text": "可注入 prompt 的文本摘要",
+            }
+        """
+        try:
+            from datetime import datetime, timedelta
+            from app.services.backend_client import backend_client
+
+            end = datetime.now().strftime("%Y-%m-%d")
+            start = (datetime.now() - timedelta(days=days + 10)).strftime("%Y-%m-%d")
+            data = await backend_client.get_all_industry_daily_range(start, end)
+            if not data or len(data) < 10:
+                return {"inflow_industries": [], "outflow_industries": [], "text": ""}
+
+            # 按日期分組
+            by_date: dict[str, dict[str, float]] = {}
+            for item in data:
+                ind = item.get("industry", "")
+                amt = item.get("totalAmount")
+                date = item.get("tradeDate", "")
+                if not ind or amt is None or not date:
+                    continue
+                if date not in by_date:
+                    by_date[date] = {}
+                by_date[date][ind] = float(amt)
+
+            sorted_dates = sorted(by_date.keys())
+            if len(sorted_dates) < 2:
+                return {"inflow_industries": [], "outflow_industries": [], "text": ""}
+
+            first_date = sorted_dates[0]
+            last_date = sorted_dates[-1]
+            first_data = by_date[first_date]
+            last_data = by_date[last_date]
+
+            first_total = sum(first_data.values())
+            last_total = sum(last_data.values())
+            if first_total == 0 or last_total == 0:
+                return {"inflow_industries": [], "outflow_industries": [], "text": ""}
+
+            # 計算各行業佔比變化
+            all_industries = set(first_data.keys()) | set(last_data.keys())
+            flow_list = []
+            for ind in all_industries:
+                first_share = first_data.get(ind, 0) / first_total
+                last_share = last_data.get(ind, 0) / last_total
+                change = last_share - first_share
+                flow_list.append({
+                    "industry": ind,
+                    "change": change,
+                    "first_amount": first_data.get(ind, 0) / 1e8,
+                    "last_amount": last_data.get(ind, 0) / 1e8,
+                })
+
+            # 取流入/流出 Top 10
+            inflow = sorted([f for f in flow_list if f["change"] > 0], key=lambda x: x["change"], reverse=True)[:10]
+            outflow = sorted([f for f in flow_list if f["change"] < 0], key=lambda x: x["change"])[:10]
+
+            # 構建 prompt 文本
+            lines = ["## 行業資金流向遷移分析"]
+            lines.append(f"比較區間：{first_date} → {last_date}")
+            lines.append("以下行業成交金額佔比上升（資金流入），可能是市場資金正在追捧的方向：")
+            for f in inflow[:5]:
+                lines.append(
+                    f"- {f['industry']}: 佔比變化 +{f['change']*100:.2f}%，"
+                    f"成交額 {f['first_amount']:.1f}億 → {f['last_amount']:.1f}億"
+                )
+            if outflow:
+                lines.append("")
+                lines.append("以下行業成交金額佔比下降（資金流出），可能是市場資金正在撤離的方向：")
+                for f in outflow[:5]:
+                    lines.append(
+                        f"- {f['industry']}: 佔比變化 {f['change']*100:.2f}%，"
+                        f"成交額 {f['first_amount']:.1f}億 → {f['last_amount']:.1f}億"
+                    )
+            lines.append("")
+            lines.append("建議：若需聚焦行業，優先考慮資金持續流入的行業；避免資金持續流出的行業。")
+
+            text = "\n".join(lines)
+            logger.info(f"資金遷移計算完成: inflow={len(inflow)}, outflow={len(outflow)}")
+            return {
+                "inflow_industries": inflow,
+                "outflow_industries": outflow,
+                "text": text,
+            }
+        except Exception as e:
+            logger.warning(f"資金遷移計算失敗: {e}")
+            return {"inflow_industries": [], "outflow_industries": [], "text": ""}
+
     async def get_industry_correlation(self, days: int = 30) -> dict[str, Any]:
         """計算行業間相關性矩陣，識別高相關行業對。
 

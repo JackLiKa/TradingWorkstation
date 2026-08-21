@@ -4,6 +4,7 @@ import com.quantization.common.api.ApiResponse;
 import com.quantization.module.stock.dto.HotSymbolDto;
 import com.quantization.module.stock.dto.IndustryDailyDto;
 import com.quantization.module.stock.dto.IndustryProsperityDto;
+import com.quantization.module.stock.dto.RotationPredictionDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexHistoryBatchRequestDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
@@ -228,6 +229,19 @@ public class StockController {
             @RequestParam LocalDate end,
             @RequestParam(required = false, defaultValue = "15") int topN) {
         return ApiResponse.ok(stockService.industryProsperityRange(start, end, topN));
+    }
+
+    /**
+     * 行業輪動預測 — 基於歷史輪動規律預測下一輪領漲行業。
+     *
+     * @param lookbackDays 回溯天數（默認 20）
+     * @return 輪動預測 DTO
+     */
+    @Operation(summary = "行業輪動預測（歷史規律預測下一輪領漲）")
+    @GetMapping("/rotation-prediction")
+    public ApiResponse<RotationPredictionDto> rotationPrediction(
+            @RequestParam(required = false, defaultValue = "20") int lookbackDays) {
+        return ApiResponse.ok(stockService.predictRotation(lookbackDays));
     }
 
     // ===== 指數歷史（市場形態識別）=====

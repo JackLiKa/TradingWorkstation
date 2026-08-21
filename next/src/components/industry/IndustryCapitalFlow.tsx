@@ -16,11 +16,12 @@ export function IndustryCapitalFlow({ data }: Props) {
       .slice(0, 25);
 
     const categories = sorted.map((d) => d.industry);
-    const values = sorted.map((d) => d.totalAmount ?? 0);
+    // 轉為億元（1 億 = 1e8）
+    const values = sorted.map((d) => Number(((d.totalAmount ?? 0) / 1e8).toFixed(2)));
 
     return {
       title: {
-        text: '資金流向排行（成交金額 Top 25）',
+        text: '資金流向排行（成交金額 Top 25，單位：億元）',
         left: 'center',
         textStyle: { color: '#e2e8f0', fontSize: 14 },
       },
@@ -29,7 +30,7 @@ export function IndustryCapitalFlow({ data }: Props) {
         axisPointer: { type: 'shadow' },
         formatter: (params: any) => {
           const p = params[0];
-          return `${p.name}<br/>成交金額: ${Number(p.value).toLocaleString()}`;
+          return `${p.name}<br/>成交金額: ${Number(p.value).toFixed(2)} 億元`;
         },
       },
       grid: { left: '3%', right: '4%', bottom: '12%', top: '15%', containLabel: true },
@@ -41,6 +42,7 @@ export function IndustryCapitalFlow({ data }: Props) {
       },
       yAxis: {
         type: 'value',
+        name: '億元',
         axisLabel: { color: '#94a3b8' },
         splitLine: { lineStyle: { color: '#1e293b' } },
       },
@@ -57,7 +59,7 @@ export function IndustryCapitalFlow({ data }: Props) {
             position: 'top',
             color: '#94a3b8',
             fontSize: 10,
-            formatter: (p: any) => formatAmount(p.value),
+            formatter: (p: any) => `${p.value.toFixed(1)}億`,
           },
         },
       ],
@@ -69,11 +71,4 @@ export function IndustryCapitalFlow({ data }: Props) {
       <ReactECharts option={option} style={{ width: '100%', height: '100%' }} />
     </div>
   );
-}
-
-function formatAmount(value: number) {
-  if (value >= 1e9) return `${(value / 1e9).toFixed(1)}B`;
-  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
-  if (value >= 1e3) return `${(value / 1e3).toFixed(1)}K`;
-  return value.toString();
 }

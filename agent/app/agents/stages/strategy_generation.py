@@ -55,6 +55,8 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 
 {prosperity_text}
 
+{migration_text}
+
 {few_shot}
 
 ## 你的任務
@@ -210,6 +212,15 @@ class StrategyGenerationStage(BaseStage):
             logger.warning(f"[AI2] 行業景氣度獲取失敗: {e}")
             prosperity_text = ""
 
+        # 獲取資金流向遷移分析，輔助 AI 參考資金遷移方向
+        logger.info("[AI2] 獲取資金流向遷移分析...")
+        try:
+            migration_data = await market_data_client.get_capital_migration(days=10)
+            migration_text = migration_data.get("text", "")
+        except Exception as e:
+            logger.warning(f"[AI2] 資金遷移分析失敗: {e}")
+            migration_text = ""
+
         # 注入歷史錯誤教訓（避免重複犯錯）
         from app.services import error_store
 
@@ -227,6 +238,7 @@ class StrategyGenerationStage(BaseStage):
             error_lessons=error_lessons if error_lessons else "無（無歷史錯誤記錄）",
             correlation_text=correlation_text if correlation_text else "無（無高相關行業對或數據不足）",
             prosperity_text=prosperity_text if prosperity_text else "無（景氣度數據不足）",
+            migration_text=migration_text if migration_text else "無（資金遷移數據不足）",
             asof_date=asof_date,
             adjustflag=adjustflag,
             few_shot=get_few_shot("strategy_generation"),

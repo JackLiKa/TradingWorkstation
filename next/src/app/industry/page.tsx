@@ -13,6 +13,9 @@ import { IndustryCapitalFlowTrend } from '@/components/industry/IndustryCapitalF
 import { IndustryProsperityChart } from '@/components/industry/IndustryProsperityChart';
 import { IndustryProsperityTrend } from '@/components/industry/IndustryProsperityTrend';
 import { IndustryCapitalFlowSankey } from '@/components/industry/IndustryCapitalFlowSankey';
+import { ProsperityBenchmarkCompare } from '@/components/industry/ProsperityBenchmarkCompare';
+import { RotationPredictionChart } from '@/components/industry/RotationPredictionChart';
+import { ProsperityHeatmapMatrix } from '@/components/industry/ProsperityHeatmapMatrix';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
@@ -33,6 +36,8 @@ import {
   GitBranch,
   LayoutGrid,
   LineChart,
+  Sparkles,
+  Layers,
 } from 'lucide-react';
 import type { IndustryDailyDto, IndexDailyDto } from '@/lib/api/types';
 import { agentApi, type IndustryNewsItem } from '@/lib/api/agent';
@@ -48,7 +53,10 @@ type ViewType =
   | 'capitalTrend'
   | 'prosperityTrend'
   | 'correlation'
-  | 'capitalMigration';
+  | 'capitalMigration'
+  | 'prosperityBenchmark'
+  | 'rotationPrediction'
+  | 'prosperityHeatmap';
 
 /** 視圖分組 */
 type ViewGroup = 'snapshot' | 'trend' | 'advanced';
@@ -73,6 +81,9 @@ const VIEWS: { key: ViewType; label: string; icon: typeof TrendingUp; group: Vie
   // 進階分析
   { key: 'correlation', label: '相關性矩陣', icon: Grid3x3, group: 'advanced' },
   { key: 'capitalMigration', label: '資金遷移', icon: GitBranch, group: 'advanced' },
+  { key: 'prosperityBenchmark', label: '景氣度vs大盤', icon: Layers, group: 'advanced' },
+  { key: 'rotationPrediction', label: '輪動預測', icon: Sparkles, group: 'advanced' },
+  { key: 'prosperityHeatmap', label: '景氣度熱力圖', icon: Grid3x3, group: 'advanced' },
 ];
 
 function formatDateInput(d: Date) {
@@ -200,6 +211,9 @@ export default function IndustryPage() {
     if (view === 'prosperity') return <IndustryProsperityChart />;
     if (view === 'prosperityTrend') return <IndustryProsperityTrend rangeStart={rangeStart} rangeEnd={rangeEnd} />;
     if (view === 'capitalMigration') return <IndustryCapitalFlowSankey rangeStart={rangeStart} rangeEnd={rangeEnd} />;
+    if (view === 'prosperityBenchmark') return <ProsperityBenchmarkCompare rangeStart={rangeStart} rangeEnd={rangeEnd} />;
+    if (view === 'rotationPrediction') return <RotationPredictionChart />;
+    if (view === 'prosperityHeatmap') return <ProsperityHeatmapMatrix rangeStart={rangeStart} rangeEnd={rangeEnd} />;
     return null;
   };
 
@@ -333,7 +347,7 @@ export default function IndustryPage() {
           <select
             value={selectedIndustry}
             onChange={(e) => setSelectedIndustry(e.target.value)}
-            className="bg-bg-base text-sm text-slate-100 rounded border border-border px-3 py-2 outline-none min-w-[200px]"
+            className="bg-bg-panel text-sm text-slate-100 rounded border border-border px-3 py-2 outline-none min-w-[200px]"
           >
             <option value="">請選擇行業</option>
             {industries.map((ind) => (
@@ -348,7 +362,7 @@ export default function IndustryPage() {
               type="date"
               value={rangeStart}
               onChange={(e) => setRangeStart(e.target.value)}
-              className="bg-bg-base text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
+              className="bg-bg-panel text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
             />
           </div>
           <div className="flex items-center gap-2">
@@ -357,7 +371,7 @@ export default function IndustryPage() {
               type="date"
               value={rangeEnd}
               onChange={(e) => setRangeEnd(e.target.value)}
-              className="bg-bg-base text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
+              className="bg-bg-panel text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
             />
           </div>
           <Button onClick={() => mutateTrend()} size="sm" variant="outline" disabled={trendValidating || !selectedIndustry}>
@@ -372,7 +386,7 @@ export default function IndustryPage() {
       )}
 
       {/* 歷史趨勢/進階分析視圖的日期區間選擇器 */}
-      {(view === 'correlation' || view === 'capitalTrend' || view === 'prosperityTrend' || view === 'capitalMigration') && (
+      {(view === 'correlation' || view === 'capitalTrend' || view === 'prosperityTrend' || view === 'capitalMigration' || view === 'prosperityBenchmark' || view === 'prosperityHeatmap') && (
         <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-bg-panel p-3">
           <span className="text-sm text-muted">分析區間：</span>
           <div className="flex items-center gap-2">
@@ -380,14 +394,14 @@ export default function IndustryPage() {
               type="date"
               value={rangeStart}
               onChange={(e) => setRangeStart(e.target.value)}
-              className="bg-bg-base text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
+              className="bg-bg-panel text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
             />
             <span className="text-muted">~</span>
             <input
               type="date"
               value={rangeEnd}
               onChange={(e) => setRangeEnd(e.target.value)}
-              className="bg-bg-base text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
+              className="bg-bg-panel text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
             />
           </div>
         </div>

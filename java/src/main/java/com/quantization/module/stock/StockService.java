@@ -7,6 +7,7 @@ import com.quantization.module.stock.dto.IndustryProsperityDto;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.IndexMetadataDto;
 import com.quantization.module.stock.dto.MarketBreadthDto;
+import com.quantization.module.stock.dto.RotationPredictionDto;
 import com.quantization.module.stock.dto.RotationSignalDto;
 import com.quantization.module.stock.dto.SectorPerformanceDto;
 import com.quantization.module.stock.dto.SearchResultDto;
@@ -328,16 +329,21 @@ public class StockService {
 
         Map<String, Double> styleRotation = computeCategoryChange(all, history, List.of("growth", "value", "scale"));
 
-        // 計算所有行業（一級+二級）的累計漲幅，排序
-        List<RotationSignalDto.RankEntryDto> industryRanks = all.stream()
-                .filter(e -> "industry_l1".equals(e.getCategoryCode()) || "industry_l2".equals(e.getCategoryCode()))
-                .map(e -> {
-                    List<IndexDailyDto> list = history.getOrDefault(e.getCode(), List.of());
-                    Double change = cumulativeChange(list);
-                    return new RotationSignalDto.RankEntryDto(e.getName() + "(" + e.getCode() + ")", change != null ? change : 0.0);
-                })
-                .sorted(Comparator.comparingDouble(RotationSignalDto.RankEntryDto::change).reversed())
-                .toList();
+        // 優先使用 industry_daily 表計算領漲/滯後行業（index_daily 可能缺行業指數數據）
+        List<RotationSignalDto.RankEntryDto> industryRanks = computeIndustryRanksFromDaily(days);
+
+        // 若 industry_daily 無數據，回退到 index_daily 計算
+        if (industryRanks.isEmpty()) {
+            industryRanks = all.stream()
+                    .filter(e -> "industry_l1".equals(e.getCategoryCode()) || "industry_l2".equals(e.getCategoryCode()))
+                    .map(e -> {
+                        List<IndexDailyDto> list = history.getOrDefault(e.getCode(), List.of());
+                        Double change = cumulativeChange(list);
+                        return new RotationSignalDto.RankEntryDto(e.getName() + "(" + e.getCode() + ")", change != null ? change : 0.0);
+                    })
+                    .sorted(Comparator.comparingDouble(RotationSignalDto.RankEntryDto::change).reversed())
+                    .toList();
+        }
 
         int topN = Math.max(3, industryRanks.size() / 5);
         List<RotationSignalDto.RankEntryDto> leading = industryRanks.stream().limit(topN).toList();
@@ -354,6 +360,50 @@ public class StockService {
         );
 
         return new RotationSignalDto(days, industryRotation, styleRotation, leading, lagging, rotationStrength, summary);
+    }
+
+    /**
+     * 從 industry_daily 表計算行業累計漲幅排名（用於輪動信號的領漲/滯後行業）。
+     *
+     * 取最近 N 個交易日的行業聚合數據，計算每個行業的累計平均漲跌幅。
+     *
+     * @param days 回溯天數
+     * @return 行業排名列表（按累計漲幅倒序）
+     */
+    private List<RotationSignalDto.RankEntryDto> computeIndustryRanksFromDaily(int days) {
+        LocalDate end = LocalDate.now();
+        LocalDate start = end.minusDays(days + 10);
+        List<IndustryDailyEntity> entities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(start, end);
+
+        if (entities.isEmpty()) {
+            return List.of();
+        }
+
+        // 按行業分組，計算累計漲跌幅（首日 avgPctChg → 末日 avgPctChg 的累計變化）
+        Map<String, List<IndustryDailyEntity>> byIndustry = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : entities) {
+            byIndustry.computeIfAbsent(e.getIndustry(), k -> new ArrayList<>()).add(e);
+        }
+
+        List<RotationSignalDto.RankEntryDto> ranks = new ArrayList<>();
+        for (Map.Entry<String, List<IndustryDailyEntity>> entry : byIndustry.entrySet()) {
+            List<IndustryDailyEntity> list = entry.getValue();
+            if (list.size() < 2) {
+                continue;
+            }
+            // 累計漲跌幅 = 各日 avgPctChg 之和（近似累計收益）
+            double cumulative = 0.0;
+            for (IndustryDailyEntity e : list) {
+                if (e.getAvgPctChg() != null) {
+                    cumulative += e.getAvgPctChg().doubleValue();
+                }
+            }
+            ranks.add(new RotationSignalDto.RankEntryDto(entry.getKey(), cumulative));
+        }
+
+        ranks.sort(Comparator.comparingDouble(RotationSignalDto.RankEntryDto::change).reversed());
+        return ranks;
     }
 
     // ------------------------------------------------------------------------
@@ -500,6 +550,181 @@ public class StockService {
                     grade
             );
         }).sorted((a, b) -> Double.compare(b.prosperityIndex(), a.prosperityIndex())).toList();
+    }
+
+    /**
+     * 行業輪動預測 — 基於歷史輪動規律預測下一輪領漲行業。
+     *
+     * 預測模型綜合三個維度：
+     * 1. 動量延續（權重 0.40）：近期累計漲跌幅，強者恆強
+     * 2. 資金流向（權重 0.35）：成交金額佔比變化，資金流入更可能領漲
+     * 3. 景氣度趨勢（權重 0.25）：景氣度變化趨勢，上升者更可能領漲
+     *
+     * @param lookbackDays 回溯天數（用於計算歷史輪動規律）
+     * @return 輪動預測 DTO
+     */
+    @Cacheable(value = CacheConfig.INDUSTRY_DAILY_CACHE, key = "'rotation-prediction-' + #p0")
+    public RotationPredictionDto predictRotation(int lookbackDays) {
+        LocalDate end = LocalDate.now();
+        LocalDate start = end.minusDays(lookbackDays + 10);
+
+        List<IndustryDailyEntity> entities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(start, end);
+
+        if (entities.isEmpty()) {
+            return new RotationPredictionDto(
+                    end.toString(), lookbackDays + "日",
+                    List.of(), List.of(), "數據不足，無法預測", 0.0
+            );
+        }
+
+        // 按行業分組
+        Map<String, List<IndustryDailyEntity>> byIndustry = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : entities) {
+            byIndustry.computeIfAbsent(e.getIndustry(), k -> new ArrayList<>()).add(e);
+        }
+
+        // 按日期分組（用於計算每日總成交額）
+        Map<LocalDate, Double> dailyTotalAmount = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : entities) {
+            double amt = e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0;
+            dailyTotalAmount.merge(e.getTradeDate(), amt, Double::sum);
+        }
+
+        List<LocalDate> sortedDates = new ArrayList<>(dailyTotalAmount.keySet());
+        sortedDates.sort(LocalDate::compareTo);
+        if (sortedDates.size() < 2) {
+            return new RotationPredictionDto(
+                    end.toString(), lookbackDays + "日",
+                    List.of(), List.of(), "交易日不足，無法預測", 0.0
+            );
+        }
+
+        LocalDate firstDate = sortedDates.get(0);
+        LocalDate lastDate = sortedDates.get(sortedDates.size() - 1);
+        double firstTotal = dailyTotalAmount.get(firstDate);
+        double lastTotal = dailyTotalAmount.get(lastDate);
+
+        // 計算每個行業的三個維度評分
+        List<PredictionScore> scores = new ArrayList<>();
+        for (Map.Entry<String, List<IndustryDailyEntity>> entry : byIndustry.entrySet()) {
+            String industry = entry.getKey();
+            List<IndustryDailyEntity> list = entry.getValue();
+            if (list.size() < 2) continue;
+
+            // 1. 動量：累計漲跌幅
+            double momentum = 0.0;
+            for (IndustryDailyEntity e : list) {
+                if (e.getAvgPctChg() != null) {
+                    momentum += e.getAvgPctChg().doubleValue();
+                }
+            }
+
+            // 2. 資金流向：成交金額佔比變化
+            double firstAmount = list.stream()
+                    .filter(e -> e.getTradeDate().equals(firstDate))
+                    .mapToDouble(e -> e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0)
+                    .findFirst().orElse(0.0);
+            double lastAmount = list.stream()
+                    .filter(e -> e.getTradeDate().equals(lastDate))
+                    .mapToDouble(e -> e.getTotalAmount() != null ? e.getTotalAmount().doubleValue() : 0.0)
+                    .findFirst().orElse(0.0);
+            double firstShare = firstTotal > 0 ? firstAmount / firstTotal : 0.0;
+            double lastShare = lastTotal > 0 ? lastAmount / lastTotal : 0.0;
+            double capitalFlow = (lastShare - firstShare) * 100.0; // 百分點變化
+
+            // 3. 景氣度趨勢：近期漲跌幅趨勢（最後 5 日 vs 前 5 日）
+            int midPoint = list.size() / 2;
+            double firstHalfAvg = list.subList(0, Math.min(midPoint, list.size())).stream()
+                    .filter(e -> e.getAvgPctChg() != null)
+                    .mapToDouble(e -> e.getAvgPctChg().doubleValue())
+                    .average().orElse(0.0);
+            double lastHalfAvg = list.subList(midPoint, list.size()).stream()
+                    .filter(e -> e.getAvgPctChg() != null)
+                    .mapToDouble(e -> e.getAvgPctChg().doubleValue())
+                    .average().orElse(0.0);
+            double trendChange = lastHalfAvg - firstHalfAvg;
+
+            scores.add(new PredictionScore(industry, momentum, capitalFlow, trendChange));
+        }
+
+        if (scores.isEmpty()) {
+            return new RotationPredictionDto(
+                    end.toString(), lookbackDays + "日",
+                    List.of(), List.of(), "有效行業數不足，無法預測", 0.0
+            );
+        }
+
+        // 標準化各維度到 0-100
+        double momMin = scores.stream().mapToDouble(s -> s.momentum).min().orElse(0);
+        double momMax = scores.stream().mapToDouble(s -> s.momentum).max().orElse(0);
+        double capMin = scores.stream().mapToDouble(s -> s.capitalFlow).min().orElse(0);
+        double capMax = scores.stream().mapToDouble(s -> s.capitalFlow).max().orElse(0);
+        double trendMin = scores.stream().mapToDouble(s -> s.trendChange).min().orElse(0);
+        double trendMax = scores.stream().mapToDouble(s -> s.trendChange).max().orElse(0);
+
+        // 計算綜合評分
+        List<RotationPredictionDto.PredictedIndustry> predictions = new ArrayList<>();
+        for (PredictionScore s : scores) {
+            double momScore = normalize(s.momentum, momMin, momMax);
+            double capScore = normalize(s.capitalFlow, capMin, capMax);
+            double trendScore = normalize(s.trendChange, trendMin, trendMax);
+
+            double composite = momScore * 0.40 + capScore * 0.35 + trendScore * 0.25;
+
+            String reason = String.format(
+                    "動量%.1f(累計%.2f%%), 資金%.1f(佔比變化%.2f%%), 趨勢%.1f(後半段均漲%.3f%%)",
+                    momScore, s.momentum, capScore, s.capitalFlow, trendScore, s.trendChange
+            );
+
+            predictions.add(new RotationPredictionDto.PredictedIndustry(
+                    s.industry,
+                    Math.round(composite * 100.0) / 100.0,
+                    Math.round(momScore * 100.0) / 100.0,
+                    Math.round(capScore * 100.0) / 100.0,
+                    Math.round(trendScore * 100.0) / 100.0,
+                    reason
+            ));
+        }
+
+        // 按評分排序
+        predictions.sort((a, b) -> Double.compare(b.score(), a.score()));
+
+        // 取 Top 5 領漲和 Bottom 5 滯後
+        List<RotationPredictionDto.PredictedIndustry> leaders = predictions.stream().limit(5).toList();
+        List<RotationPredictionDto.PredictedIndustry> laggards = predictions.stream()
+                .skip(Math.max(0, predictions.size() - 5))
+                .toList();
+
+        // 計算信心度（基於 Top 1 與中位數的差距）
+        double topScore = leaders.isEmpty() ? 0 : leaders.get(0).score();
+        double medianScore = predictions.size() > 0
+                ? predictions.get(predictions.size() / 2).score()
+                : 50.0;
+        double confidence = Math.min(100.0, Math.max(0.0, (topScore - medianScore) * 2.0));
+
+        // 構建預測理由
+        String reasoning = String.format(
+                "基於最近 %d 日數據，綜合動量(40%%)+資金流向(35%%)+景氣度趨勢(25%%)預測。" +
+                "最可能領漲：%s（評分%.1f）。信心度%.1f%%。",
+                lookbackDays,
+                leaders.isEmpty() ? "無" : leaders.get(0).industry(),
+                topScore,
+                confidence
+        );
+
+        return new RotationPredictionDto(
+                lastDate.toString(),
+                lookbackDays + "日",
+                leaders,
+                laggards,
+                reasoning,
+                Math.round(confidence * 100.0) / 100.0
+        );
+    }
+
+    /** 輪動預測內部評分數據。 */
+    private record PredictionScore(String industry, double momentum, double capitalFlow, double trendChange) {
     }
 
     /** 將值標準化到 0-100 區間。 */

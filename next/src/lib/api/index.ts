@@ -14,6 +14,7 @@ import type {
   IndexDailyDto,
   RotationSignalDto,
   IndustryProsperityDto,
+  RotationPredictionDto,
   CandlestickDto,
   ScreenerResultDto,
   ScreenerCriteriaDto,
@@ -62,6 +63,10 @@ export const api = {
 
   // ===== 行業輪動信號 =====
   rotation: (days = 5) => apiFetch<RotationSignalDto>(`/stock/rotation?days=${days}`),
+
+  // ===== 行業輪動預測 =====
+  rotationPrediction: (lookbackDays = 20) =>
+    apiFetch<RotationPredictionDto>(`/stock/rotation-prediction?lookbackDays=${lookbackDays}`),
 
   // ===== 行業景氣度指標 =====
   industryProsperity: (tradeDate?: string) =>

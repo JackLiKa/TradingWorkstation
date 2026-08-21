@@ -16,14 +16,10 @@ export function IndustryTreemap({ data }: Props) {
 
     const treeData = top.map((d) => ({
       name: d.industry,
-      value: [d.avgPctChg ?? 0, d.totalAmount ?? 0],
+      value: d.totalAmount ?? 0,
+      avgPctChg: d.avgPctChg ?? 0,
       itemStyle: {
         color: getColor(d.avgPctChg ?? 0),
-      },
-      label: {
-        show: true,
-        formatter: `{b}\n{c[0]}%`,
-        fontSize: 10,
       },
     }));
 
@@ -35,8 +31,9 @@ export function IndustryTreemap({ data }: Props) {
       },
       tooltip: {
         formatter: (params: any) => {
-          const v = params.value;
-          return `${params.name}<br/>平均漲跌幅: ${v[0].toFixed(3)}%<br/>成交金額: ${v[1].toLocaleString()}`;
+          const pct = params.data.avgPctChg;
+          const amt = params.value;
+          return `${params.name}<br/>平均漲跌幅: ${pct.toFixed(3)}%<br/>成交金額: ${(amt / 1e8).toFixed(2)} 億`;
         },
       },
       series: [
@@ -56,8 +53,15 @@ export function IndustryTreemap({ data }: Props) {
           },
           label: {
             show: true,
-            formatter: '{b}\n{c[0]}%',
+            formatter: (params: any) => {
+              const pct = params.data.avgPctChg;
+              const name = params.name;
+              // 截斷長名稱
+              const shortName = name.length > 8 ? name.slice(0, 8) + '…' : name;
+              return `${shortName}\n${pct.toFixed(2)}%`;
+            },
             color: '#fff',
+            fontSize: 10,
           },
           upperLabel: { show: false },
         },
