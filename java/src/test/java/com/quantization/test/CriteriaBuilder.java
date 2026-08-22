@@ -3,6 +3,7 @@ package com.quantization.test;
 import com.quantization.module.screener.dto.ScreenerCriteriaDto;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * ScreenerCriteriaDto 測試構建器 — 簡化 49 字段 record 的構造。
@@ -67,7 +68,7 @@ public final class CriteriaBuilder {
                 minMacdHist, maxMacdHist, minBollWidth, maxBollWidth, minBollPercentB, maxBollPercentB,
                 priceAboveMa5, priceAboveMa20, priceAboveMa60, ma5AboveMa20, ma20AboveMa60,
                 macdCrossSignal, macdCrossWithinDays, kdjCrossSignal, kdjCrossWithinDays,
-                bollPosition, excludeSt, maxResults, sortBy
+                bollPosition, excludeSt, maxResults, sortBy, null
         );
     }
 }
