@@ -5,35 +5,45 @@
 - `java/` — 后端：Java 21 + Spring Boot 3.3 + Spring Data JPA + Caffeine
   - 入口：`src/main/java/com/quantization/QuantizationApplication.java`
   - 配置：`src/main/resources/application.yml`（从 `.env` 读取）
-  - 模块：`com.quantization.module.{stock,indicator,dashboard,screener,backtest,chart,sync,system,preference}`
-  - 行業分析：`module.stock` 含行業景氣度、輪動預測、Markov 模型、多模型預測（ARIMA/Holt-Winters/線性回歸）、AutoML 調參、季節性分析、回測驗證
-  - 通知服務：`module.system` 含 `NotificationService`（SMTP 郵件 + Webhook，異步推送）
+  - 模块：`com.quantization.module.{stock,industry,forecast,indicator,dashboard,screener,backtest,chart,sync,system,preference,aicalllog}`（**12 個模塊**，`stock` 已三分拆為 `stock`（行情）+ `industry`（景氣度）+ `forecast`（預測），`aicalllog` 為 AI 調用日誌）
+  - 行業分析：`module.industry` 含行業景氣度計算、異常預警；`module.forecast` 含輪動預測、Markov 模型、多模型預測（ARIMA/Holt-Winters/線性回歸）、AutoML 調參、季節性分析、回測驗證
+  - 指標引擎：`module.indicator` 已改為 `IndicatorCalculator` 註冊表模式（`Map<String,IndicatorCalculator>`），新增指標只需實現接口 + `@Component`，無需改 `IndicatorEngine`
+  - 通知服務：`module.system` 含 `NotificationService`（SMTP 郵件 + Webhook，異步推送，獨立 `notificationExecutor` 線程池）+ `ProsperityAlertScheduler`（P4-8：可配置定時調度，`ALERT_SCHEDULER_ENABLED=true` + cron，預設關閉）
+  - 偏好存儲：`module.preference` 已從 JSON 文件改為 MySQL 入庫（`user_preference` 表），DB 異常時降級到文件存儲
+  - 回測引擎：`module.backtest` 已加滑點(`slippageBps`)、漲跌停約束、夏普減無風險利率(`riskFreeRate`)、結果自動落庫
+  - 緩存：已按域拆名（`STOCK_DAILY_CACHE`/`INDUSTRY_DAILY_CACHE`/`FORECAST_CACHE`/`ROTATION_CACHE`），各域獨立 TTL
   - 构建：`mvn -DskipTests compile`（需 JDK 21）
-  - 运行：`mvn spring-boot:run`，默认 `http://localhost:8090`，Swagger `/swagger-ui.html`
+  - 运行：`mvn spring-boot:run`，默认 `http://localhost:8090`，**context-path 默認 `/TradingWorkstation`**，Swagger `/TradingWorkstation/swagger-ui.html`
 - `next/` — 前端：Next.js 15.1.9 (App Router) + ECharts + shadcn/ui + Tailwind
   - 入口：`src/app/layout.tsx`、`src/app/page.tsx`
   - API 客户端：`src/lib/api/`，类型与后端 DTO 一一对应
+  - ECharts 共用封裝：`src/hooks/useEChartsOption.ts`（統一主題/tooltip/空態/loading）
+  - 測試：`npm run test`（vitest，24 個測試覆蓋 lib/api 層）
   - 构建：`npm run build`（需 `--legacy-peer-deps` 安装，因 SWR peer dep 限制）
   - 运行：`npm run dev`，默认 `http://localhost:3010`
 - `agent/` — AI 优化 Agent 服务：FastAPI + LangGraph 风格优化循环 + 多模型 LLM 路由
   - 入口：`agent/app/main.py`
   - 配置：`agent/.env`（从 `agent/.env.example` 复制）
   - LLM 供應商：DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin（7 個供應商，按階段性價比路由）
-  - 測試：`cd agent && python -m pytest tests/`（173 個測試）
+  - 測試：`cd agent && python -m pytest tests/`（15 個測試文件，覆蓋率門檻 40%）
   - 監控：`/api/agent/metrics`（Prometheus 指標端點）
   - 运行：`uvicorn app.main:app`，默认 `http://localhost:8100`，Swagger `/docs`
-- `ingestion/` — Python Baostock 数据采集脚本（由后端 sync 模块编排）
-- `docs/` — 架构 / API / 数据库文档
+- `ingestion/` — Python Baostock 数据采集（由后端 sync 模块编排；已拆分為 `baostock_fetch.py`（API 調用層）+ `baostock_write.py`（DB 寫入層）+ `baostock_ingest.py`（入口/CLI/菜單）；寫入 stock_daily / index_daily / index_metadata / stock_industry / **industry_daily 聚合**；⚠️ 前復權(adjustflag=2)增量陳舊化風險，每季度需跑 `--full-refresh-adjustflag2`；支持 `--progress-json` JSON 進度協議）
+- `docs/` — 完整文檔：`architecture.md`（架構+C4）、`MODULE_GUIDE.md`（模塊一覽）、`api.md`（API 參考）、`database.md`（Schema+ER）、`BACKTEST_ENGINE.md`、`AGENT_SERVICE.md`、`DATA_INGESTION.md`、`DEPLOYMENT.md`、`DEVELOPMENT.md`
 - `.env` / `.env.example` — 环境变量（数据库连接、查询默认值、同步配置）
 
 ## 服务端口总览
 
 | 服务       | 默认端口 | 配置项              | 说明                     |
 |------------|----------|---------------------|--------------------------|
-| Java 后端  | 8090     | `SERVER_PORT`       | REST API + Swagger       |
-| Next.js 前端 | 3010   | `package.json` 脚本 | App Router SSR/CSR       |
+| Java 后端  | 8090     | `SERVER_PORT`       | REST API + Swagger（context-path `/TradingWorkstation`，由 `SERVER_CONTEXT_PATH` 控制） |
+| Next.js 前端 | 3010   | `package.json` 脚本 | App Router，basePath `/TradingWorkstation` |
 | Agent 服务 | 8100     | `AGENT_PORT`        | AI 优化循环 + LLM 路由   |
 | MySQL      | 3306     | `DB_PORT`           | 数据库                   |
+| Prometheus | 9090     | docker-compose      | 可選監控（scrape agent /metrics） |
+| Grafana    | 3000     | docker-compose      | 可選儀表盤（docs/grafana-agent-dashboard.json） |
+
+**⚠️ context-path 契約鏈（三處必須同步 `/TradingWorkstation`）**：後端 `application.yml` context-path、前端 `next.config.js` basePath+rewrites destination、agent `BACKEND_API_URL`。docker-compose 中 next 的 `BACKEND_HOST` **不帶**前綴（rewrite destination 補），agent 的 `BACKEND_API_URL` **帶**前綴。
 
 ## 前置依赖
 
@@ -175,12 +185,12 @@ python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8100
 ### 验证启动成功
 
 ```bash
-# 后端健康检查
-curl http://localhost:8090/actuator/health
+# 后端健康检查（注意 context-path 前綴）
+curl http://localhost:8090/TradingWorkstation/actuator/health
 # 期望：{"status":"UP"}
 
 # 前端访问
-curl -I http://localhost:3010
+curl -I http://localhost:3010/TradingWorkstation
 # 期望：HTTP/1.1 200
 
 # Agent 健康检查（如已启动）
@@ -188,7 +198,7 @@ curl http://localhost:8100/api/agent/health
 # 期望：{"provider":"...","available":true,...}
 
 # Swagger 文档
-# 后端：http://localhost:8090/swagger-ui.html
+# 后端：http://localhost:8090/TradingWorkstation/swagger-ui.html
 # Agent：http://localhost:8100/docs
 ```
 
@@ -201,12 +211,14 @@ cd "A:\project\Trading Workstation"
 python ingestion/baostock_ingest.py
 ```
 
-进入交互式菜单，提供 12 个选项：
+进入交互式菜单，提供 **14 个选项**：
 - 1-4：获取历史数据（2021-01-01 至今），可選單種或全部三種復權
 - 5-8：增量更新（只拉缺失數據），可選單種或全部三種復權
 - 9-10：指數歷史/增量更新
-- 11：增量更新全部（三種復權 + 指數，最常用）
-- 12：指定日期範圍 + 全部三種復權 + 指數
+- 11：增量更新全部（三種復權 + 指數 + 行業，最常用）
+- 12：指定日期範圍 + 全部三種復權 + 指數 + 行業
+- 13：僅同步行業分類（stock_industry + industry_daily 聚合）
+- 14：發現並驗證 Baostock 指數清單（更新 index_list.json）
 
 ### 命令行模式（後端 API 调用）
 
@@ -227,16 +239,16 @@ python ingestion/baostock_ingest.py --mode incremental --adjustflags "" --index
 ### 後端 API 同步
 
 ```bash
-# 啟動同步（增量模式 + 全部三種復權 + 指數）
-curl -X POST http://localhost:8090/api/sync/run \
+# 啟動同步（增量模式 + 全部三種復權 + 指數 + 行業；注意 context-path 前綴）
+curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
   -H "Content-Type: application/json" \
-  -d '{"mode":"incremental","adjustflags":"1,2,3","syncIndex":true}'
+  -d '{"mode":"incremental","adjustflags":"1,2,3","syncIndex":true,"syncIndustry":true}'
 
 # 查詢同步狀態
-curl http://localhost:8090/api/sync/status
+curl http://localhost:8090/TradingWorkstation/api/sync/status
 
 # 取消同步
-curl -X POST http://localhost:8090/api/sync/cancel
+curl -X POST http://localhost:8090/TradingWorkstation/api/sync/cancel
 ```
 
 ### 增量更新 vs 日期範圍模式
@@ -402,6 +414,7 @@ java -version  # 确认显示 21.x.x
 |---------------------|---------------------|-------------------|----------------------|
 | `dashboardSummary`    | `CACHE_SUMMARY_TTL_SECONDS`（默认 60）   | 仪表盘汇总数据       | TTL 过期自动清除     |
 | `dashboardMetrics`    | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 仪表盘指标           | TTL 过期自动清除     |
+> ✅ `dashboardSummary` 現在使用獨立的 `summaryTtlSeconds`（默認 60s），其餘 6 個緩存使用 `metricsTtlSeconds`（默認 30s）。
 | `indexMetadata`       | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 指數元數據           | TTL 过期自动清除     |
 | `marketBreadth`       | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 市場廣度分析         | TTL 过期自动清除     |
 | `rotationSignal`      | `CACHE_METRICS_TTL_SECONDS`（默认 30）   | 輪動信號分析         | TTL 过期自动清除     |
