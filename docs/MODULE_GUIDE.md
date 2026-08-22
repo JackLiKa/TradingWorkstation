@@ -97,7 +97,7 @@ flowchart TD
 | GET | /industry-prosperity/forecast/backtest | months=6, forecastDays=5, backtestDays=60 | ProsperityForecastBacktestDto |
 | GET | /rotation-prediction | lookbackDays=20 | RotationPredictionDto |
 | GET | /rotation-prediction/backtest | lookbackDays=20, forwardDays=5, backtestDays=90 | RotationBacktestDto |
-| GET | /rotation-prediction/automl | backtestDays=90 | RotationAutoMlDto |
+| GET | /rotation-prediction/automl | backtestDays=90, tuneStartDate?, tuneEndDate?, evalStartDate?, evalEndDate? | RotationAutoMlDto |
 | GET | /rotation-markov | lookbackDays=30 (5-180) | RotationMarkovDto |
 | GET | /rotation | days=10 | RotationSignalDto |
 | GET | /index-history | code, days=10 | List\<IndexDailyDto\> |
@@ -205,7 +205,7 @@ prosperityIndex = momentumScore × 0.35 + capitalScore × 0.25 + activityScore �
 |------|--------|-----|
 | prosperitySeasonality | FORECAST_CACHE | 120s |
 | prosperityMarkov | FORECAST_CACHE | 120s |
-| prosperityForecast | FORECAST_CACHE | 120s |
+| prosperityForecast | FORECAST_CACHE | 120s（緩存鍵含 adaptive-weights/rolling-window-days 後綴，切換配置不命中彼此緩存） |
 | prosperityForecastBacktest | FORECAST_CACHE | 120s |
 | predictRotation | ROTATION_CACHE | 120s |
 | backtestRotationPrediction | ROTATION_CACHE | 120s |
@@ -216,9 +216,9 @@ prosperityIndex = momentumScore × 0.35 + capitalScore × 0.25 + activityScore �
 
 > ⚠️ **P4-13 — "ARIMA" 命名**：實為 ARI(2,1) 無 MA 項、無定階（無 AIC/BIC）、無平穩性檢驗（`ForecastService.java:1448`）。命名大於實質——「ARIMA」暗示了完整的 Box-Jenkins 方法論，但實際實現是固定階數的差分自回歸，缺乏模型選擇與診斷檢驗環節。
 
-> ⚠️ **P4-14 — "AutoML" 命名**：實為 15 組合窮舉網格搜索（lookback×forward = 5×3，`ForecastService.java:471-540`），無貝葉斯/隨機搜索。已改為 tune/eval 切分防 in-sample 過擬合——將 backtestDays 前 2/3 用於調參、後 1/3 用於評估（`ForecastService.java:475-478`）。但搜索空間有限，泛化能力仍受限。
+> ⚠️ **P4-14 — "AutoML" 命名**：實為 15 組合窮舉網格搜索（lookback×forward = 5×3），無貝葉斯/隨機搜索。現已改為**嚴格日期隔離 out-of-sample 評估**——調參只用區間 A 的數據做網格搜索選出最佳參數，評估只用區間 B 的數據（B 在 A 之後，完全不重疊）跑回測報告結果（`ForecastService.autoTuneRotationPrediction`）。不傳日期參數時默認前 70% 區間調參、後 30% 區間評估。可通過 `tuneStartDate/tuneEndDate/evalStartDate/evalEndDate` 參數自定義兩個區間。但搜索空間有限，泛化能力仍受限。
 
-> ⚠️ **P4-3 — 集成權重**：固定 0.35/0.35/0.30（ARIMA/HW/LR，`ForecastService.java:38`），回測端點計算最優逆 MAE 權重供參考但**不自動回饋**（`ForecastService.java:1180`）。設計上是為了避免過擬合到特定回測區間，但代價是永遠使用次優權重。
+> ⚠️ **P4-3 — 集成權重**：默認固定 0.35/0.35/0.30（ARIMA/HW/LR，`ForecastService.java:38`）。回測端點計算最優逆 MAE 權重供參考（`ForecastService.java` `computeOptimalWeights`）。Phase 4 後續新增**滾動窗口自適應權重**（`app.forecast.adaptive-weights`，默認 `false` 保持兼容）：啟用後 `computeAdaptiveWeights` 用過去 N 天（`app.forecast.rolling-window-days`，默認 60）滾動窗口對每個時間點做 one-step-ahead 預測，以逆 MAE 歸一化得到動態權重。**look-ahead bias 防護**：每個時間點的預測只用截至該點的歷史數據（`Arrays.copyOf(data, t)`），不接觸目標值及未來數據。預測結果 DTO 新增 `weightSource`（"fixed"/"adaptive"）及各行業實際權重字段。
 
 > ⚠️ **P4-9 — Holt-Winters 季節週期**：硬編碼 `HW_SEASON_LENGTH=5`（交易週，`ForecastService.java:35`）。A 股以 5 個交易日為週期有一定合理性（週內效應），但月度/季度季節性（如 20/60 交易日）被完全忽略。
 

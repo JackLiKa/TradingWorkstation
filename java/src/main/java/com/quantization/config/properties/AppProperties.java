@@ -23,6 +23,7 @@ public class AppProperties {
     private Sync sync = new Sync();
     private Preference preference = new Preference();
     private Chart chart = new Chart();
+    private Forecast forecast = new Forecast();
 
     /** 查询默认值配置（复权方式、条数限制、回看天数） */
     @Getter
@@ -79,5 +80,32 @@ public class AppProperties {
     public static class Chart {
         /** K線初始/歷史批次大小（每次加載的 K 線根數） */
         private int batchSize = 500;
+    }
+
+    /**
+     * 預測引擎配置（滾動窗口集成權重適應）。
+     * <p>
+     * Phase 4 後續：生產預測可選啟用「滾動窗口逆 MAE 動態權重」，避免 look-ahead bias。
+     * 默認關閉（{@code adaptive-weights=false}）以保持與歷史行為完全一致。
+     */
+    @Getter
+    @Setter
+    public static class Forecast {
+        /**
+         * 是否啟用滾動窗口自適應集成權重。
+         * <p>
+         * {@code false}（默認）：使用固定權重 ARIMA 0.35 / HW 0.35 / LR 0.30，行為與 Phase 4 一致。
+         * {@code true}：用過去 {@link #rollingWindowDays} 天的滾動窗口計算各模型 one-step-ahead MAE，
+         * 以逆 MAE 歸一化得到動態權重。計算只用截至預測日的歷史數據，不接觸未來數據（無 look-ahead bias）。
+         */
+        private boolean adaptiveWeights = false;
+
+        /**
+         * 滾動窗口天數（僅 {@code adaptive-weights=true} 時生效）。
+         * <p>
+         * 在此窗口內對每個時間點做 one-step-ahead 預測並累計各模型 MAE。默認 60 天。
+         * 過大會平滑掉近期模型表現變化，過小會對噪聲過敏感。
+         */
+        private int rollingWindowDays = 60;
     }
 }

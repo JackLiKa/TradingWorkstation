@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "gen:api": "openapi-typescript http://localhost:8090/TradingWorkstation/v3/api-docs -o src/lib/api/generated.d.ts"
+    "gen:api": "openapi-typescript http://localhost:8090/TradingWorkstation/v3/api-docs -o src/lib/api/generated.ts",
+    "gen:api:local": "openapi-typescript src/lib/api/openapi.json -o src/lib/api/generated.ts",
+    "gen:api:smart": "tsx scripts/generate-api-types.ts"
   },
   "dependencies": {
     "@tanstack/react-table": "8.20.5",
@@ -39,6 +41,7 @@
     "openapi-typescript": "^7.4.4",
     "postcss": "8.4.47",
     "tailwindcss": "3.4.14",
+    "tsx": "^4.23.12",
     "typescript": "5.6.3",
     "vitest": "^4.1.11"
   }

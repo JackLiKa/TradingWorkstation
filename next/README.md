@@ -50,7 +50,9 @@ src/
 └── lib/
     ├── api/
     │   ├── client.ts             # fetch 封裝：API_BASE + 統一 ApiError
-    │   ├── types.ts              # 63 個類型，手工鏡像後端 DTO
+    │   ├── types.ts              # 63 個類型，手工鏡像後端 DTO（權威）
+    │   ├── generated.ts          # OpenAPI 自動生成類型（npm run gen:api）
+    │   ├── openapi.json          # 後端 spec 本地快照（fallback 用）
     │   ├── index.ts              # 45 個後端 API 函數
     │   ├── agent.ts              # 20 個 agent API 函數（直連 :8100）
     │   └── __tests__/api.test.ts # vitest 測試（24 個）
@@ -138,13 +140,31 @@ stop();              // 隱藏
 
 `src/lib/api/types.ts` 中的 63 個類型**手工鏡像後端 DTO**，改後端 DTO 必須同步此處。
 
-規劃中的 openapi-typescript 管線：
+### OpenAPI 自動生成管線（已啟用）
+
+從後端 Swagger/OpenAPI spec 自動生成前端 TypeScript 類型，消滅手工同步的契約 drift：
 
 ```bash
-npm run gen:api    # openapi-typescript http://localhost:8090/TradingWorkstation/v3/api-docs -o src/lib/api/generated.d.ts
+# 方式 1：直接從後端 URL 生成（需後端啟動）
+npm run gen:api          # openapi-typescript http://localhost:8090/TradingWorkstation/v3/api-docs -o src/lib/api/generated.ts
+
+# 方式 2：從本地 openapi.json 生成（離線 fallback，後端未啟動時用）
+npm run gen:api:local    # openapi-typescript src/lib/api/openapi.json -o src/lib/api/generated.ts
+
+# 方式 3：智能模式（自動選擇 URL → 文件 fallback，並刷新 openapi.json）
+npm run gen:api:smart    # tsx scripts/generate-api-types.ts
 ```
 
-生成 `generated.d.ts` 後可逐步替換手寫類型以消滅契約 drift（目前尚未啟用，types.ts 仍為權威）。
+| 腳本 | 來源 | 輸出 | 後端要求 |
+|------|------|------|----------|
+| `gen:api` | 後端 `/v3/api-docs` URL | `src/lib/api/generated.ts` | 需啟動 |
+| `gen:api:local` | 本地 `src/lib/api/openapi.json` | `src/lib/api/generated.ts` | 不需要 |
+| `gen:api:smart` | 自動（URL 優先 → 文件 fallback） | `src/lib/api/generated.ts` + 刷新 `openapi.json` | 可選 |
+
+- `generated.ts` 是自動生成的補充（`paths`/`components`/`operations` 命名空間），**不破壞** `types.ts` 手寫類型
+- `types.ts` 仍為權威來源，`generated.ts` 可逐步替換手寫類型以消滅契約 drift
+- `openapi.json` 是後端 spec 的本地快照（fallback 用），由 `gen:api:smart` 自動刷新
+- 生成腳本：`scripts/generate-api-types.ts`（支持 `--url` / `--file` 顯式模式）
 
 ## 測試
 

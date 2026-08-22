@@ -1,5 +1,6 @@
 package com.quantization.test;
 
+import com.quantization.config.properties.AppProperties;
 import com.quantization.module.forecast.ForecastService;
 import com.quantization.module.industry.IndustryService;
 import com.quantization.module.stock.IndustryDailyEntity;
@@ -24,12 +25,17 @@ import static org.mockito.Mockito.mock;
 @DisplayName("行業/預測服務算法修復驗證")
 class StockServiceAlgorithmTest {
 
+    /** 構建默認 AppProperties（adaptive-weights=false，保持固定權重兼容行為）。 */
+    private static AppProperties defaultAppProperties() {
+        return new AppProperties();
+    }
+
     // ===== C5: 線性回歸除零（ForecastService）=====
 
     @Test
     @DisplayName("forecastLinearRegression 常數輸入不拋異常，返回均值水平預測")
     void forecastLinearRegression_constantInput_noDivideByZero() throws Exception {
-        ForecastService service = new ForecastService(mock(IndustryDailyRepository.class));
+        ForecastService service = new ForecastService(mock(IndustryDailyRepository.class), defaultAppProperties());
         Method method = ForecastService.class.getDeclaredMethod("forecastLinearRegression", double[].class, int.class);
         method.setAccessible(true);
 
@@ -46,7 +52,7 @@ class StockServiceAlgorithmTest {
     @Test
     @DisplayName("forecastLinearRegression 正常趨勢輸入返回合理預測")
     void forecastLinearRegression_trendInput_returnsForecast() throws Exception {
-        ForecastService service = new ForecastService(mock(IndustryDailyRepository.class));
+        ForecastService service = new ForecastService(mock(IndustryDailyRepository.class), defaultAppProperties());
         Method method = ForecastService.class.getDeclaredMethod("forecastLinearRegression", double[].class, int.class);
         method.setAccessible(true);
 

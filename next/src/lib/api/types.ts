@@ -1,10 +1,12 @@
 /**
- * @file 與後端 DTO 一一對應的 TypeScript 類型定義
+ * @file 與後端 DTO 一一對應的 TypeScript 類型定義（手工維護，權威來源）
  * 所有接口均與 Java 後端的 DTO 類保持字段名稱和類型一致，
  * 用於前端 API 調用時的類型推斷與編譯時檢查。
  *
- * @see ./generated.d.ts — 由 `npm run gen:api` 從後端 OpenAPI 自動生成，
- *       可逐步替換本文件中的手寫類型以消滅契約 drift。
+ * 如需自動生成類型，運行 `npm run gen:api`（或 `npm run gen:api:smart`），
+ * 結果在 ./generated.ts（由後端 OpenAPI spec 自動生成）。
+ * generated.ts 是自動生成的補充，可逐步替換本文件中的手寫類型以消滅契約 drift；
+ * 在完全遷移前，本文件（types.ts）仍為權威來源。
  */
 
 /** 股票日線行情數據（對應 stock_daily 表） */
