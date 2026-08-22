@@ -1,6 +1,7 @@
 package com.quantization.module.dashboard;
 
 import com.quantization.common.util.FormatUtils;
+import com.quantization.config.CacheConfig;
 import com.quantization.config.properties.AppProperties;
 import com.quantization.module.chart.ChartService;
 import com.quantization.module.chart.dto.CandlestickDto;
@@ -93,7 +94,7 @@ public class DashboardService {
      *
      * @return 汇总指标 DTO
      */
-    @Cacheable(value = CacheConfigHolder.SUMMARY_CACHE, key = "'summary'")
+    @Cacheable(value = CacheConfig.SUMMARY_CACHE, key = "'summary'")
     public SummaryMetricsDto cachedSummary() {
         return stockService.summaryMetrics();
     }
@@ -148,9 +149,4 @@ public class DashboardService {
         StockDailyQuery q = chartService.defaultQuery();
         return new StockDailyQueryDto(q.code(), q.adjustflag(), q.startDate(), q.endDate(), q.limit(), q.offset());
     }
-}
-
-/** 仅用于引用缓存名常量，避免循环依赖。 */
-final class CacheConfigHolder {
-    static final String SUMMARY_CACHE = com.quantization.config.CacheConfig.SUMMARY_CACHE;
 }

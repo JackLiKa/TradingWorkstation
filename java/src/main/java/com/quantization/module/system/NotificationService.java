@@ -14,6 +14,10 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -110,7 +114,7 @@ public class NotificationService {
      * @param summary      摘要
      * @param alerts       預警列表（每條含 industry, alertType, alertTypeName, message 等）
      */
-    @Async
+    @Async("notificationExecutor")
     public void sendProsperityAlertNotification(
             String analysisDate, String summary, List<Map<String, Object>> alerts) {
         if (!enabled || alerts == null || alerts.isEmpty()) {
@@ -162,27 +166,21 @@ public class NotificationService {
             }
         }
 
-        // 發送 Webhook
+        // 發送 Webhook（HMAC-SHA256 簽名 + 最多 3 次重試）
         if (webhookEnabled && webhookUrl != null && !webhookUrl.isEmpty()) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("event", "prosperity_alert");
+            payload.put("analysisDate", analysisDate);
+            payload.put("summary", summary);
+            payload.put("alertCount", alerts.size());
+            payload.put("alerts", alerts);
+
             try {
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("event", "prosperity_alert");
-                payload.put("analysisDate", analysisDate);
-                payload.put("summary", summary);
-                payload.put("alertCount", alerts.size());
-                payload.put("alerts", alerts);
-                if (webhookSecret != null && !webhookSecret.isEmpty()) {
-                    payload.put("secret", webhookSecret);
-                }
-
-                HttpHeaders headers = new HttpHeaders();
-                headers.setContentType(MediaType.APPLICATION_JSON);
-                HttpEntity<Map<String, Object>> request = new HttpEntity<>(payload, headers);
-
-                ResponseEntity<String> response = restTemplate.postForEntity(webhookUrl, request, String.class);
-                log.info("景氣度預警 Webhook 已發送, 響應: {}", response.getStatusCode());
+                String json = new com.fasterxml.jackson.databind.ObjectMapper()
+                        .writeValueAsString(payload);
+                sendWebhookWithRetry(json, 3);
             } catch (Exception e) {
-                log.warn("景氣度預警 Webhook 發送失敗: {}", e.getMessage());
+                log.warn("景氣度預警 Webhook 序列化失敗: {}", e.getMessage());
             }
         }
     }
@@ -241,6 +239,55 @@ public class NotificationService {
             return Double.parseDouble(obj.toString());
         } catch (Exception e) {
             return 0.0;
+        }
+    }
+
+    /**
+     * 以 HMAC-SHA256 簽名發送 Webhook，失敗時指數退避重試。
+     *
+     * @param jsonBody    JSON 請求體
+     * @param maxAttempts 最大嘗試次數
+     */
+    private void sendWebhookWithRetry(String jsonBody, int maxAttempts) {
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.APPLICATION_JSON);
+                // HMAC-SHA256 簽名頭，取代將 secret 放入 payload body
+                if (webhookSecret != null && !webhookSecret.isEmpty()) {
+                    String signature = hmacSha256(webhookSecret, jsonBody);
+                    headers.set("X-Webhook-Signature", signature);
+                }
+
+                HttpEntity<String> request = new HttpEntity<>(jsonBody, headers);
+                ResponseEntity<String> response = restTemplate.postForEntity(webhookUrl, request, String.class);
+                log.info("景氣度預警 Webhook 已發送 (attempt {}/{}), 響應: {}", attempt, maxAttempts, response.getStatusCode());
+                return;
+            } catch (Exception e) {
+                log.warn("景氣度預警 Webhook 發送失敗 (attempt {}/{}): {}", attempt, maxAttempts, e.getMessage());
+                if (attempt < maxAttempts) {
+                    try {
+                        Thread.sleep(1000L * attempt);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }
+        log.error("景氣度預警 Webhook 發送失敗，已重試 {} 次", maxAttempts);
+    }
+
+    /** 計算 HMAC-SHA256 並返回十六進制簽名。 */
+    private static String hmacSha256(String secret, String data) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            SecretKeySpec keySpec = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+            mac.init(keySpec);
+            byte[] hmac = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hmac);
+        } catch (Exception e) {
+            throw new RuntimeException("HMAC-SHA256 計算失敗", e);
         }
     }
 }

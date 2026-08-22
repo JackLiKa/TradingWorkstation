@@ -3,10 +3,12 @@ package com.quantization.module.aicalllog;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -50,4 +52,9 @@ public interface AiCallLogRepository extends JpaRepository<AiCallLogEntity, Long
     /** 查詢最大迭代輪次 */
     @Query("SELECT MAX(e.iteration) FROM AiCallLogEntity e")
     Integer findMaxIteration();
+
+    /** 刪除創建時間早於指定時間點的日誌記錄（清理調度器使用）。 */
+    @Modifying
+    @Query("DELETE FROM AiCallLogEntity e WHERE e.createdAt < :cutoff")
+    int deleteByCreatedAtBefore(@Param("cutoff") LocalDateTime cutoff);
 }

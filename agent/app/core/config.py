@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     optimization_interval: int = 5  # 優化循環間隔（秒）
     max_iterations: int = 0  # 最大迭代次數，0=無限制
     model_check_interval: int = 300  # 模型檢查間隔（秒）
+    max_stagnant_iterations: int = 0  # 連續無進展自動停止閾值，0=不限制（保持兼容）
+    multi_window_backtest: bool = False  # 多窗口回測評分：用 3 個時間窗口加權平均
 
     # ===== Per-stage provider =====
     stage_providers: dict[str, str] = {}  # 每階段供應商偏好
@@ -143,6 +145,8 @@ class Settings(BaseSettings):
             "optimization_interval": self.optimization_interval,
             "max_iterations": self.max_iterations,
             "model_check_interval": self.model_check_interval,
+            "max_stagnant_iterations": self.max_stagnant_iterations,
+            "multi_window_backtest": self.multi_window_backtest,
             "backend_timeout": self.backend_timeout,
             "backend_max_retries": self.backend_max_retries,
             "rate_limits": {

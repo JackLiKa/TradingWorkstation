@@ -21,6 +21,8 @@ public class AppProperties {
     private Cache cache = new Cache();
     private Cors cors = new Cors();
     private Sync sync = new Sync();
+    private Preference preference = new Preference();
+    private Chart chart = new Chart();
 
     /** 查询默认值配置（复权方式、条数限制、回看天数） */
     @Getter
@@ -31,12 +33,20 @@ public class AppProperties {
         private int lookbackDays = 180;
     }
 
-    /** 缓存 TTL 配置（汇总缓存和指标缓存，单位：秒） */
+    /** 缓存 TTL 配置（按域分組，單位：秒） */
     @Getter
     @Setter
     public static class Cache {
         private long summaryTtlSeconds = 60;
         private long metricsTtlSeconds = 30;
+        /** stock 行情查詢緩存 TTL（秒） */
+        private long stockTtlSeconds = 30;
+        /** industry 行業聚合/景氣度緩存 TTL（秒） */
+        private long industryTtlSeconds = 60;
+        /** forecast 預測/Markov 緩存 TTL（秒） */
+        private long forecastTtlSeconds = 120;
+        /** rotation 輪動緩存 TTL（秒） */
+        private long rotationTtlSeconds = 120;
     }
 
     /** CORS 跨域配置（允许的来源列表，逗号分隔） */
@@ -54,5 +64,20 @@ public class AppProperties {
         private String ingestionScript = "ingestion/baostock_ingest.py";
         private int batchSize = 1000;
         private String defaultStartDate = "2021-01-01";
+    }
+
+    /** 用户偏好配置（JSON 文件路径，支持相对/绝对路径） */
+    @Getter
+    @Setter
+    public static class Preference {
+        private String path = "preference.json";
+    }
+
+    /** K線圖配置（批次大小等） */
+    @Getter
+    @Setter
+    public static class Chart {
+        /** K線初始/歷史批次大小（每次加載的 K 線根數） */
+        private int batchSize = 500;
     }
 }

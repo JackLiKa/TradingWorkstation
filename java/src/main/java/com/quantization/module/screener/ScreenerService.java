@@ -4,7 +4,6 @@ import com.quantization.module.screener.dto.ScreenedStockDto;
 import com.quantization.module.screener.dto.ScreenerCriteriaDto;
 import com.quantization.module.screener.dto.ScreenerResultDto;
 import com.quantization.module.stock.StockDaily;
-import com.quantization.module.stock.StockIndustryRepository;
 import com.quantization.module.stock.StockService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,12 +27,10 @@ public class ScreenerService {
 
     private final StockService stockService;
     private final ScreenerCore screenerCore;
-    private final StockIndustryRepository industryRepository;
 
-    public ScreenerService(StockService stockService, ScreenerCore screenerCore, StockIndustryRepository industryRepository) {
+    public ScreenerService(StockService stockService, ScreenerCore screenerCore) {
         this.stockService = stockService;
         this.screenerCore = screenerCore;
-        this.industryRepository = industryRepository;
     }
 
     /**
@@ -98,7 +95,7 @@ public class ScreenerService {
             return Map.of();
         }
         Map<String, String> map = new HashMap<>();
-        for (Object[] row : industryRepository.findLatestIndustriesByCode(new ArrayList<>(codes))) {
+        for (Object[] row : stockService.findLatestIndustriesByCode(new ArrayList<>(codes))) {
             if (row[0] != null && row[1] != null) {
                 map.put(row[0].toString(), row[1].toString());
             }

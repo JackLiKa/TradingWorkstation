@@ -33,7 +33,7 @@ public class ApiResponse<T> {
      * @return 成功响应
      */
     public static <T> ApiResponse<T> ok(T data) {
-        return new ApiResponse<>(true, "OK", "成功", data);
+        return new ApiResponse<>(true, ErrorCode.OK.name(), "成功", data);
     }
 
     /**
@@ -45,7 +45,7 @@ public class ApiResponse<T> {
      * @return 成功响应
      */
     public static <T> ApiResponse<T> ok(T data, String message) {
-        return new ApiResponse<>(true, "OK", message, data);
+        return new ApiResponse<>(true, ErrorCode.OK.name(), message, data);
     }
 
     /**
@@ -56,7 +56,7 @@ public class ApiResponse<T> {
      * @param <T>     数据类型
      * @return 失败响应（data 为 null）
      */
-    public static <T> ApiResponse<T> fail(String code, String message) {
-        return new ApiResponse<>(false, code, message, null);
+    public static <T> ApiResponse<T> fail(ErrorCode code, String message) {
+        return new ApiResponse<>(false, code.name(), message, null);
     }
 }

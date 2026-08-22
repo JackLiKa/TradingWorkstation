@@ -17,7 +17,8 @@
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any
 
 from app.agents.judge import JudgeAI
 from app.agents.monitor import node_monitor
@@ -41,6 +42,7 @@ from app.agents.state import (
 from app.core.llm_client import llm_client
 from app.core.metrics import (
     record_iteration_complete,
+    record_json_failure,
     record_rag_operation,
 )
 from app.services.backend_client import backend_client
@@ -135,6 +137,91 @@ async def _dedup_high_corr_industries(criteria: dict[str, Any]) -> dict[str, Any
     return criteria
 
 
+# ===== 多窗口回測評分 =====
+# 啟用 multi_window_backtest 時，用 3 個不同時間窗口回測取加權均值，
+# 降低單一窗口的隨機性，使評分更穩定。
+MULTI_WINDOW_DAYS: list[int] = [90, 180, 365]  # 短/中/長窗口（天）
+MULTI_WINDOW_WEIGHTS: list[float] = [0.5, 0.3, 0.2]  # 權重（短窗權重最高）
+# 無進展自動停止的 Δscore 閾值（低於此值視為「無實質進展」）
+STAGNANT_SCORE_DELTA_THRESHOLD = 1.0
+
+
+def _weighted_average_score(scores: list[float], weights: list[float]) -> float:
+    """計算加權平均評分。
+
+    Args:
+        scores: 各窗口的評分列表
+        weights: 對應權重列表（長度需與 scores 一致）
+
+    Returns:
+        float: 加權平均評分（保留兩位小數）
+    """
+    if not scores or not weights or len(scores) != len(weights):
+        return 0.0
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        return 0.0
+    weighted = sum(s * w for s, w in zip(scores, weights))
+    return round(weighted / total_weight, 2)
+
+
+def _build_window_config(base_config: dict[str, Any], days: int) -> dict[str, Any]:
+    """基於基準回測配置構建指定天數窗口的配置副本。
+
+    以 base_config.endDate 為基準，將 startDate 回推 `days` 天。
+    保留其餘配置字段（調倉、持倉、手續費等）不變。
+
+    Args:
+        base_config: 基準回測配置（含 endDate）
+        days: 窗口天數
+
+    Returns:
+        dict: 新配置（深拷貝，不修改原配置）
+    """
+    cfg = dict(base_config)
+    end_date_str = cfg.get("endDate")
+    if end_date_str:
+        try:
+            end_date = datetime.strptime(str(end_date_str)[:10], "%Y-%m-%d")
+            start_date = end_date - timedelta(days=days)
+            cfg["startDate"] = start_date.strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            # endDate 無法解析時保留原樣（由後端處理）
+            pass
+    return cfg
+
+
+async def _run_multi_window_backtest(
+    criteria: dict[str, Any],
+    base_config: dict[str, Any],
+) -> tuple[float, dict[str, Any]]:
+    """運行多窗口回測，返回加權平均評分和主窗口（最長窗口）回測結果。
+
+    對 3 個時間窗口（90/180/365 天）分別回測，按權重 0.5/0.3/0.2 加權平均評分。
+    主窗口（365 天）的完整回測結果用於後續反思/存庫。
+
+    Args:
+        criteria: 選股條件
+        base_config: 基準回測配置
+
+    Returns:
+        tuple[float, dict]: (加權平均評分, 主窗口回測結果)
+    """
+    scores: list[float] = []
+    primary_result: dict[str, Any] = {}
+    for idx, days in enumerate(MULTI_WINDOW_DAYS):
+        window_config = _build_window_config(base_config, days)
+        result = await backend_client.run_backtest(criteria, window_config)
+        window_stats = result.get("statistics", {})
+        window_score = compute_composite_score(window_stats)
+        scores.append(window_score)
+        # 最長窗口為主窗口（用於反思和存庫）
+        if idx == len(MULTI_WINDOW_DAYS) - 1:
+            primary_result = result
+    composite_score = _weighted_average_score(scores, MULTI_WINDOW_WEIGHTS)
+    return composite_score, primary_result
+
+
 async def _load_best_strategy_from_db(latest_trade_date: str | None = None) -> tuple[dict, dict, float, int | None]:
     """從數據庫讀取評分最高的策略作為 f0。
 
@@ -201,6 +288,25 @@ async def _load_best_strategy_from_db(latest_trade_date: str | None = None) -> t
     except Exception as e:
         logger.warning(f"從數據庫讀取策略失敗: {e}，使用默認參數")
         return default_criteria, default_config, -999, None
+
+
+def _pick_backup_provider() -> str:
+    """選擇一個與當前策略生成階段供應商不同的備用供應商（P4-7）。
+
+    優先選擇 JSON 穩定的免費供應商（glm-flash），其次按降級鏈順序。
+    返回空字符串表示無可用備用供應商。
+    """
+    from app.core.config import settings
+    from app.core.providers import get_default_provider_for_stage
+
+    current = settings.stage_providers.get("strategy_generation", "") or get_default_provider_for_stage(
+        "strategy_generation"
+    )
+    chain = llm_client.get_fallback_chain()
+    for pid in chain:
+        if pid != current:
+            return pid
+    return ""
 
 
 async def run_optimization_loop():
@@ -271,6 +377,15 @@ async def run_optimization_loop():
         logger.info(f"f0 = 默認策略（數據庫無歷史策略，日期校準到 {latest_trade_date or '今天'}）")
         if user_config_overrides:
             logger.info(f"用戶手動配置已保留: {list(user_config_overrides.keys())}")
+
+    # 連續 JSON 提取失敗計數器（P4-7：防止空轉燒 token）
+    consecutive_json_failures = 0
+    _JSON_FAILURE_WARN_THRESHOLD = 3  # 達到此閾值時切換備用供應商重試
+    _JSON_FAILURE_PAUSE_SECONDS = 60  # 備用供應商也失敗時暫停秒數
+    _JSON_FAILURE_STOP_THRESHOLD = 5  # 達到此閾值時停止優化循環
+
+    # 連續無進展計數器（max_stagnant_iterations：連續 N 輪 Δscore < 1 自動停止）
+    stagnant_count = 0
 
     while not _stop_event.is_set():
         iteration = state.current_iteration + 1
@@ -373,11 +488,19 @@ async def run_optimization_loop():
             check_json_output(strategy_result.output)
             try:
                 parsed = parse_strategy_output(strategy_result.output)
+                # JSON 提取成功，重置連續失敗計數器
+                consecutive_json_failures = 0
                 strategy_reasoning = sanitize_output(parsed.get("reasoning", ""))
                 new_criteria = parsed.get("criteria", state.current_criteria)
             except ValueError as e:
                 # JSON 提取失敗兜底：使用當前條件繼續（不中斷優化循環）
-                logger.warning(f"第 {iteration} 輪: 策略 JSON 提取失敗，使用當前條件兜底: {e}")
+                # P4-7: 連續失敗計數器，防止 LLM 持續返回無效 JSON 時空轉燒 token
+                consecutive_json_failures += 1
+                record_json_failure(stage="strategy_generation", recovered=False)
+                logger.warning(
+                    f"第 {iteration} 輪: 策略 JSON 提取失敗（連續第 {consecutive_json_failures} 次），"
+                    f"使用當前條件兜底: {e}"
+                )
                 from app.services import error_store
 
                 error_store.record_error(
@@ -392,9 +515,91 @@ async def run_optimization_loop():
                     recovered=True,
                     recovery_method="default",
                 )
-                parsed = {}
-                strategy_reasoning = "JSON 提取失敗，使用上一輪條件繼續"
-                new_criteria = state.current_criteria
+
+                # 達到停止閾值：記錄 ERROR 並停止優化循環
+                if consecutive_json_failures >= _JSON_FAILURE_STOP_THRESHOLD:
+                    logger.error(
+                        f"第 {iteration} 輪: JSON 提取連續失敗達 {consecutive_json_failures} 次，"
+                        f"停止優化循環以避免空轉燒 token"
+                    )
+                    state.status_message = (
+                        f"JSON 提取連續失敗 {_JSON_FAILURE_STOP_THRESHOLD} 次，優化循環已停止"
+                    )
+                    break
+
+                # 達到警告閾值：切換備用供應商重試一次
+                if consecutive_json_failures >= _JSON_FAILURE_WARN_THRESHOLD:
+                    logger.warning(
+                        f"第 {iteration} 輪: JSON 提取連續失敗 {consecutive_json_failures} 次，"
+                        f"切換備用供應商重試策略生成"
+                    )
+                    backup_provider = _pick_backup_provider()
+                    if backup_provider:
+                        # 臨時覆蓋階段供應商設置，重試策略生成
+                        from app.core.config import settings as _settings
+
+                        _orig_provider = _settings.stage_providers.get("strategy_generation", "")
+                        _settings.stage_providers["strategy_generation"] = backup_provider
+                        try:
+                            logger.info(f"備用供應商重試: {backup_provider}")
+                            retry_result: StageResult = await _strategy_stage.run(
+                                state=state,
+                                judge=_judge,
+                                max_attempts=2,
+                                market_context=market_context,
+                                current_criteria=state.current_criteria,
+                                config=state.current_config,
+                                history=state.iterations,
+                                prev_reflection=state.current_reflection,
+                                next_prompt=state.current_next_prompt,
+                                rag_experiences=rag_experiences_text,
+                            )
+                            _add_stage_result(retry_result)
+                            check_json_output(retry_result.output)
+                            try:
+                                retry_parsed = parse_strategy_output(retry_result.output)
+                                # 備用供應商成功，重置計數器
+                                consecutive_json_failures = 0
+                                record_json_failure(stage="strategy_generation", recovered=True)
+                                strategy_reasoning = sanitize_output(
+                                    retry_parsed.get("reasoning", "")
+                                )
+                                new_criteria = retry_parsed.get("criteria", state.current_criteria)
+                                logger.info(f"第 {iteration} 輪: 備用供應商 {backup_provider} JSON 提取成功")
+                            except ValueError as retry_e:
+                                logger.warning(
+                                    f"第 {iteration} 輪: 備用供應商 {backup_provider} JSON 提取也失敗: {retry_e}"
+                                )
+                                record_json_failure(stage="strategy_generation", recovered=False)
+                                strategy_reasoning = "JSON 提取失敗（備用供應商也失敗），使用上一輪條件繼續"
+                                new_criteria = state.current_criteria
+                        except Exception as retry_e:
+                            logger.warning(f"第 {iteration} 輪: 備用供應商重試異常: {retry_e}")
+                            strategy_reasoning = "JSON 提取失敗（備用供應商異常），使用上一輪條件繼續"
+                            new_criteria = state.current_criteria
+                        finally:
+                            _settings.stage_providers["strategy_generation"] = _orig_provider
+                    else:
+                        logger.warning("無可用備用供應商，跳過重試")
+
+                    # 備用供應商也失敗時暫停 60 秒（而非立即繼續空轉）
+                    if consecutive_json_failures >= _JSON_FAILURE_WARN_THRESHOLD:
+                        logger.warning(
+                            f"第 {iteration} 輪: JSON 提取仍失敗，暫停 {_JSON_FAILURE_PAUSE_SECONDS} 秒"
+                        )
+                        state.status_message = (
+                            f"第 {iteration} 輪: JSON 提取連續失敗，暫停 {_JSON_FAILURE_PAUSE_SECONDS} 秒"
+                        )
+                        try:
+                            await asyncio.wait_for(
+                                _stop_event.wait(), timeout=_JSON_FAILURE_PAUSE_SECONDS
+                            )
+                        except asyncio.TimeoutError:
+                            pass  # 暫停結束後繼續下一輪
+                else:
+                    parsed = {}
+                    strategy_reasoning = "JSON 提取失敗，使用上一輪條件繼續"
+                    new_criteria = state.current_criteria
 
             # === 行業相關性後處理：避免高相關行業過度集中 ===
             new_criteria = await _dedup_high_corr_industries(new_criteria)
@@ -406,10 +611,18 @@ async def run_optimization_loop():
             node_monitor.record_start("backtest", node_type="backtest")
             logger.info(f"第 {iteration} 輪：運行回測")
             backtest_start = time.time()
-            backtest_result = await backend_client.run_backtest(new_criteria, state.current_config)
+            if settings.multi_window_backtest:
+                # 多窗口回測：3 個時間窗口加權平均評分
+                logger.info(f"第 {iteration} 輪：多窗口回測（窗口={MULTI_WINDOW_DAYS}，權重={MULTI_WINDOW_WEIGHTS}）")
+                composite_score, backtest_result = await _run_multi_window_backtest(
+                    new_criteria, state.current_config
+                )
+            else:
+                # 單一窗口回測（保持兼容）
+                backtest_result = await backend_client.run_backtest(new_criteria, state.current_config)
+                composite_score = compute_composite_score(backtest_result.get("statistics", {}))
             backtest_duration_ms = int((time.time() - backtest_start) * 1000)
             stats = backtest_result.get("statistics", {})
-            composite_score = compute_composite_score(stats)
             state.current_stage_status = "passed"
             node_monitor.record_end(
                 "backtest",
@@ -512,6 +725,15 @@ async def run_optimization_loop():
                     record_rag_operation("store", success=False)
                     logger.warning(f"RAG 存儲經驗失敗（不影響優化）: {e}")
 
+            # === 無進展檢測（max_stagnant_iterations） ===
+            # Δscore = 本輪評分相對歷史最佳的提升；低於閾值視為「無實質進展」
+            # 注意：delta 需在 best_score 更新前計算
+            delta_score = composite_score - state.best_score
+            if delta_score < STAGNANT_SCORE_DELTA_THRESHOLD:
+                stagnant_count += 1
+            else:
+                stagnant_count = 0
+
             # === 更新最佳記錄並寫入 DB ===
             if composite_score > state.best_score:
                 state.best_score = composite_score
@@ -549,6 +771,17 @@ async def run_optimization_loop():
             state.current_stage = ""
             state.current_stage_status = ""
             state.status_message = f"第 {iteration} 輪完成，評分 {composite_score}，準備下一輪..."
+
+            # === 無進展終止檢查（在迭代狀態記錄後，確保 current_iteration 反映本輪） ===
+            if settings.max_stagnant_iterations > 0 and stagnant_count >= settings.max_stagnant_iterations:
+                logger.info(
+                    f"連續 {stagnant_count} 輪無實質進展（Δscore < {STAGNANT_SCORE_DELTA_THRESHOLD}），"
+                    f"達到 max_stagnant_iterations={settings.max_stagnant_iterations}，停止優化循環"
+                )
+                state.status_message = (
+                    f"連續 {stagnant_count} 輪無進展，優化循環已自動停止"
+                )
+                break
 
             # 記錄評分到監控（用於無進展檢測）
             node_monitor.record_score(composite_score)

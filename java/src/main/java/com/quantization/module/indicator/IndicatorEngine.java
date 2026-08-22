@@ -1,19 +1,66 @@
 package com.quantization.module.indicator;
 
 import com.quantization.module.stock.StockDaily;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * 指标引擎：基于 {@link IndicatorMath} 组合，提供候选快照与全序列计算。
+ * <p>
+ * 采用注册表模式：持有 {@code Map<String, IndicatorCalculator>}，所有
+ * {@link IndicatorCalculator} bean 由 Spring 自动注入并按 {@link IndicatorCalculator#name()}
+ * 注册。{@link #buildSnapshot} 遍历注册表依次调用各计算器填充
+ * {@link IndicatorSnapshotBuilder}，最后统一构建不可变快照。
+ * <p>
+ * 新增指标只需实现 {@link IndicatorCalculator} 并加 {@code @Component}，无需修改本类。
  * 高内聚：所有技术指标计算集中于此模块，供 dashboard/screener/backtest/chart 复用。
  */
+@Slf4j
 @Service
 public class IndicatorEngine {
+
+    private final Map<String, IndicatorCalculator> registry;
+
+    /**
+     * Spring 注入构造函数 — 自动收集所有 {@link IndicatorCalculator} bean 并注册。
+     *
+     * @param calculators Spring 注入的全部指标计算器
+     */
+    @Autowired
+    public IndicatorEngine(List<IndicatorCalculator> calculators) {
+        this.registry = new LinkedHashMap<>();
+        for (IndicatorCalculator calculator : calculators) {
+            String key = calculator.name();
+            if (this.registry.containsKey(key)) {
+                log.warn("[indicator] 计算器名称冲突，覆盖已有：{}", key);
+            }
+            this.registry.put(key, calculator);
+        }
+        log.info("[indicator] 已注册 {} 个指标计算器：{}", registry.size(), registry.keySet());
+    }
+
+    /**
+     * 测试友好无参构造函数 — 以内置默认计算器初始化注册表，
+     * 供不依赖 Spring 容器的单元测试使用（如 {@code new IndicatorEngine()}）。
+     */
+    public IndicatorEngine() {
+        this(List.of(
+                new com.quantization.module.indicator.calculator.MaCalculator(),
+                new com.quantization.module.indicator.calculator.RsiCalculator(),
+                new com.quantization.module.indicator.calculator.VolumeRatioCalculator(),
+                new com.quantization.module.indicator.calculator.ReturnCalculator(),
+                new com.quantization.module.indicator.calculator.KdjCalculator(),
+                new com.quantization.module.indicator.calculator.MacdCalculator(),
+                new com.quantization.module.indicator.calculator.BollCalculator()
+        ));
+    }
 
     /**
      * 构建单只股票在最新交易日的指标快照（与原 Python _build_candidate 对齐）。
@@ -30,66 +77,36 @@ public class IndicatorEngine {
         for (StockDaily r : history) if (r.closePrice() != null) closes.add(r.closePrice());
         if (closes.size() < 30) return null;
 
-        Double ma5 = IndicatorMath.movingAverage(closes, 5);
-        Double ma10 = IndicatorMath.movingAverage(closes, 10);
-        Double ma20 = IndicatorMath.movingAverage(closes, 20);
-        Double ma60 = IndicatorMath.movingAverage(closes, 60);
-        Double ma120 = IndicatorMath.movingAverage(closes, 120);
-        Double volumeRatio = IndicatorMath.volumeRatio(history, 20);
-        Double return20 = IndicatorMath.periodReturn(closes, 20);
-        Double return60 = IndicatorMath.periodReturn(closes, 60);
-        Double return120 = IndicatorMath.periodReturn(closes, 120);
-        Double rsi14 = IndicatorMath.rsi(closes, 14);
-
-        IndicatorMath.BollSeries boll = IndicatorMath.boll(closes, config.bollPeriod(), config.bollStd());
-        IndicatorMath.MacdSeries macd = IndicatorMath.macd(closes,
-                config.macdFastPeriod(), config.macdSlowPeriod(), config.macdSignalPeriod());
-        IndicatorMath.KdjSeries kdj = IndicatorMath.kdj(history,
-                config.kdjPeriod(), config.kdjKSmoothing(), config.kdjDSmoothing());
-
-        Double bollUpper = last(boll.upper());
-        Double bollMiddle = last(boll.middle());
-        Double bollLower = last(boll.lower());
-        Double dif = last(macd.dif());
-        Double dea = last(macd.dea());
-        Double macdHist = last(macd.hist());
-        Double kValue = last(kdj.k());
-        Double dValue = last(kdj.d());
-        Double jValue = last(kdj.j());
-
-        Double prevDif = secondLast(macd.dif());
-        Double prevDea = secondLast(macd.dea());
-        Double prevK = secondLast(kdj.k());
-        Double prevD = secondLast(kdj.d());
-
-        String macdSignal = IndicatorMath.crossSignal(prevDif, prevDea, dif, dea);
-        String kdjSignal = IndicatorMath.crossSignal(prevK, prevD, kValue, dValue);
-        Integer macdGoldenDays = IndicatorMath.lastCrossAge(macd.dif(), macd.dea(), "golden_cross");
-        Integer macdDeathDays = IndicatorMath.lastCrossAge(macd.dif(), macd.dea(), "death_cross");
-        Integer kdjGoldenDays = IndicatorMath.lastCrossAge(kdj.k(), kdj.d(), "golden_cross");
-        Integer kdjDeathDays = IndicatorMath.lastCrossAge(kdj.k(), kdj.d(), "death_cross");
-
-        IndicatorMath.BollStatus bollStatus = IndicatorMath.bollStatus(latest.closePrice(), bollUpper, bollMiddle, bollLower);
+        // 基础字段 + 预计算上下文由引擎设置
         double amplitude = IndicatorMath.amplitude(latest);
-        double score = IndicatorMath.scoreCandidate(
-                latest.pctChange() == null ? 0.0 : latest.pctChange(),
-                return20, return60, return120, volumeRatio, amplitude, macdHist, bollStatus.percentB());
+        IndicatorSnapshotBuilder builder = new IndicatorSnapshotBuilder();
+        builder.code(code);
+        builder.tradeDate(latest.tradeDate());
+        builder.closePrice(latest.closePrice());
+        builder.pctChange(latest.pctChange() == null ? 0.0 : latest.pctChange());
+        builder.amplitude(amplitude);
+        builder.turn(latest.turn() == null ? 0.0 : latest.turn());
+        builder.volume(latest.volume());
+        builder.amount(latest.amount() == null ? 0.0 : latest.amount());
+        builder.st(latest.isStStock());
+        builder.closes(closes);
+        builder.config(config);
 
-        return new IndicatorSnapshot(
-                code, latest.tradeDate(),
-                latest.closePrice(),
-                latest.pctChange() == null ? 0.0 : latest.pctChange(),
-                amplitude,
-                latest.turn() == null ? 0.0 : latest.turn(),
-                latest.volume(),
-                latest.amount() == null ? 0.0 : latest.amount(),
-                ma5, ma10, ma20, ma60, ma120,
-                volumeRatio, return20, return60, return120, rsi14,
-                kValue, dValue, jValue, kdjSignal, kdjGoldenDays, kdjDeathDays,
-                dif, dea, macdHist, macdSignal, macdGoldenDays, macdDeathDays,
-                bollUpper, bollMiddle, bollLower, bollStatus.width(), bollStatus.percentB(), bollStatus.position(),
-                score, latest.isStStock()
-        );
+        // 遍历注册表，各计算器填充对应指标字段
+        int index = history.size() - 1;
+        for (IndicatorCalculator calculator : registry.values()) {
+            calculator.calculate(builder, history, index);
+        }
+
+        // 评分为复合指标，依赖多个计算器结果，在所有计算器之后统一计算
+        double score = IndicatorMath.scoreCandidate(
+                builder.pctChange(),
+                builder.return20(), builder.return60(), builder.return120(),
+                builder.volumeRatio(), amplitude,
+                builder.macdHist(), builder.bollPercentB());
+        builder.score(score);
+
+        return builder.build();
     }
 
     /** 计算 K 线图叠加所需的全序列指标。 */
@@ -135,13 +152,5 @@ public class IndicatorEngine {
             rsi.add(i + 1 < 14 ? null : IndicatorMath.rsi(closes.subList(0, i + 1), 14));
         }
         return new IndicatorSeries(maSeries, bollUpper, bollMiddle, bollLower, dif, dea, hist, k, d, j, rsi);
-    }
-
-    private static Double last(List<Double> series) {
-        return series.isEmpty() ? null : series.get(series.size() - 1);
-    }
-
-    private static Double secondLast(List<Double> series) {
-        return series.size() < 2 ? null : series.get(series.size() - 2);
     }
 }

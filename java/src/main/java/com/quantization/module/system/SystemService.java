@@ -85,16 +85,18 @@ public class SystemService {
     }
 
     /**
-     * 更新数据库配置：将变更写入 .env 文件，重启后生效。
-     * 仅更新 DB_* 行，保留其它内容；密码不入日志。
+     * 校驗數據庫配置更新請求，不再自動寫入 .env 文件。
+     * <p>
+     * 安全考量：.env 是部署配置輸入，不應被運行時 API 反寫（容器環境下無效且有注入風險）。
+     * 此方法僅校驗輸入合法性並返回提示信息，用戶需手動修改 .env 後重啟。
+     * </p>
      *
-     * @param update 配置更新请求
-     * @return 更新后的数据库配置 DTO
-     * @throws BusinessException 写入 .env 失败时抛出 DB_ERROR
+     * @param update 配置更新請求
+     * @return 當前生效的數據庫配置 DTO（未變更）
+     * @throws BusinessException 輸入包含換行符時拋出 VALIDATION_ERROR
      */
     @Transactional
     public DatabaseConfigDto updateConfig(DatabaseConfigUpdateDto update) {
-        // 先校验新配置可用（不在此处真正切换 DataSource，仅写入 .env，重启后生效）
         Map<String, String> overrides = new LinkedHashMap<>();
         if (update.host() != null) overrides.put("DB_HOST", update.host());
         if (update.port() != null) overrides.put("DB_PORT", String.valueOf(update.port()));
@@ -103,35 +105,29 @@ public class SystemService {
         if (update.password() != null && !update.password().isBlank()) overrides.put("DB_PASSWORD", update.password());
         if (update.charset() != null) overrides.put("DB_CHARSET", update.charset());
 
-        try {
-            Path envPath = resolveEnvPath();
-            List<String> lines = Files.exists(envPath)
-                    ? new ArrayList<>(Files.readAllLines(envPath))
-                    : new ArrayList<>();
-            Map<String, Integer> indexByKey = new LinkedHashMap<>();
-            for (int i = 0; i < lines.size(); i++) {
-                var m = ENV_LINE.matcher(lines.get(i));
-                if (m.matches()) indexByKey.put(m.group(1), i);
+        // 安全校驗：拒絕值中包含 CR/LF
+        for (var entry : overrides.entrySet()) {
+            String val = entry.getValue();
+            if (val == null) continue;
+            if (val.indexOf('\r') >= 0 || val.indexOf('\n') >= 0) {
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                        entry.getKey() + " 值不允許包含換行符");
             }
-            for (var e : overrides.entrySet()) {
-                String newline = e.getKey() + "=" + e.getValue();
-                if (indexByKey.containsKey(e.getKey())) {
-                    lines.set(indexByKey.get(e.getKey()), newline);
-                } else {
-                    lines.add(newline);
-                }
-            }
-            Files.write(envPath, lines);
-            log.info("[system] .env 已更新，键：{}", overrides.keySet());
-        } catch (Exception e) {
-            throw new BusinessException(ErrorCode.DB_ERROR, "更新 .env 失败：" + e.getMessage(), e);
         }
+
+        // 不再寫入 .env，僅記錄請求並提示手動修改
+        log.info("[system] 數據庫配置更新請求已校驗（不自動寫入 .env），需手動修改的鍵：{}", overrides.keySet());
+        if (!overrides.isEmpty()) {
+            log.warn("[system] 請手動修改 .env 文件中的以下鍵後重啟後端：{}", overrides.keySet());
+        }
+
+        // 返回當前生效配置（未變更）
         return new DatabaseConfigDto(
-                update.host() != null ? update.host() : environment.getProperty("DB_HOST", "localhost"),
-                update.port() != null ? update.port() : Integer.parseInt(environment.getProperty("DB_PORT", "3306")),
-                update.name() != null ? update.name() : environment.getProperty("DB_NAME", "a_stock_baostock"),
-                update.user() != null ? update.user() : environment.getProperty("DB_USER", "root"),
-                update.charset() != null ? update.charset() : environment.getProperty("DB_CHARSET", "utf8mb4")
+                environment.getProperty("DB_HOST", "localhost"),
+                Integer.parseInt(environment.getProperty("DB_PORT", "3306")),
+                environment.getProperty("DB_NAME", "a_stock_baostock"),
+                environment.getProperty("DB_USER", "root"),
+                environment.getProperty("DB_CHARSET", "utf8mb4")
         );
     }
 

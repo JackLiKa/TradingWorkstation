@@ -29,8 +29,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleBusiness(BusinessException ex) {
         log.warn("业务异常: code={}, message={}", ex.getCode(), ex.getMessage());
         HttpStatus status = switch (ex.getCode()) {
-            case ErrorCode.NOT_FOUND -> HttpStatus.NOT_FOUND;
-            case ErrorCode.BAD_REQUEST, ErrorCode.VALIDATION_ERROR -> HttpStatus.BAD_REQUEST;
+            case NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case BAD_REQUEST, VALIDATION_ERROR -> HttpStatus.BAD_REQUEST;
             default -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
         return ResponseEntity.status(status).body(ApiResponse.fail(ex.getCode(), ex.getMessage()));

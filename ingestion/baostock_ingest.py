@@ -1,10 +1,13 @@
-"""Baostock 日线数据采集脚本（增量更新版）。
+"""Baostock 日线数据采集脚本（增量更新版）— 入口 / 菜單 / CLI 調度層。
 
 沿用原项目 MCP/scripts/getDataScripts/获取日线数据.py 的增量更新逻辑：
 - 使用静态股票清单 stock_list.json（3354 只实际股票），而非 query_all_stock()（7333 个含指数/停牌）
 - 每只股票先查数据库最新日期，只拉取缺失部分，避免全量重复拉取
 - 支持 3 种复权（1后复权/2前复权/3不复权）+ 沪深指数
 - 支持命令行参数（后端 SyncService 调用）和交互式菜单（用户直接运行）
+
+P5 三模塊重構：本文件僅保留入口/菜單/CLI 調度與同步編排邏輯，
+Baostock API 調用層見 baostock_fetch.py，資料庫寫入層見 baostock_write.py。
 
 用法:
     # 命令行模式（后端调用）
@@ -13,6 +16,8 @@
     python ingestion/baostock_ingest.py --mode incremental --adjustflags 1,2,3 --index
     python ingestion/baostock_ingest.py --mode range --start 2026-08-17 --end 2026-08-17 --adjustflags 1,2,3 --index
     python ingestion/baostock_ingest.py --mode range --codes sh.600000,sz.000001 --start 2026-08-01 --end 2026-08-17 --adjustflag 3
+    # --progress-json：機器可解析的 JSON 進度協議（供 Java SyncService 精確解析進度）
+    python ingestion/baostock_ingest.py --mode incremental --adjustflags 1,2,3 --index --progress-json
 
     # 交互式模式（用户直接运行，无参数时自动进入）
     python ingestion/baostock_ingest.py
@@ -28,10 +33,8 @@ import json
 import os
 import sys
 import time
-from datetime import date, datetime, timedelta
-from decimal import Decimal
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Iterable
 
 # 確保 stdout/stderr 用 UTF-8 輸出，避免 Windows GBK 編碼導致後端正則匹配失敗
 if hasattr(sys.stdout, "reconfigure"):
@@ -39,389 +42,63 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-import baostock as bs
-import pymysql
+# 確保同目錄模塊可被 import（直接以腳本方式運行時 sys.path[0] 已是本目錄，
+# 但被作為包導入或從其他工作目錄運行時需要顯式補上）
+_INGESTION_DIR = Path(__file__).resolve().parent
+if str(_INGESTION_DIR) not in sys.path:
+    sys.path.insert(0, str(_INGESTION_DIR))
 
-# 股票日線欄位
-FIELDS = "date,code,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,isST"
-# 指數日線欄位
-INDEX_FIELDS = "date,code,open,high,low,close,preclose,volume,amount,pctChg"
+# P5 三模塊重構：從拆分後的子模塊導入全部公開符號
+# - baostock_fetch: Baostock API 調用層（login / fetch / 清單載入 / 解析）
+# - baostock_write: 資料庫寫入層（connect / upsert / 增量查詢 / 聚合）
+from baostock_fetch import *  # noqa: F401,F403  (重新導出供本模塊及下游使用)
+from baostock_write import *  # noqa: F401,F403
 
-# 預設指數清單（與數據庫 index_daily 表一致）
-DEFAULT_INDEX_CODES = [
-    "sh.000001",  # 上證綜指
-    "sh.000016",  # 上證50
-    "sh.000300",  # 滬深300
-    "sh.000852",  # 中證1000
-    "sh.000905",  # 中證500
-    "sz.399001",  # 深證成指
-    "sz.399005",  # 中小100
-    "sz.399006",  # 創業板指
-]
+# 顯式導入常用符號，便於靜態分析與可讀性
+from baostock_fetch import (
+    ADJUSTFLAG_MAP,
+    _ensure_login,
+    _fetch_index,
+    _fetch_stock,
+    _load_index_list,
+    _load_stock_list,
+    _login_baostock,
+    bs,
+)
+from baostock_write import (
+    _connect,
+    _get_existing_indexes,
+    _get_existing_stocks,
+    _get_index_last_date,
+    _get_industry_last_update_date,
+    _get_stock_last_date,
+    _load_env,
+    _sync_index_metadata,
+    _sync_industry_daily,
+    _upsert_index_batch,
+    _upsert_industry_batch,
+    _upsert_stock_batch,
+)
 
-ADJUSTFLAG_MAP = {1: "後復權", 2: "前復權", 3: "不復權"}
-
-
-# ============================================================================
-# 環境與資料庫
-# ============================================================================
-
-def _load_env(root: Path) -> None:
-    env_path = root / ".env"
-    if not env_path.exists():
-        return
-    for raw in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-def _connect() -> pymysql.Connection:
-    return pymysql.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        port=int(os.getenv("DB_PORT", "3306")),
-        database=os.getenv("DB_NAME", "a_stock_baostock"),
-        user=os.getenv("DB_USER", "root"),
-        password=os.getenv("DB_PASSWORD", ""),
-        charset=os.getenv("DB_CHARSET", "utf8mb4"),
-        autocommit=False,
-    )
+# 全局：--progress-json 模式開關
+# 啟用後，機器可解析的 JSON 進度行輸出到 stdout，人類可讀的中文進度輸出到 stderr
+_PROGRESS_JSON = False
 
 
-# ============================================================================
-# 股票清單
-# ============================================================================
-
-def _load_stock_list() -> list[str]:
-    """從 stock_list.json 載入股票清單。"""
-    list_path = Path(__file__).resolve().parent / "stock_list.json"
-    if not list_path.exists():
-        raise FileNotFoundError(f"找不到股票清單: {list_path}")
-    data = json.loads(list_path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        return data.get("stocks", [])
-    return data
+def _emit_progress_json(obj: dict) -> None:
+    """輸出一行 JSON 到 stdout（僅 --progress-json 模式）。"""
+    print(json.dumps(obj, ensure_ascii=False), flush=True)
 
 
-def _load_index_list() -> list[str]:
-    """從 index_list.json 載入指數清單，沒有則用預設清單。
-
-    支持兩種格式：
-    1. 舊格式（list[str]）：["sh.000001", "sz.399001", ...]
-    2. 新格式（dict with categories）：
-       {"categories": [{"category": "綜合指數", "indices": [{"code": "sh.000001", "name": "上證綜指"}, ...]}]}
-    """
-    list_path = Path(__file__).resolve().parent / "index_list.json"
-    if not list_path.exists():
-        return DEFAULT_INDEX_CODES
-    data = json.loads(list_path.read_text(encoding="utf-8"))
-    if isinstance(data, list):
-        return data
-    # 新格式：從 categories 中提取所有代碼
-    if "categories" in data:
-        codes = []
-        for cat in data["categories"]:
-            for idx in cat.get("indices", []):
-                codes.append(idx["code"])
-        return codes if codes else DEFAULT_INDEX_CODES
-    return data.get("indexes", data.get("indices", DEFAULT_INDEX_CODES))
-
-
-def _sync_index_metadata(conn) -> int:
-    """從 index_list.json 同步指數元數據到 index_metadata 表。
-
-    新格式的 index_list.json 包含分類信息，此函數將其寫入數據庫，
-    供 Java 後端 /api/stock/index-list 端點查詢。
-
-    Returns:
-        int: 寫入/更新的元數據條數
-    """
-    list_path = Path(__file__).resolve().parent / "index_list.json"
-    if not list_path.exists():
-        return 0
-    data = json.loads(list_path.read_text(encoding="utf-8"))
-    if "categories" not in data:
-        return 0  # 舊格式無元數據
-
-    rows = []
-    for cat in data["categories"]:
-        category = cat["category"]
-        category_code = cat["category_code"]
-        for idx in cat.get("indices", []):
-            rows.append((idx["code"], idx["name"], category, category_code, "baostock"))
-
-    if not rows:
-        return 0
-
-    with conn.cursor() as cursor:
-        sql = (
-            "INSERT INTO index_metadata (code, name, category, category_code, source) "
-            "VALUES (%s, %s, %s, %s, %s) "
-            "ON DUPLICATE KEY UPDATE name=VALUES(name), category=VALUES(category), "
-            "category_code=VALUES(category_code), source=VALUES(source)"
-        )
-        cursor.executemany(sql, rows)
-        conn.commit()
-        print(f"[done] 指數元數據已同步 {len(rows)} 條（10 大類別）")
-        return len(rows)
-
-
-def _sync_industry_daily(conn, start: str, end: str) -> int:
-    """按 (date, industry) 聚合 stock_daily + stock_industry，寫入 industry_daily。
-
-    只重算 [start, end] 區間內尚未聚合的日期（基於 stock_daily adjustflag=3 的數據），
-    用於支持行業級日度分析：均漲跌、總成交、漲跌家數等。
-    """
-    create_table_sql = """
-    CREATE TABLE IF NOT EXISTS industry_daily (
-      id BIGINT NOT NULL AUTO_INCREMENT,
-      date DATE NOT NULL COMMENT '交易日',
-      industry VARCHAR(100) NOT NULL COMMENT '行業名稱',
-      stock_count INT NOT NULL DEFAULT 0 COMMENT '該行業當日股票數量',
-      avg_pct_chg DECIMAL(20,6) NULL COMMENT '平均漲跌幅',
-      total_amount DECIMAL(30,2) NULL COMMENT '總成交金額',
-      total_volume BIGINT NULL COMMENT '總成交量',
-      avg_turn DECIMAL(20,6) NULL COMMENT '平均換手率',
-      rising_count INT NULL DEFAULT 0 COMMENT '上漲家數',
-      falling_count INT NULL DEFAULT 0 COMMENT '下跌家數',
-      avg_close DECIMAL(20,4) NULL COMMENT '平均收盤價',
-      max_close DECIMAL(20,4) NULL COMMENT '最高收盤價',
-      min_close DECIMAL(20,4) NULL COMMENT '最低收盤價',
-      created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uk_date_industry (date, industry),
-      KEY idx_date (date),
-      KEY idx_industry (industry)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='行業日度聚合數據'
-    """
-
-    agg_sql = """
-    INSERT INTO industry_daily
-    (date, industry, stock_count, avg_pct_chg, total_amount, total_volume, avg_turn,
-     rising_count, falling_count, avg_close, max_close, min_close)
-    SELECT
-      d.date,
-      i.industry,
-      COUNT(*) AS stock_count,
-      AVG(d.pctChg) AS avg_pct_chg,
-      SUM(d.amount) AS total_amount,
-      SUM(d.volume) AS total_volume,
-      AVG(d.turn) AS avg_turn,
-      SUM(CASE WHEN d.pctChg > 0 THEN 1 ELSE 0 END) AS rising_count,
-      SUM(CASE WHEN d.pctChg < 0 THEN 1 ELSE 0 END) AS falling_count,
-      AVG(d.close) AS avg_close,
-      MAX(d.close) AS max_close,
-      MIN(d.close) AS min_close
-    FROM stock_daily d
-    JOIN stock_industry i ON d.code = i.code
-    WHERE d.adjustflag = 3
-      AND d.date >= %s AND d.date <= %s
-      AND i.industry IS NOT NULL AND i.industry != ''
-    GROUP BY d.date, i.industry
-    ON DUPLICATE KEY UPDATE
-      stock_count = VALUES(stock_count),
-      avg_pct_chg = VALUES(avg_pct_chg),
-      total_amount = VALUES(total_amount),
-      total_volume = VALUES(total_volume),
-      avg_turn = VALUES(avg_turn),
-      rising_count = VALUES(rising_count),
-      falling_count = VALUES(falling_count),
-      avg_close = VALUES(avg_close),
-      max_close = VALUES(max_close),
-      min_close = VALUES(min_close)
-    """
-
-    with conn.cursor() as cursor:
-        cursor.execute(create_table_sql)
-        try:
-            cursor.execute("CREATE INDEX idx_code ON stock_industry(code)")
-        except pymysql.MySQLError as e:
-            if "Duplicate" in str(e) or "already exists" in str(e).lower():
-                pass
-            else:
-                raise
-
-        # 找出 [start, end] 區間內尚未聚合的日期範圍
-        cursor.execute(
-            """
-            SELECT MIN(d.date), MAX(d.date)
-            FROM stock_daily d
-            WHERE d.adjustflag = 3
-              AND d.date >= %s AND d.date <= %s
-              AND NOT EXISTS (
-                SELECT 1 FROM industry_daily id WHERE id.date = d.date LIMIT 1
-              )
-            """,
-            (start, end),
-        )
-        min_missing, max_missing = cursor.fetchone()
-
-        if min_missing is None or max_missing is None:
-            print(f"[skip] 行業日聚合數據已是最新（{start} ~ {end}）")
-            return 0
-
-        cursor.execute(agg_sql, (min_missing, max_missing))
-        conn.commit()
-        affected = cursor.rowcount
-    print(f"[done] 行業日聚合數據已同步 {affected} 條（{min_missing} ~ {max_missing}）")
-    return affected
+def _log(msg: str, *, flush: bool = False) -> None:
+    """統一日誌輸出：progress-json 模式時走 stderr，否則走 stdout（保持兼容）。"""
+    stream = sys.stderr if _PROGRESS_JSON else sys.stdout
+    print(msg, file=stream, flush=flush)
 
 
 # ============================================================================
-# 資料庫查詢（增量更新核心）
+# 同步編排邏輯（調用 fetch 層拉取 + write 層寫入）
 # ============================================================================
-
-def _get_stock_last_date(conn, code: str, adjustflag: int):
-    """獲取某隻股票在某個復權類型下的最新交易日期。"""
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT MAX(date) FROM stock_daily WHERE code = %s AND adjustflag = %s",
-            (code, adjustflag),
-        )
-        result = cursor.fetchone()
-        return result[0] if result and result[0] else None
-
-
-def _get_index_last_date(conn, code: str, frequency: str = "d"):
-    """獲取某個指數在某個週期下的最新交易日期。"""
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT MAX(date) FROM index_daily WHERE code = %s AND frequency = %s",
-            (code, frequency),
-        )
-        result = cursor.fetchone()
-        return result[0] if result and result[0] else None
-
-
-def _get_existing_stocks(conn, adjustflag: int) -> list[str]:
-    """獲取資料庫中已存在某個復權類型數據的股票列表。"""
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT DISTINCT code FROM stock_daily WHERE adjustflag = %s ORDER BY code",
-            (adjustflag,),
-        )
-        return [row[0] for row in cursor.fetchall()]
-
-
-def _get_existing_indexes(conn, frequency: str = "d") -> list[str]:
-    """獲取資料庫中已存在的指數列表。"""
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT DISTINCT code FROM index_daily WHERE frequency = %s ORDER BY code",
-            (frequency,),
-        )
-        return [row[0] for row in cursor.fetchall()]
-
-
-# ============================================================================
-# Baostock 登錄管理
-# ============================================================================
-
-def _login_baostock(max_retries: int = 3) -> bool:
-    """登入 Baostock，支持重試。"""
-    for attempt in range(max_retries):
-        try:
-            lg = bs.login()
-            if lg.error_code == "0":
-                return True
-            print(f"[warn] baostock 登錄失敗 (嘗試 {attempt + 1}/{max_retries}): {lg.error_msg}", file=sys.stderr)
-            if attempt < max_retries - 1:
-                time.sleep(3)
-        except Exception as e:
-            print(f"[warn] baostock 登錄異常 (嘗試 {attempt + 1}/{max_retries}): {e}", file=sys.stderr)
-            if attempt < max_retries - 1:
-                time.sleep(3)
-    return False
-
-
-def _ensure_login() -> None:
-    """檢查 Baostock 登錄狀態，必要時重新登錄。"""
-    rs = bs.query_all_stock(day=datetime.now().strftime("%Y-%m-%d"))
-    if rs.error_code != "0":
-        try:
-            bs.logout()
-        except Exception:
-            pass
-        if not _login_baostock():
-            raise RuntimeError("baostock 重新登錄失敗")
-
-
-# ============================================================================
-# 數據拉取與寫入
-# ============================================================================
-
-def _to_decimal(value: str) -> Decimal | None:
-    if value is None or value == "":
-        return None
-    try:
-        return Decimal(value)
-    except Exception:
-        return None
-
-
-def _to_int(value: str) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(float(value))
-    except ValueError:
-        return None
-
-
-def _upsert_stock_batch(cursor, rows: list[tuple]) -> None:
-    if not rows:
-        return
-    sql = (
-        "INSERT INTO stock_daily "
-        "(code,date,open,high,low,close,preclose,volume,amount,adjustflag,turn,tradestatus,pctChg,isST) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-        "ON DUPLICATE KEY UPDATE "
-        "open=VALUES(open),high=VALUES(high),low=VALUES(low),close=VALUES(close),"
-        "preclose=VALUES(preclose),volume=VALUES(volume),amount=VALUES(amount),"
-        "turn=VALUES(turn),tradestatus=VALUES(tradestatus),pctChg=VALUES(pctChg),isST=VALUES(isST)"
-    )
-    cursor.executemany(sql, rows)
-
-
-def _upsert_index_batch(cursor, rows: list[tuple]) -> None:
-    if not rows:
-        return
-    sql = (
-        "INSERT INTO index_daily "
-        "(code,date,open,high,low,close,preclose,volume,amount,pctChg,frequency,source) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'d','baostock') "
-        "ON DUPLICATE KEY UPDATE "
-        "open=VALUES(open),high=VALUES(high),low=VALUES(low),close=VALUES(close),"
-        "preclose=VALUES(preclose),volume=VALUES(volume),amount=VALUES(amount),pctChg=VALUES(pctChg)"
-    )
-    cursor.executemany(sql, rows)
-
-
-def _upsert_industry_batch(cursor, rows: list[tuple]) -> None:
-    """批量 upsert 行業數據。rows = [(code, update_date, code_name, industry, industry_classification), ...]"""
-    if not rows:
-        return
-    sql = (
-        "INSERT INTO stock_industry "
-        "(code, update_date, code_name, industry, industry_classification) "
-        "VALUES (%s, %s, %s, %s, %s) "
-        "ON DUPLICATE KEY UPDATE "
-        "code_name=VALUES(code_name), industry=VALUES(industry), "
-        "industry_classification=VALUES(industry_classification), updated_at=CURRENT_TIMESTAMP"
-    )
-    cursor.executemany(sql, rows)
-
-
-def _get_industry_last_update_date(conn):
-    """獲取 stock_industry 表中最新的 update_date。"""
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT MAX(update_date) FROM stock_industry")
-        result = cursor.fetchone()
-        return result[0] if result and result[0] else None
-
 
 def _sync_industry(conn, *, force: bool = False) -> int:
     """同步行業分類數據（baostock 每週一更新，數據量小）。
@@ -472,62 +149,6 @@ def _sync_industry(conn, *, force: bool = False) -> int:
     return len(rows)
 
 
-def _fetch_stock(code: str, start: str, end: str, adjustflag: int) -> Iterable[tuple]:
-    """從 Baostock 獲取股票日線數據。"""
-    rs = bs.query_history_k_data_plus(
-        code, FIELDS, start_date=start, end_date=end, frequency="d", adjustflag=str(adjustflag)
-    )
-    if rs.error_code != "0":
-        if "用户未登" in rs.error_msg or "未登錄" in rs.error_msg:
-            _ensure_login()
-            rs = bs.query_history_k_data_plus(
-                code, FIELDS, start_date=start, end_date=end, frequency="d", adjustflag=str(adjustflag)
-            )
-        if rs.error_code != "0":
-            print(f"[warn] {code}: {rs.error_msg}", file=sys.stderr)
-            return
-    while rs.next():
-        row = rs.get_row_data()
-        yield (
-            row[1], row[0],  # code, date
-            _to_decimal(row[2]), _to_decimal(row[3]), _to_decimal(row[4]), _to_decimal(row[5]),
-            _to_decimal(row[6]), _to_int(row[7]), _to_decimal(row[8]),
-            int(float(row[9])) if row[9] else adjustflag,
-            _to_decimal(row[10]),
-            int(float(row[11])) if row[11] else 1,
-            _to_decimal(row[12]),
-            int(float(row[13])) if row[13] else 0,
-        )
-
-
-def _fetch_index(code: str, start: str, end: str) -> Iterable[tuple]:
-    """從 Baostock 獲取指數日線數據。"""
-    rs = bs.query_history_k_data_plus(
-        code, INDEX_FIELDS, start_date=start, end_date=end, frequency="d"
-    )
-    if rs.error_code != "0":
-        if "用户未登" in rs.error_msg or "未登錄" in rs.error_msg:
-            _ensure_login()
-            rs = bs.query_history_k_data_plus(
-                code, INDEX_FIELDS, start_date=start, end_date=end, frequency="d"
-            )
-        if rs.error_code != "0":
-            print(f"[warn] index {code}: {rs.error_msg}", file=sys.stderr)
-            return
-    while rs.next():
-        row = rs.get_row_data()
-        yield (
-            row[1], row[0],  # code, date
-            _to_decimal(row[2]), _to_decimal(row[3]), _to_decimal(row[4]), _to_decimal(row[5]),
-            _to_decimal(row[6]), _to_int(row[7]), _to_decimal(row[8]),
-            _to_decimal(row[9]),
-        )
-
-
-# ============================================================================
-# 同步邏輯
-# ============================================================================
-
 def _sync_stocks(
     conn,
     codes: list[str],
@@ -541,7 +162,9 @@ def _sync_stocks(
     cursor = conn.cursor()
     total = 0
     skipped = 0
+    failed = 0
     batch: list[tuple] = []
+    total_codes = len(codes)
 
     for i, code in enumerate(codes):
         # 增量模式：計算每隻股票的實際拉取起始日期
@@ -557,18 +180,52 @@ def _sync_stocks(
         else:
             stock_start = start
 
-        for row in _fetch_stock(code, stock_start, end, adjustflag):
-            batch.append(row)
-            if len(batch) >= batch_size:
-                _upsert_stock_batch(cursor, batch)
-                conn.commit()
-                total += len(batch)
-                batch.clear()
-                print(f"[info] {ADJUSTFLAG_MAP[adjustflag]} 已寫入 {total} 條", flush=True)
+        try:
+            for row in _fetch_stock(code, stock_start, end, adjustflag):
+                batch.append(row)
+                if len(batch) >= batch_size:
+                    _upsert_stock_batch(cursor, batch)
+                    conn.commit()
+                    total += len(batch)
+                    batch.clear()
+                    _log(f"[info] {ADJUSTFLAG_MAP[adjustflag]} 已寫入 {total} 條", flush=True)
+                    if _PROGRESS_JSON:
+                        _emit_progress_json({
+                            "type": "progress",
+                            "total": total_codes,
+                            "completed": i + 1,
+                            "failed": failed,
+                            "current_code": code,
+                            "phase": "stock_daily",
+                            "adjustflag": adjustflag,
+                        })
+        except Exception as e:
+            failed += 1
+            if _PROGRESS_JSON:
+                _emit_progress_json({
+                    "type": "error",
+                    "code": code,
+                    "message": str(e),
+                })
+            _log(f"[error] {code} 拉取失敗: {e}", flush=True)
+            continue
 
         # 每處理 100 隻股票打印進度
         if (i + 1) % 100 == 0:
-            print(f"[info] 進度: {i + 1}/{len(codes)} 隻股票（{ADJUSTFLAG_MAP[adjustflag]}）", flush=True)
+            _log(f"[info] 進度: {i + 1}/{total_codes} 隻股票（{ADJUSTFLAG_MAP[adjustflag]}）", flush=True)
+            if _PROGRESS_JSON:
+                _emit_progress_json({
+                    "type": "progress",
+                    "total": total_codes,
+                    "completed": i + 1,
+                    "failed": failed,
+                    "current_code": code,
+                    "phase": "stock_daily",
+                    "adjustflag": adjustflag,
+                })
+
+        # 拉取限頻：每隻股票之間短暫暫停，避免連續請求觸發 Baostock 限流
+        time.sleep(0.1)
 
     if batch:
         _upsert_stock_batch(cursor, batch)
@@ -577,8 +234,14 @@ def _sync_stocks(
 
     cursor.close()
     if incremental and skipped > 0:
-        print(f"[info] {ADJUSTFLAG_MAP[adjustflag]} 跳過 {skipped} 隻已是最新數據的股票")
-    print(f"[done] {ADJUSTFLAG_MAP[adjustflag]} 股票日線共寫入 {total} 條")
+        _log(f"[info] {ADJUSTFLAG_MAP[adjustflag]} 跳過 {skipped} 隻已是最新數據的股票")
+    _log(f"[done] {ADJUSTFLAG_MAP[adjustflag]} 股票日線共寫入 {total} 條")
+    if _PROGRESS_JSON:
+        _emit_progress_json({
+            "type": "done",
+            "total_written": total,
+            "total_failed": failed,
+        })
     return total
 
 
@@ -592,29 +255,55 @@ def _sync_indexes(
     """同步指數日線數據，返回寫入條數。"""
     cursor = conn.cursor()
     total = 0
+    failed = 0
     batch: list[tuple] = []
+    total_codes = len(codes)
 
-    for code in codes:
+    for i, code in enumerate(codes):
         if incremental:
             last_date = _get_index_last_date(conn, code, "d")
             if last_date is not None:
                 idx_start = (last_date + timedelta(days=1)).strftime("%Y-%m-%d")
                 if idx_start > end:
-                    print(f"[info] 指數 {code} 已是最新，跳過")
+                    _log(f"[info] 指數 {code} 已是最新，跳過")
                     continue
             else:
                 idx_start = start
         else:
             idx_start = start
 
-        for row in _fetch_index(code, idx_start, end):
-            batch.append(row)
-            if len(batch) >= 100:
-                _upsert_index_batch(cursor, batch)
-                conn.commit()
-                total += len(batch)
-                batch.clear()
-                print(f"[info] 指數已寫入 {total} 條", flush=True)
+        try:
+            for row in _fetch_index(code, idx_start, end):
+                batch.append(row)
+                if len(batch) >= 100:
+                    _upsert_index_batch(cursor, batch)
+                    conn.commit()
+                    total += len(batch)
+                    batch.clear()
+                    _log(f"[info] 指數已寫入 {total} 條", flush=True)
+                    if _PROGRESS_JSON:
+                        _emit_progress_json({
+                            "type": "progress",
+                            "total": total_codes,
+                            "completed": i + 1,
+                            "failed": failed,
+                            "current_code": code,
+                            "phase": "index_daily",
+                            "adjustflag": 0,
+                        })
+        except Exception as e:
+            failed += 1
+            if _PROGRESS_JSON:
+                _emit_progress_json({
+                    "type": "error",
+                    "code": code,
+                    "message": str(e),
+                })
+            _log(f"[error] 指數 {code} 拉取失敗: {e}", flush=True)
+            continue
+
+        # 拉取限頻：每個指數之間短暫暫停
+        time.sleep(0.2)
 
     if batch:
         _upsert_index_batch(cursor, batch)
@@ -622,7 +311,13 @@ def _sync_indexes(
         total += len(batch)
 
     cursor.close()
-    print(f"[done] 指數日線共寫入 {total} 條")
+    _log(f"[done] 指數日線共寫入 {total} 條")
+    if _PROGRESS_JSON:
+        _emit_progress_json({
+            "type": "done",
+            "total_written": total,
+            "total_failed": failed,
+        })
     return total
 
 
@@ -632,6 +327,9 @@ def _sync_indexes(
 
 def _run_cli(args) -> int:
     """命令行模式入口。"""
+    global _PROGRESS_JSON
+    _PROGRESS_JSON = getattr(args, "progress_json", False)
+
     _load_env(Path(__file__).resolve().parent.parent)
 
     if not _login_baostock():
@@ -664,18 +362,18 @@ def _run_cli(args) -> int:
             if not codes:
                 # 資料庫沒有數據，用靜態清單
                 codes = _load_stock_list()
-            print(f"[info] 增量更新模式：從資料庫獲取 {len(codes)} 隻股票")
+            _log(f"[info] 增量更新模式：從資料庫獲取 {len(codes)} 隻股票")
         else:
             codes = _load_stock_list()
-            print(f"[info] 範圍模式：從清單載入 {len(codes)} 隻股票")
+            _log(f"[info] 範圍模式：從清單載入 {len(codes)} 隻股票")
 
     # 確定指數清單
     index_codes = _load_index_list() if args.index else []
 
-    print(f"[info] 日期範圍: {start_date} ~ {end_date}")
-    print(f"[info] 復權類型: {[ADJUSTFLAG_MAP[af] for af in adjustflags]}")
+    _log(f"[info] 日期範圍: {start_date} ~ {end_date}")
+    _log(f"[info] 復權類型: {[ADJUSTFLAG_MAP[af] for af in adjustflags]}")
     if index_codes:
-        print(f"[info] 指數清單: {len(index_codes)} 個指數（10 大類別）")
+        _log(f"[info] 指數清單: {len(index_codes)} 個指數（10 大類別）")
 
     conn = _connect()
     try:
@@ -685,28 +383,38 @@ def _run_cli(args) -> int:
 
         grand_total = 0
         for af in adjustflags:
-            print(f"\n{'=' * 60}")
-            print(f"開始同步 {ADJUSTFLAG_MAP[af]} 股票日線數據")
-            print(f"{'=' * 60}")
+            # P4-1: 前復權全量重刷——除權除息後 Baostock 重算全部歷史，增量模式會導致陳舊失真
+            af_incremental = incremental
+            af_start = start_date
+            if af == 2 and getattr(args, 'full_refresh_adjustflag2', False):
+                af_incremental = False
+                af_start = os.getenv("SYNC_DEFAULT_START_DATE", "2021-01-01")
+                _log(f"\n[WARNING] 前復權全量重刷模式：從 {af_start} 重新拉取全部歷史數據")
+                _log(f"[WARNING] 這是因為前復權價格在除權除息後會被 Baostock 重算，")
+                _log(f"[WARNING] 增量模式只拉 max_date+1 之後的數據，歷史數據會逐漸陳舊失真。")
+                _log(f"[WARNING] 建議每季度至少執行一次：python baostock_ingest.py --full-refresh-adjustflag2 --adjustflags 2")
+            _log(f"\n{'=' * 60}")
+            _log(f"開始同步 {ADJUSTFLAG_MAP[af]} 股票日線數據")
+            _log(f"{'=' * 60}")
             grand_total += _sync_stocks(
-                conn, codes, af, start_date, end_date, args.batch_size, incremental
+                conn, codes, af, af_start, end_date, args.batch_size, af_incremental
             )
 
         if index_codes:
-            print(f"\n{'=' * 60}")
-            print(f"開始同步指數日線數據（{len(index_codes)} 個指數）")
-            print(f"{'=' * 60}")
+            _log(f"\n{'=' * 60}")
+            _log(f"開始同步指數日線數據（{len(index_codes)} 個指數）")
+            _log(f"{'=' * 60}")
             grand_total += _sync_indexes(conn, index_codes, start_date, end_date, incremental)
 
         if args.industry:
-            print(f"\n{'=' * 60}")
-            print(f"開始同步行業分類數據")
-            print(f"{'=' * 60}")
+            _log(f"\n{'=' * 60}")
+            _log(f"開始同步行業分類數據")
+            _log(f"{'=' * 60}")
             grand_total += _sync_industry(conn, force=args.force_industry)
 
-        print(f"\n{'=' * 60}")
-        print(f"全部完成！共寫入 {grand_total} 條記錄")
-        print(f"{'=' * 60}")
+        _log(f"\n{'=' * 60}")
+        _log(f"全部完成！共寫入 {grand_total} 條記錄")
+        _log(f"{'=' * 60}")
     finally:
         conn.close()
         try:
@@ -915,6 +623,13 @@ def main() -> int:
     parser.add_argument("--industry", action="store_true", help="同時同步行業分類數據到 stock_industry 表")
     parser.add_argument("--force-industry", action="store_true",
                         help="強制全量拉取行業數據（忽略 7 天新鮮度檢查）")
+    parser.add_argument("--full-refresh-adjustflag2", action="store_true",
+                        help="全量重刷前復權(adjustflag=2)歷史數據——解決前復權增量陳舊化問題"
+                             "（除權除息後 Baostock 會重算全部歷史價，增量模式只拉 max_date+1 會導致數據失真）")
+    parser.add_argument("--progress-json", action="store_true",
+                        help="啟用 JSON 進度協議：每次寫入批次時輸出一行 JSON 到 stdout，"
+                             "中文進度信息改為 stderr。供 Java SyncService 精確解析進度。"
+                             "JSON 行格式：{\"type\":\"progress\",...} / {\"type\":\"done\",...} / {\"type\":\"error\",...}")
     args = parser.parse_args()
 
     return _run_cli(args)

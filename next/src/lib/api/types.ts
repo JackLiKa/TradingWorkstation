@@ -2,6 +2,9 @@
  * @file 與後端 DTO 一一對應的 TypeScript 類型定義
  * 所有接口均與 Java 後端的 DTO 類保持字段名稱和類型一致，
  * 用於前端 API 調用時的類型推斷與編譯時檢查。
+ *
+ * @see ./generated.d.ts — 由 `npm run gen:api` 從後端 OpenAPI 自動生成，
+ *       可逐步替換本文件中的手寫類型以消滅契約 drift。
  */
 
 /** 股票日線行情數據（對應 stock_daily 表） */
@@ -26,6 +29,7 @@ export interface StockDailyDto {
 export interface SummaryMetricsDto {
   totalRecords: number;
   totalSymbols: number;
+  earliestTradeDate: string | null;
   latestTradeDate: string | null;
   averagePctChange: number | null;
   latestTurnover: number | null;
@@ -166,6 +170,8 @@ export interface RotationAutoMlDto {
     avgLeaderReturn: number;
     totalPredictions: number;
     compositeScore: number;
+    evalHitRate: number;
+    evalExcessReturn: number;
   }[];
 }
 
@@ -247,6 +253,10 @@ export interface ProsperityForecastBacktestDto {
     directionCorrect: boolean;
     gradeCorrect: boolean;
   }[];
+  arimaMae: number;
+  hwMae: number;
+  linearMae: number;
+  optimalWeights: string;
 }
 
 /** 行業輪動 Markov 模型 */
@@ -447,7 +457,7 @@ export interface ScreenerResultDto {
   summaryLines: string[];
 }
 
-/** 回測配置（日期範圍、調倉間隔、持倉數、初始資金、手續費、止損止盈） */
+/** 回測配置（日期範圍、調倉間隔、持倉數、初始資金、手續費、止損止盈、無風險利率、滑點） */
 export interface BacktestConfigDto {
   startDate: string;
   endDate: string;
@@ -458,6 +468,10 @@ export interface BacktestConfigDto {
   commissionBps: number;
   stopLossPct?: number | null;
   takeProfitPct?: number | null;
+  /** 無風險年化利率（默認 0.02），用於夏普比率計算 */
+  riskFreeRate?: number | null;
+  /** 滑點（基點，默認 0），買入價上浮、賣出價下浮 */
+  slippageBps?: number | null;
 }
 
 /** 回測請求（選股條件 + 回測配置） */
