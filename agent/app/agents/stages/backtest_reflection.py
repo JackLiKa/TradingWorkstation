@@ -36,7 +36,7 @@ PROMPT_TEMPLATE = """請分析以下回測結果，得出反思結論（控制�
 ## 市場環境
 {market_context}
 
-## 歷史記錄（最近3輪）
+## 歷史記錄（最近5輪）
 {history_text}
 
 {few_shot}
@@ -81,9 +81,9 @@ class BacktestReflectionStage(BaseStage):
         market_context = kwargs.get("market_context", "")
         history = kwargs.get("history", [])
 
-        # 構建歷史摘要（只取最近 3 輪，避免 prompt 過長導致 LLM 思考太久）
+        # 構建歷史摘要（最近 5 輪，冷啟動時由種子上下文補充）
         history_text = ""
-        for h in history[-3:]:
+        for h in history[-5:]:
             s = h.backtest_statistics
             history_text += (
                 f"  第{h.iteration}輪: 評分={h.composite_score}, 收益={s.get('totalReturn', 0)}%, "

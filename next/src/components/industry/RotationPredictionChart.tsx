@@ -10,6 +10,7 @@ import { ErrorState } from '@/components/ui/ErrorState';
 import { Sparkles, TrendingUp, TrendingDown } from 'lucide-react';
 import { RefreshButton } from '@/components/ui/RefreshButton';
 import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
+import { AnalysisTutorial } from '@/components/industry/AnalysisTutorial';
 
 const LOOKBACK_OPTIONS = [10, 20, 30, 60];
 
@@ -131,6 +132,7 @@ export function RotationPredictionChart() {
 
   return (
     <div className="space-y-3">
+      <AnalysisTutorial tutorialKey="rotationPrediction" />
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm text-muted">回溯天數：</span>
         {LOOKBACK_OPTIONS.map((d) => (

@@ -22,8 +22,9 @@ import time
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from app.agents.charter import get_charter
+from app.agents.charter import get_charter, get_recall_with_memory
 from app.agents.monitor import node_monitor
+from app.agents.seed_context import get_seed_context
 from app.agents.state import StageResult
 from app.core.llm_client import LLMResponse, llm_client
 
@@ -48,15 +49,24 @@ class BaseStage(ABC):
         """返回該階段的 system prompt（子類可覆蓋）。"""
         return "你是一個專業的 AI 助手。"
 
-    def get_full_system_prompt(self, iteration: int = 1) -> str:
+    def get_full_system_prompt(self, iteration: int = 1, history_summary: str = "") -> str:
         """返回含憲章的完整 system prompt。
 
         第一輪注入完整憲章（身份/職責/約束/IO標準）；
-        後續輪次注入回憶摘要，避免上下文過長造成的失憶或風格漂移。
+        後續輪次注入帶記憶的回憶摘要（含最近關鍵結論），避免上下文過長造成的失憶或風格漂移。
+        冷啟動階段（iteration <= 6）在憲章後注入種子上下文，幫助 AI 快速進入有效迭代。
         """
-        charter = get_charter(iteration)
+        if iteration <= 1:
+            charter = get_charter(iteration)
+        else:
+            charter = get_recall_with_memory(iteration, history_summary)
+        seed = get_seed_context(iteration)
         base_prompt = self.get_system_prompt()
-        return f"{charter}\n\n---\n\n## 本節點職責\n{base_prompt}"
+        parts = [charter]
+        if seed:
+            parts.append(f"\n\n---\n\n{seed}")
+        parts.append(f"\n\n---\n\n## 本節點職責\n{base_prompt}")
+        return "".join(parts)
 
     def build_user_prompt(self, **kwargs) -> str:
         """構建用戶提示詞（子類實現）。"""
@@ -111,7 +121,21 @@ class BaseStage(ABC):
         self._last_llm_response = None  # 供 _call_llm 緩存
         self._current_iteration = state.current_iteration + 1  # 供 _call_llm 注入憲章
 
-        system_prompt = self.get_full_system_prompt(iteration=state.current_iteration + 1)
+        # 構建歷史摘要（供回憶記憶注入）
+        history_summary = ""
+        for h in getattr(state, "iterations", [])[-5:]:
+            stats = h.backtest_statistics
+            history_summary += (
+                f"第{h.iteration}輪: 評分={h.composite_score}, "
+                f"收益={stats.get('totalReturn', 0)}%, "
+                f"回撤={stats.get('maxDrawdown', 0)}%, "
+                f"夏普={stats.get('sharpe', 0)}\n"
+            )
+
+        system_prompt = self.get_full_system_prompt(
+            iteration=state.current_iteration + 1,
+            history_summary=history_summary,
+        )
         user_prompt = self.build_user_prompt(**kwargs)
         context = self.build_context(**kwargs)
         preferred_provider = self.get_preferred_provider()

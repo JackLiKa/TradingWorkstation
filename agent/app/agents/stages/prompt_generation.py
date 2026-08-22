@@ -72,9 +72,9 @@ class PromptGenerationStage(BaseStage):
         composite_score = kwargs.get("composite_score", 0)
         history = kwargs.get("history", [])
 
-        # 構建歷史趨勢
+        # 構建歷史趨勢（最近 5 輪，冷啟動時由種子上下文補充）
         history_text = ""
-        for h in history[-3:]:
+        for h in history[-5:]:
             s = h.backtest_statistics
             history_text += f"  第{h.iteration}輪: 評分={h.composite_score}, 收益={s.get('totalReturn', 0)}%\n"
 

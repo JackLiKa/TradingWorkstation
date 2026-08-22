@@ -52,6 +52,12 @@ PROMPT_TEMPLATE = """請根據行情新聞分析結果，結合數據庫行業�
 ## 行業下的股票代碼（抽樣）
 {industry_stocks}
 
+## 行業景氣度（綜合評分，0-100，越高越強）
+{prosperity_data}
+
+## 行業輪動預測（未來領漲行業預測）
+{rotation_data}
+
 {few_shot}
 
 ## 你的任務
@@ -59,6 +65,8 @@ PROMPT_TEMPLATE = """請根據行情新聞分析結果，結合數據庫行業�
 2. 結合「最新交易日行業強弱」：若新聞提到的行業同時出現在領漲前列，優先納入 favorable_industries
 3. 將關鍵詞與上方「數據庫中的行業列表」模糊匹配（如「半導體」→「C39電子設備製造」）
 4. 從匹配行業的股票代碼中選取，filtered_codes 最多 50 個
+5. 參考「行業景氣度」：景氣度 > 70 的行業優先納入 favorable_industries
+6. 參考「行業輪動預測」：預測為領漲的行業優先納入
 
 【市場概念→行業映射】
 如果行情新聞中使用的是市場風格概念而非具體行業，按以下映射轉換後再匹配：
@@ -128,11 +136,33 @@ class IndustryAnalysisStage(BaseStage):
             except Exception:
                 continue
 
+        # === 獲取行業景氣度 ===
+        logger.info("[AI0.5] 獲取行業景氣度...")
+        prosperity_text = ""
+        try:
+            prosperity = await backend_client.get_industry_prosperity()
+            prosperity_text = _format_prosperity(prosperity)
+        except Exception as e:
+            logger.warning(f"[AI0.5] 景氣度獲取失敗: {e}")
+            prosperity_text = "數據不足，無法提供景氣度"
+
+        # === 獲取輪動預測 ===
+        logger.info("[AI0.5] 獲取輪動預測...")
+        rotation_text = ""
+        try:
+            rotation = await backend_client.get_rotation_prediction(lookback_days=20)
+            rotation_text = _format_rotation_prediction(rotation)
+        except Exception as e:
+            logger.warning(f"[AI0.5] 輪動預測獲取失敗: {e}")
+            rotation_text = "數據不足，無法提供輪動預測"
+
         prompt = PROMPT_TEMPLATE.format(
             market_news=market_news[:2000],  # 截斷避免 token 過多
             industry_daily=industry_daily_text,
             industry_list=json.dumps(industry_list[:50], ensure_ascii=False, indent=2),
             industry_stocks=json.dumps(industry_stocks, ensure_ascii=False, indent=2),
+            prosperity_data=prosperity_text,
+            rotation_data=rotation_text,
             few_shot=get_few_shot("industry_analysis"),
         )
 
@@ -159,6 +189,62 @@ def _format_industry_daily(data: list[dict[str, Any]]) -> str:
         amount_str = f"{amount:.2f}" if amount is not None else "N/A"
         count = item.get("stockCount", 0)
         lines.append(f"{industry} | {avg_str} | {rising} | {falling} | {amount_str} | {count}")
+
+    return "\n".join(lines)
+
+
+def _format_prosperity(data: list[dict[str, Any]]) -> str:
+    """格式化行業景氣度數據為 prompt 可讀文本（取前 15 強）。"""
+    if not data:
+        return "數據不足，無法提供景氣度"
+
+    lines = ["行業名 | 景氣度 | 等級 | 動量分 | 資金分 | 活躍分 | 廣度分"]
+    for item in data[:15]:
+        industry = item.get("industry", "")
+        index = item.get("prosperityIndex", 0)
+        grade = item.get("grade", "")
+        momentum = item.get("momentumScore", 0)
+        capital = item.get("capitalScore", 0)
+        activity = item.get("activityScore", 0)
+        breadth = item.get("breadthScore", 0)
+        lines.append(
+            f"{industry} | {index:.1f} | {grade} | {momentum:.1f} | {capital:.1f} | {activity:.1f} | {breadth:.1f}"
+        )
+
+    return "\n".join(lines)
+
+
+def _format_rotation_prediction(data: dict[str, Any]) -> str:
+    """格式化輪動預測數據為 prompt 可讀文本。"""
+    if not data:
+        return "數據不足，無法提供輪動預測"
+
+    lines = []
+    confidence = data.get("confidence", 0)
+    lines.append(f"預測信心度: {confidence:.1f}%")
+    lines.append("")
+
+    leaders = data.get("predictedLeaders", [])
+    if leaders:
+        lines.append("預測領漲行業:")
+        for ind in leaders[:5]:
+            name = ind.get("industry", "")
+            score = ind.get("score", 0)
+            momentum = ind.get("momentumScore", 0)
+            capital = ind.get("capitalScore", 0)
+            trend = ind.get("trendScore", 0)
+            lines.append(
+                f"- {name}: 評分 {score:.1f} (動量{momentum:.0f}/資金{capital:.0f}/趨勢{trend:.0f})"
+            )
+
+    laggards = data.get("predictedLaggards", [])
+    if laggards:
+        lines.append("")
+        lines.append("預測滯後行業（建議避開）:")
+        for ind in laggards[:3]:
+            name = ind.get("industry", "")
+            score = ind.get("score", 0)
+            lines.append(f"- {name}: 評分 {score:.1f}")
 
     return "\n".join(lines)
 

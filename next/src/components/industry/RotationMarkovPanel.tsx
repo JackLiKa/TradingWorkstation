@@ -10,6 +10,7 @@ import { ErrorState } from '@/components/ui/ErrorState';
 import { GitBranch, ArrowRight, Crown } from 'lucide-react';
 import { RefreshButton } from '@/components/ui/RefreshButton';
 import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
+import { AnalysisTutorial } from '@/components/industry/AnalysisTutorial';
 
 const LOOKBACK_OPTIONS = [15, 30, 60, 90];
 const STATE_NAMES = ['領漲', '中間', '滯後'];
@@ -237,6 +238,7 @@ export function RotationMarkovPanel() {
 
   return (
     <div className="space-y-3">
+      <AnalysisTutorial tutorialKey="rotationMarkov" />
       {/* 參數選擇器 */}
       <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-bg-panel p-3">
         <div className="flex items-center gap-2">
