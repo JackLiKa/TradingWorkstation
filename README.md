@@ -1,4 +1,4 @@
-# 量化交易工作台 (Trading Workstation)
+# Trading Workstation — A 股量化交易工作台
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
@@ -8,318 +8,199 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1.svg)](https://www.mysql.com/)
 
-> 基于 **Java 21 + Spring Boot** 后端 + **Next.js 15** 前端 + **FastAPI AI Agent** 的 Web 量化交易工作台。
-> 由原 PySide6 桌面端项目 ([Quantization](https://github.com/JackLiKa/Quantization.git)) 重构而来，保持原有全部功能并做性能优化、功能完善与 AI 策略优化集成。
+> **A 股量化交易工作台** — 含行情採集、技術指標、條件選股、策略回測、AI 優化。
+> 由原 PySide6 桌面端項目 ([Quantization](https://github.com/JackLiKa/Quantization.git)) 重構而來，保持全部功能並做性能優化與 AI 策略優化集成。
 
-**[功能特性](#功能一览)** • **[快速开始](#快速开始)** • **[文档](#项目导航)** • **[贡献指南](CONTRIBUTING.md)** • **[行为准则](CODE_OF_CONDUCT.md)**
-
----
-
-## 目录结构
-
-```text
-Trading Workstation/
-├── java/              后端：Java 21 + Spring Boot 3.3 + Spring Data JPA + Caffeine
-├── next/              前端：Next.js 15 (App Router) + ECharts + shadcn/ui + Tailwind + SWR
-├── agent/             AI 策略优化服务：FastAPI + LangGraph 风格优化循环 + LLM 路由
-├── ingestion/         Python Baostock 数据采集脚本（由后端 sync 模块编排调用）
-├── docs/              架构 / API / 数据库文档
-├── .env.example       环境变量模板（后端 + 数据同步共用）
-├── .gitignore
-├── AGENTS.md          项目导航与开发规范（AI 协作指南）
-└── README.md
-```
-
-## 技术栈
-
-| 层 | 选型 |
-|----|------|
-| 后端 | Java 21、Spring Boot 3.3.4、Spring Data JPA (Hibernate 6.5)、HikariCP、Caffeine、springdoc-openapi、Lombok、Spring Mail |
-| 前端 | Next.js 15.1.9 (App Router, 混合渲染)、React 19、TypeScript、Tailwind CSS、shadcn/ui、ECharts、SWR |
-| AI Agent | Python 3.10+、FastAPI、Uvicorn、LangGraph 风格优化循环、多模型 LLM 路由（7 供應商） |
-| 数据库 | MySQL 8.0+（`stock_daily` / `index_daily` / `index_metadata` / `stock_industry` / `industry_daily` / `backtest_strategy`，A 股日线 + 540 个已验证指数 + 行業日聚合） |
-| 数据同步 | Python Baostock 脚本 + `discover_indices.py` 动态发现 540 个有效指数（Java SyncService 通过 ProcessBuilder 编排） |
-| 通知服务 | Spring Mail (SMTP) + Webhook（景氣度預警推送，異步發送） |
-
-## 服务端口总览
-
-| 服务 | 默认端口 | 配置项 | 说明 |
-|------|----------|--------|------|
-| Java 后端 | 8090 | `SERVER_PORT` | REST API + Swagger |
-| Next.js 前端 | 3010 | `package.json` 脚本 | App Router SSR/CSR |
-| Agent 服务 | 8100 | `AGENT_PORT` | AI 优化循环 + LLM 路由 |
-| MySQL | 3306 | `DB_PORT` | 数据库 |
-
-## 架构原则
-
-- **高内聚低耦合**：后端按业务模块（`stock` / `indicator` / `dashboard` / `screener` / `backtest` / `chart` / `sync` / `system` / `preference`）组织，每个模块自包含 entity/repository/dto/service/controller；模块间通过 DTO 与服务接口协作。
-- **易扩展**：新增页面/接口优先增加 `module/*` 与 `next/src/app/*` + `components/*`；指标新增只需实现 `IndicatorCalculator`。
-- **易维护**：统一 `ApiResponse` 响应、全局异常处理、配置集中化（`.env` + `@ConfigurationProperties`）、前后端 DTO 类型对齐。
-- **AI 集成**：Agent 服务独立部署，通过 REST API 与后端解耦，支持多 LLM 提供商自动降级。
+**[快速開始](#快速開始)** • **[架構概覽](#架構概覽)** • **[文檔導航](#文檔導航)** • **[開發](#開發)** • **[部署](#部署)** • **[License](#license)**
 
 ---
 
-## 快速开始
+## 項目簡介
 
-### 前置依赖
+Trading Workstation 是一個**單機/小團隊自用**的 A 股量化研究工作台，覆蓋從數據採集到 AI 策略優化的完整閉環：
 
-| 依赖 | 版本要求 | 用途 |
-|------|----------|------|
-| JDK | 21+（推荐 Eclipse Temurin / Microsoft OpenJDK 21） | 后端必需 |
-| Node.js | 18+（推荐 20 LTS） | 前端必需 |
-| Python | 3.10+ | 数据同步 + Agent 服务 |
-| MySQL | 8.0+ | 数据库 |
-| Maven | 3.9+ | 后端构建 |
+- **行情採集** — Baostock 日線（3 種復權）+ 540 個指數 + 行業分類，冪等寫入 MySQL
+- **技術指標** — MA/EMA/BOLL/MACD/KDJ/RSI 等，註冊表模式可擴展
+- **條件選股** — 49 字段條件組合篩選，全市場 parallelStream 過濾
+- **策略回測** — 等權調倉 + 滑點 + 漲跌停約束 + 夏普減無風險利率 + 結果自動落庫
+- **行業分析** — 景氣度/輪動/Markov/多模型預測（ARIMA/Holt-Winters/線性回歸）/AutoML/季節性
+- **AI 優化** — 6 階段 AI 循環（分析→生成→驗證→回測→評分→反思），7 個 LLM 供應商按階段性價比路由
 
-### 1. 克隆仓库
+## 快速開始
+
+### 前置依賴
+
+| 依賴 | 版本 | 用途 |
+|------|------|------|
+| JDK | 21+（推薦 Eclipse Temurin / Microsoft OpenJDK 21） | 後端 |
+| Node.js | 18+（推薦 20 LTS） | 前端 |
+| Python | 3.10+ | 數據採集 + Agent 服務 |
+| MySQL | 8.0+ | 數據庫（需提前建庫 `a_stock_baostock`） |
+| Maven | 3.9+ | 後端構建 |
+
+### 3 步驟啟動
 
 ```bash
+# 1. 克隆倉庫
 git clone https://github.com/JackLiKa/TradingWorkstation.git
 cd TradingWorkstation
+
+# 2. 配置環境變量
+cp .env.example .env                    # 後端 + 數據採集共用
+#   編輯 .env，填寫 DB_PASSWORD 等
+cp agent/.env.example agent/.env        # Agent 服務（可選）
+#   編輯 agent/.env，填寫至少一個 LLM API key
+
+# 3. 按順序啟動服務（存在依賴鏈：MySQL → Java → Next → Agent）
 ```
 
-### 2. 配置环境变量
-
-```bash
-# 后端 + 数据同步共用配置
-cp .env.example .env
-# 编辑 .env，填写 DB_PASSWORD 等
-
-# Agent 服务配置
-cp agent/.env.example agent/.env
-# 编辑 agent/.env，填写 DEVIN_API_KEY 或 QODER_PERSONAL_ACCESS_TOKEN
-```
-
-### 3. 创建数据库
-
-```sql
-CREATE DATABASE IF NOT EXISTS a_stock_baostock DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-```
-
-### 4. 数据同步（首次需导入数据）
-
-```bash
-pip install -r ingestion/requirements.txt
-
-# 1. 发现并更新指数清单（可选，首次使用或需要扩展指数时）
-python ingestion/discover_indices.py --sample --output ingestion/index_list.json
-
-# 2. 交互式菜单同步数据
-python ingestion/baostock_ingest.py
-# 选择选项 11（增量更新全部：三种复权 + 指数 + 行业）
-```
-
-### 5. 启动服务
-
-**必须按以下顺序启动**（存在依赖链）：
+**啟動順序**（必須遵守，存在依賴鏈）：
 
 ```
-MySQL → Java 后端 (8090) → Next.js 前端 (3010)
+MySQL → Java 後端 (8090) → Next.js 前端 (3010)
                 ↑
-         Agent 服务 (8100)  ← Agent 依赖后端 REST API
+         Agent 服務 (8100)  ← Agent 依賴後端 REST API
 ```
-
-#### Windows (PowerShell)
 
 ```powershell
-# 设置 JDK 21（每次新终端需执行，或用 fix-java21-system.ps1 永久设置）
-$env:JAVA_HOME = "C:\Users\<你的用户名>\.jdks\ms-21.0.9"
-$env:Path = "$env:JAVA_HOME\bin;$env:Path"
-
-# 1. 启动 Java 后端
-cd java
-.\start.ps1    # 或 mvn spring-boot:run
-
-# 2. 启动 Next.js 前端（新终端）
-cd next
-.\start.ps1    # 或 npm run dev
-
-# 3. 启动 Agent 服务（新终端，可选）
-cd agent
-.\start.ps1    # 或 python -m uvicorn app.main:app --port 8100
+# Windows (PowerShell) — 每個服務目錄下有一鍵腳本 start.ps1
+cd java;  .\start.ps1     # 1. Java 後端（自動加載 .env + JDK21 + 端口檢測）
+cd next;  .\start.ps1     # 2. Next.js 前端（新終端）
+cd agent; .\start.ps1     # 3. Agent 服務（新終端，可選）
 ```
 
-#### macOS / Linux (Bash)
-
 ```bash
+# macOS / Linux (Bash)
 export JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo "/usr/lib/jvm/java-21-openjdk")
 export PATH="$JAVA_HOME/bin:$PATH"
-
-# 1. 启动 Java 后端
-cd java && mvn spring-boot:run
-
-# 2. 启动 Next.js 前端（新终端）
-cd next && npm install --legacy-peer-deps && npm run dev
-
-# 3. 启动 Agent 服务（新终端，可选）
-cd agent && pip install -r requirements.txt
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8100
+cd java  && mvn spring-boot:run                          # 1. Java 後端
+cd next  && npm install --legacy-peer-deps && npm run dev # 2. Next.js 前端
+cd agent && python3 -m uvicorn app.main:app --port 8100   # 3. Agent 服務（可選）
 ```
 
-### 6. 验证启动
+### 驗證啟動
 
 ```bash
-# 后端健康检查
-curl http://localhost:8090/TradingWorkstation/api/system/health
-# 期望：{"success":true,"data":{"connected":true,...}}
-
-# 前端访问
-curl -I http://localhost:3010/TradingWorkstation
-# 期望：HTTP/1.1 200
-
-# Agent 健康检查
-curl http://localhost:8100/api/agent/health
-# 期望：{"provider":"...","available":true,...}
-
-# Swagger 文档
-# 后端：http://localhost:8090/TradingWorkstation/swagger-ui.html
-# Agent：http://localhost:8100/docs
+curl http://localhost:8090/TradingWorkstation/actuator/health   # → {"status":"UP"}
+curl -I http://localhost:3010/TradingWorkstation                # → HTTP/1.1 200
+curl http://localhost:8100/api/agent/health                     # → {"available":true,...}
 ```
 
----
+> **首次使用需導入數據**：`pip install -r ingestion/requirements.txt` → `python ingestion/baostock_ingest.py`（選菜單 11 增量更新全部）。詳見 [`ingestion/README.md`](./ingestion/README.md)。
 
-## 功能一览
+## 架構概覽
 
-### 总览面板（Dashboard）
+4 個自研服務 + 1 個數據庫 + 可選監控棧，後端按業務域拆分為 **12 個模塊**：
 
-- 指标卡片：总记录数、股票数量、最新交易日、平均涨跌幅、最新成交额
-- K 线图：缩放/平移/拖拽/十字线/提示/MA/BOLL/MACD/KDJ/成交量/历史懒加载
-- 最新波动列表（涨幅/跌幅 Top 8，可点击跳转搜索）
-- 运行日志面板
-- 数据库连接状态实时可视化（Topbar 徽章 + 全局状态横幅）
+```
+瀏覽器 → Next.js 前端 (:3010)  ──rewrites──→  Java 後端 (:8090)  ──JPA──→  MySQL (:3306)
+                    │                              ↑
+                    └──rewrites──→  Agent 服務 (:8100)  ──REST──┘
+                                         │
+                                         └──→  LLM 供應商 ×7
+```
 
-### 选股器与回测（Screener + Backtest）
+**後端 12 模塊**（`com.quantization.module.*`）：
 
-- 完整区间与信号筛选（MA/BOLL/MACD/KDJ/RSI/换手率/量比等）
-- 可排序结果表 + 候选详情面板
-- 回测：调仓/持有/手续费/止损/止盈/净值曲线/超额曲线/调仓明细
-- 策略保存/载入/对比
-- CSV 导出
+| 模塊 | 職責 |
+|------|------|
+| `stock` | 行情查詢（26 端點）、指數行情、行業日聚合 |
+| `industry` | 行業景氣度、輪動信號、異常預警 |
+| `forecast` | 預測（ARIMA/Holt-Winters/線性回歸）、Markov、AutoML、季節性 |
+| `indicator` | 指標引擎（註冊表模式，MA/BOLL/MACD/KDJ/RSI…），純計算無持久化 |
+| `dashboard` | 儀表盤聚合（複用 stock/chart） |
+| `chart` | K 線分批加載（120 條/批 + 內嵌指標） |
+| `screener` | 選股器（49 字段條件、parallelStream 過濾） |
+| `backtest` | 回測引擎 + 策略庫（滑點+漲跌停+落庫） |
+| `sync` | ProcessBuilder 編排 ingestion Python 腳本 |
+| `system` | 健康檢查、DB 配置、通知（SMTP+Webhook） |
+| `preference` | 用戶偏好（DB 主存 + 文件降級） |
+| `aicalllog` | AI 調用日誌（agent 回寫，供可視化） |
 
-### AI 策略优化（Agent）
+> 完整架構設計、C4 圖、數據流詳見 [`docs/architecture.md`](./docs/architecture.md)。
 
-- 六阶段 AI 优化循环：市场新闻分析 → 行业分析选股 → 市场分析 → 策略生成 → 回测反思 → Prompt 生成
-- 市场分析注入 540 个指数数据，支持市场形态、市场广度（market breadth）、行业与风格轮动（rotation）综合判断
-- 行業分析注入景氣度指標、資金遷移、輪動預測，輔助 AI 選擇強勢行業
-- 每阶段 Judge AI 评分 + 自动重试
-- 始终基于历史最优策略迭代
-- 工作流图谱可视化 + 系统监控面板
-- 评分趋势图 + 优化历史记录
-- 模型状态卡片（可展開查看詳情、手動檢查）
+## 服務端口表
 
-### 行業分析（Industry Analysis）
+| 服務 | 默認端口 | 前綴 | 配置項 | 說明 |
+|------|----------|------|--------|------|
+| Java 後端 | 8090 | `/TradingWorkstation` | `SERVER_PORT` | REST API + Swagger `/swagger-ui.html` |
+| Next.js 前端 | 3010 | `basePath: /TradingWorkstation` | `package.json` | App Router SSR/CSR |
+| Agent 服務 | 8100 | `/api/agent` | `AGENT_PORT` | AI 優化循環 + LLM 路由，Swagger `/docs` |
+| MySQL | 3306 | — | `DB_PORT` | 庫名 `a_stock_baostock` |
+| Prometheus | 9090 | — | docker-compose | 可選監控（scrape agent /metrics） |
+| Grafana | 3000 | — | docker-compose | 可選儀表盤 |
 
-獨立的 `/industry` 頁面，提供 22 個視圖、3 個分組的深度行業分析：
+> **⚠️ context-path 契約鏈**：`/TradingWorkstation` 前綴必須在三處同步——後端 `application.yml`、前端 `next.config.js` basePath+rewrites、agent `BACKEND_API_URL`。詳見 [`docs/architecture.md`](./docs/architecture.md)。
 
-**即時概覽（4 個視圖）**
-- 行業熱力圖（Treemap，按漲跌幅著色）
-- 資金流向（Top 25 柱狀圖，億元單位）
-- 漲跌家數（堆疊柱狀圖）
-- 景氣度（4 維度綜合評分 + 5 級等級 + 排行表）
+## 技術棧一覽
 
-**歷史趨勢（4 個視圖）**
-- 行業走勢（雙軸走勢 + 大盤疊加 + 新聞標記）
-- 輪動信號（回溯天數切換 + 多日趨勢對比 + 領漲/滯後對比）
-- 資金趨勢（多日成交額趨勢線 + 淨流入/流出摘要）
-- 景氣度趨勢（多日景氣度對比 + 上升/下降排行）
+| 層 | 選型 |
+|----|------|
+| 後端 | Java 21、Spring Boot 3.3.4、Spring Data JPA (Hibernate 6.5)、HikariCP、Caffeine、springdoc-openapi、Lombok、Spring Mail |
+| 前端 | Next.js 15.1.9 (App Router)、React 19、TypeScript 5.6、Tailwind CSS、shadcn/ui、ECharts 5.5、SWR、Zustand |
+| AI Agent | Python 3.10+、FastAPI、Uvicorn、LangGraph 風格優化循環、多模型 LLM 路由（7 供應商）、Milvus Lite (RAG)、Prometheus |
+| 數據庫 | MySQL 8.0+（8 張表：stock_daily / index_daily / index_metadata / stock_industry / industry_daily / backtest_strategy / user_preference / ai_call_log） |
+| 數據採集 | Python Baostock 腳本（三模塊拆分：fetch + write + ingest），Java SyncService 通過 ProcessBuilder 編排 |
+| 通知 | Spring Mail (SMTP) + Webhook（景氣度預警，異步推送） |
 
-**進階分析（14 個視圖）**
-- 相關性矩陣（Pearson 熱力圖 + 高相關行業對 + 聚類）
-- 資金遷移（桑基圖 + 流入/流出排行）
-- 景氣度 vs 大盤（雙軸疊加 + 相關係數 + 解讀建議）
-- 輪動預測（動量+資金+趨勢綜合評分 + 信心度 + Top 5 列表）
-- 預測回測（命中率 + 超額收益走勢 + 累計命中率 + 明細表）
-- AutoML 調參（15 組合搜尋 + 熱力圖 + 散點圖 + 明細表）
-- 景氣度熱力圖（多日×多行業矩陣 + 色階）
-- 景氣度預警（突變通知 + 等級躍遷 + 郵件/Webhook 推送）
-- 景氣度週期（季節性強度排行 + 月度/星期模式 + 最佳/最差月份）
-- Markov 轉移（5×5 等級轉移矩陣 + 下一日概率 + 穩態分布）
-- 多模型預測（ARIMA + Holt-Winters + 線性回歸 + 共識趨勢 + 走勢圖）
-- 預測回測（MAE + 方向準確率 + 等級命中率 + 超額收益）
-- 輪動 Markov（3×3 轉移矩陣 + 長期領漲概率排行 + 穩態分布）
+## 文檔導航
 
-**景氣度預測模型矩陣**
-- Markov 狀態轉移（等級轉換概率 + 穩態分布）
-- ARIMA（AR(2) + 一階差分，捕捉自相關性）
-- Holt-Winters（三重指數平滑，捕捉趨勢 + 季節性）
-- 線性回歸（OLS 趨勢預測）
-- 輪動預測（動量+資金+趨勢綜合評分）
-- 季節性分析（月度/星期模式）
-- AutoML 自動調參（最佳參數搜尋）
-- 預測回測驗證（MAE + 方向準確率 + 等級命中率 + 超額收益）
+### 架構與設計
 
-**通知服務**
-- 郵件推送（SMTP，景氣度預警明細）
-- Webhook 推送（JSON payload，可接企業微信/釘釘/Slack）
-- 異步發送，不阻塞調用方
+- [`docs/architecture.md`](./docs/architecture.md) — 系統架構與模塊設計（C4 圖、服務拓撲、context-path 契約鏈）
+- [`docs/MODULE_GUIDE.md`](./docs/MODULE_GUIDE.md) — 12 模塊逐一說明（端點、分層、緩存、依賴）
+- [`docs/database.md`](./docs/database.md) — 數據庫 Schema（8 張表、索引、ER 圖）
 
-### 数据同步（Sync）
+### API 與引擎
 
-- Baostock 日线增量/全量拉取写入 `stock_daily` 与 `index_daily`
-- `discover_indices.py` 从 Baostock `query_all_stock` 动态发现并验证指数代码，当前清单含 540 个有效指数（综合 / 规模 / 行业 / 策略 / 成长 / 价值 / 主题 / 基金 / 债券）
-- 指数元数据自动同步至 `index_metadata` 表
-- 三种复权（前复权/后复权/不复权）+ 指数数据 + 行业分类
-- 行業日聚合數據自動生成（`JOIN stock_daily × stock_industry` 按 `(date, industry)` 聚合寫入 `industry_daily`）
-- 前端同步进度可视化 + 取消功能
+- [`docs/api.md`](./docs/api.md) — REST API 參考（後端 51 端點 + Agent 22 端點）
+- [`docs/BACKTEST_ENGINE.md`](./docs/BACKTEST_ENGINE.md) — 回測引擎原理與使用指南
+- [`docs/AGENT_SERVICE.md`](./docs/AGENT_SERVICE.md) — Agent 服務詳解（LLM 路由、優化循環、RAG）
 
-### 系统设置（Settings）
+### 數據與運維
 
-- 数据库配置校验与持久化
-- 用户偏好（默认复权/默认查询条数/指标参数等）
+- [`docs/DATA_INGESTION.md`](./docs/DATA_INGESTION.md) — 數據採集完整指南（含前復權陳舊化對策）
+- [`docs/DEVELOPMENT.md`](./docs/DEVELOPMENT.md) — 開發指南（規範、構建命令、變更清單）
+- [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) — 部署指南（環境變量、Docker Compose、故障排查）
 
----
+### 子模塊 README
 
-## 项目导航
+- [`java/README.md`](./java/README.md) — 後端模塊說明（12 模塊、構建、關鍵設計）
+- [`next/README.md`](./next/README.md) — 前端模塊說明（路由、API 客戶端、ECharts 封裝）
+- [`agent/README.md`](./agent/README.md) — Agent 服務說明（6 階段、7 供應商、多窗口評分）
+- [`ingestion/README.md`](./ingestion/README.md) — 數據採集說明（三模塊、CLI、進度協議）
 
-详细的模块说明、启动流程、常见问题请参阅 [`AGENTS.md`](./AGENTS.md)。
+### 其他
 
-架构设计、API 文档、数据库文档请参阅 [`docs/`](./docs/)：
+- [`AGENTS.md`](./AGENTS.md) — 項目導航與開發規範（AI 協作指南）
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — 貢獻指南
+- [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) — 行為準則
+- [`SECURITY.md`](./SECURITY.md) — 安全政策
 
-- [`docs/architecture.md`](./docs/architecture.md) — 系统架构与模块设计
-- [`docs/api.md`](./docs/api.md) — REST API 接口文档
-- [`docs/database.md`](./docs/database.md) — 数据库表结构与索引设计
+## 開發
 
-各子模块 README：
+構建命令、代碼規範、變更清單（改一處要同步哪些地方）詳見 [`docs/DEVELOPMENT.md`](./docs/DEVELOPMENT.md)。
 
-- [`java/README.md`](./java/README.md) — 后端模块说明
-- [`next/README.md`](./next/README.md) — 前端模块说明
-- [`agent/README.md`](./agent/README.md) — AI Agent 服务说明
+快速驗證：
 
-## 缓存说明
+```bash
+cd java  && mvn -DskipTests compile          # 後端編譯（需 JDK 21）
+cd next  && npm run build && npm run lint     # 前端構建 + lint
+cd agent && python -m pytest tests/           # Agent 測試（197 個）
+cd java  && mvn test                          # 後端測試（80 個）
+cd next  && npm run test                      # 前端測試（24 個 vitest）
+```
 
-- **后端 Caffeine**：`dashboardSummary`（60s TTL）、`dashboardMetrics`（30s TTL）、`indexMetadata` / `marketBreadth` / `rotationSignal` / `sectorPerformance`（30s TTL）、`industryDailyCache`（行業景氣度/輪動預測/Markov/預測/回測等分析結果，5 分鐘 TTL）。数据同步后等待 TTL 过期或重启后端。
-- **前端 SWR**：默认 `revalidateOnFocus`，可通过 `mutate()` 手动刷新。行業分析視圖 `dedupingInterval` 設為 5 分鐘，避免頻繁重複請求。
+## 部署
 
-## 常见问题
+環境變量、Docker Compose 全棧部署、故障排查詳見 [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md)。
 
-| 问题 | 解决方案 |
-|------|----------|
-| `Port 8090 was already in use` | 终止占用进程：`Stop-Process -Id (Get-NetTCPConnection -LocalPort 8090).OwningProcess -Force` |
-| 前端显示"数据库未连接" | 检查后端是否启动、`.env` 中 `DB_PASSWORD` 是否正确 |
-| 回测超时 | 缩短回测日期范围，或检查 `next.config.js` 中 `proxyTimeout` 配置 |
-| Baostock 登录超时 | 脚本已实现自动重新登录，无需人工干预 |
-| `NoClassDefFoundError` | Maven 本地仓库路径含非 ASCII 字符，改为纯 ASCII 路径 |
+Docker 一鍵啟動：
 
-## 致谢
-
-- [Baostock](http://baostock.com/) — A 股历史数据源
-- [Spring Boot](https://spring.io/projects/spring-boot) — 后端框架
-- [Next.js](https://nextjs.org/) — 前端框架
-- [ECharts](https://echarts.apache.org/) — 图表库
-- [shadcn/ui](https://ui.shadcn.com/) — UI 组件设计
-- [FastAPI](https://fastapi.tiangolo.com/) — Agent 服务框架
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=JackLiKa/TradingWorkstation&type=Date)](https://star-history.com/#JackLiKa/TradingWorkstation&Date)
+```bash
+docker-compose up -d    # mysql + java + next + agent + prometheus + grafana
+```
 
 ## License
 
-本项目基于 [MIT License](LICENSE) 开源，仅供学习和个人使用。
-
-## 相关文档
-
-- [贡献指南](CONTRIBUTING.md)
-- [行为准则](CODE_OF_CONDUCT.md)
-- [安全政策](SECURITY.md)
-- [项目导航与开发规范](AGENTS.md)
+本项目基於 [MIT License](LICENSE) 開源，僅供學習和個人使用。

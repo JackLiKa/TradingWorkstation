@@ -1,118 +1,155 @@
-# Next.js 前端 (Trading Workstation Frontend)
+# Next.js 前端（Trading Workstation Frontend）
 
-> Next.js 15 (App Router) + React 19 + TypeScript 量化交易前端，提供总览面板、选股回测、AI 优化、数据同步等界面。
+> Next.js 15.1.9（App Router）+ React 19 + TypeScript。端口 3010，`basePath: /TradingWorkstation`。
+> 深入文檔：架構 [`docs/architecture.md`](../docs/architecture.md)（含 context-path 契約鏈）、API [`docs/api.md`](../docs/api.md)、開發規範 [`docs/DEVELOPMENT.md`](../docs/DEVELOPMENT.md)。
 
-## 技术栈
+## 技術棧
 
-- **Next.js 15.1.9** (App Router, 混合渲染 SSR/CSR)
-- **React 19** + **TypeScript**
-- **Tailwind CSS** + **shadcn/ui** 组件风格
-- **ECharts** K 线图与净值曲线
-- **SWR** 数据请求缓存与轮询
-- **lucide-react** 图标库
+Next.js 15.1.9 / React 19.0.1 / TypeScript 5.6 / Tailwind 3.4 / ECharts 5.5（echarts-for-react）/ SWR 2.2 / Zustand 5.0 / @tanstack/react-table 8.20 / lucide-react / date-fns / shadcn/ui
 
-## 目录结构
+## 頁面結構（App Router 路由樹）
+
+```
+/TradingWorkstation/                    # 總覽儀表盤（指標卡+K線+波動榜+行情表）
+├── /dashboard                          # （同根頁面，儀表盤）
+├── /screener                           # 選股器 + 回測 + 策略管理（一頁三合一）
+├── /backtest                           # （回測在 screener 頁內）
+├── /industry                           # 行業分析（景氣度/輪動/Markov/預測/季節性/資金流，21 個組件）
+├── /forecast                           # （預測在 industry 頁內）
+├── /agent                              # AI 優化：啟停/工作流圖/監控/供應商選擇
+├── /agent-dashboard                    # AI 可觀測性（評分趨勢、調用鏈，自繪 SVG 圖表）
+├── /sync                               # 數據同步配置與進度
+└── /settings                           # DB 健康檢查與連接配置
+```
+
+## 目錄結構
 
 ```text
-next/
-├── src/
-│   ├── app/                           # App Router 页面
-│   │   ├── layout.tsx                 # 根布局（Sidebar + Topbar + DbStatusBanner）
-│   │   ├── page.tsx                   # 总览面板（Dashboard）
-│   │   ├── screener/page.tsx          # 选股器与回测
-│   │   ├── agent/page.tsx             # AI 策略优化
-│   │   ├── sync/page.tsx              # 数据同步
-│   │   └── settings/page.tsx          # 系统设置
-│   ├── components/
-│   │   ├── layout/                    # Sidebar、Topbar、DbStatusBanner、LoadingOverlay
-│   │   ├── dashboard/                 # Toolbar、MetricCard、MoversList、StockTable、LogPanel
-│   │   ├── screener/                  # ScreenerFilterPanel、ScreenerResultTable、CandidateDetail
-│   │   ├── backtest/                  # BacktestConfigPanel、BacktestStatisticsPanel、StrategyManager
-│   │   ├── agent/                     # AgentModelCard、AgentIterationCard、AgentWorkflowGraph
-│   │   ├── chart/                     # CandlestickChart、BacktestCurveChart
-│   │   └── ui/                        # Button、Card、Badge、Skeleton、ErrorState、ProgressIndicator
-│   ├── lib/
-│   │   ├── api/                       # API 客户端（apiFetch、apiPost）+ 类型定义
-│   │   ├── hooks/                     # useDbHealth 等自定义 Hook
-│   │   └── utils.ts                   # 工具函数
-│   └── styles/
-├── public/
-├── next.config.js                     # basePath + rewrites + proxyTimeout
-├── .env.local                         # NEXT_PUBLIC_API_BASE（不入库）
-├── package.json
-└── start.ps1                          # Windows 启动脚本
+src/
+├── app/                          # App Router 路由頁
+│   ├── layout.tsx                # 根佈局（暗色主題 + Sidebar + Topbar + LoadingOverlay）
+│   ├── page.tsx                  # 總覽儀表盤
+│   ├── industry/page.tsx         # 行業分析（21 個組件）
+│   ├── screener/page.tsx         # 選股器 + 回測 + 策略管理
+│   ├── agent/page.tsx            # AI 優化控制台
+│   ├── agent-dashboard/page.tsx  # AI 可觀測性
+│   ├── sync/page.tsx             # 數據同步
+│   ├── settings/page.tsx         # DB 配置
+│   └── globals.css               # 全局樣式（Tailwind + 暗色主題）
+├── components/                   # 按頁面域分組
+│   ├── agent/                    # 10 個（工作流圖/監控/供應商選擇…）
+│   ├── backtest/                 # 5 個（淨值曲線/調倉明細/策略對比…）
+│   ├── chart/                    # 2 個（K 線圖/技術指標）
+│   ├── dashboard/                # 6 個（指標卡/波動榜/行情表…）
+│   ├── industry/                 # 21 個（景氣度/輪動/Markov/預測/資金流…）
+│   ├── screener/                 # 4 個（條件面板/結果表…）
+│   ├── layout/                   # 5 個（Sidebar/Topbar/DbStatusBanner/LoadingOverlay/AppProviders）
+│   └── ui/                       # 9 個（shadcn/ui 通用組件）
+├── hooks/
+│   └── useEChartsOption.ts       # ECharts 共用封裝 hook
+└── lib/
+    ├── api/
+    │   ├── client.ts             # fetch 封裝：API_BASE + 統一 ApiError
+    │   ├── types.ts              # 63 個類型，手工鏡像後端 DTO
+    │   ├── index.ts              # 45 個後端 API 函數
+    │   ├── agent.ts              # 20 個 agent API 函數（直連 :8100）
+    │   └── __tests__/api.test.ts # vitest 測試（24 個）
+    ├── hooks/
+    │   ├── useDbHealth.ts        # DB 健康狀態 hook
+    │   └── useDelayedRender.ts   # 延遲渲染 hook
+    └── store/
+        └── loading.ts            # Zustand 全局加載態
 ```
 
-## 环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `NEXT_PUBLIC_API_BASE` | /TradingWorkstation | 客户端 API 请求前缀（与 basePath 一致） |
-| `BACKEND_HOST` | http://localhost:8090 | next.config.js rewrites 代理目标 |
-
-`.env.local` 示例：
-
-```
-NEXT_PUBLIC_API_BASE=/TradingWorkstation
-```
-
-> **注意**：`NEXT_PUBLIC_API_BASE` 必须是 `/TradingWorkstation`（不是 `http://localhost:8090`），否则客户端 fetch 会绕过 rewrites 代理直接请求后端，导致 404。
-
-## 安装与运行
+## 構建
 
 ```bash
-# 安装依赖（必须用 --legacy-peer-deps，因 SWR peer dep 限制）
-npm install --legacy-peer-deps
-
-# 开发模式
-npm run dev
-
-# 生产构建
-npm run build && npm start
+npm install --legacy-peer-deps   # 必須帶 flag（SWR peer dep 限制）
+npm run dev                      # 開發模式 :3010
+npm run build                    # 生產構建
+npm run lint                     # ESLint
+npm run typecheck                # tsc --noEmit 類型檢查
+npm run test                     # vitest（24 個測試）
+npm run test:watch               # vitest watch 模式
 ```
 
-默认端口 3010，访问地址：`http://localhost:3010/TradingWorkstation`
+## API 客戶端
 
-## 关键配置
+`src/lib/api/` 結構：
 
-### basePath + rewrites
+| 文件 | 職責 |
+|------|------|
+| `client.ts` | fetch 封裝：`apiFetch`/`apiPost`/`apiPut`/`apiDelete`，統一 `ApiError`（HTTP_*/後端 code/TIMEOUT） |
+| `types.ts` | 63 個 TypeScript 類型，**與後端 DTO 字段逐一對應**（手工維護） |
+| `index.ts` | 45 個後端 API 函數（按模塊分組：dashboard/stock/chart/screener/backtest/sync/system/preference） |
+| `agent.ts` | 20 個 agent API 函數（通過 next rewrites 反代到 :8100） |
 
-```javascript
-// next.config.js
-{
-  basePath: '/TradingWorkstation',
-  experimental: { proxyTimeout: 180000 },  // 回测等慢操作需要长超时
-  async rewrites() {
-    return [
-      { source: '/api/:path*', destination: 'http://localhost:8090/TradingWorkstation/api/:path*' },
-    ];
-  },
-}
+**請求鏈路**（重要）：
+
+```
+瀏覽器 → :3010/TradingWorkstation/api/*（basePath）
+       → next.config.js rewrites → ${BACKEND_HOST}/TradingWorkstation/api/*
+瀏覽器 → :3010/TradingWorkstation/agent-api/*（basePath）
+       → next.config.js rewrites → ${AGENT_HOST}/api/agent/*
 ```
 
-- `basePath` 使所有页面带 `/TradingWorkstation` 前缀
-- `rewrites` 将 `/TradingWorkstation/api/*` 代理到后端
-- `proxyTimeout` 解决回测等慢操作超时问题（默认 30 秒不够）
+- `BACKEND_HOST` **不帶**前綴（默認 `http://localhost:8090`），前綴由 rewrite destination 補
+- `AGENT_HOST` **不帶**前綴（默認 `http://localhost:8100`），rewrite destination 自動補 `/api/agent/`
+- `proxyTimeout: 180s` — 為回測等慢請求設置
+- agent API 走 next 反代統一入口，避免瀏覽器直連 :8100 的 CORS 問題
 
-### 数据库状态可视化
+**開發約定**：新端點 → `types.ts` 加類型 → `index.ts`/`agent.ts` 加函數 → 頁面用 SWR 消費；勿在組件裡裸寫 fetch。
 
-- **Topbar**：实时显示数据库连接状态徽章（连接中/已连接/未连接/后端不可达）
-- **DbStatusBanner**：全局状态横幅，未连接时醒目显示 + 重试按钮
-- **useDbHealth Hook**：共享 SWR 缓存，15 秒轮询 `/api/system/health`
+## ECharts 封裝
 
-## 页面说明
+`src/hooks/useEChartsOption.ts` — 統一處理 ECharts 圖表的常見關切點：
 
-| 页面 | 路由 | 功能 |
-|------|------|------|
-| 总览面板 | `/` | 指标卡片、K 线图、波动列表、搜索结果 |
-| 选股回测 | `/screener` | 选股筛选、回测、策略管理 |
-| AI 优化 | `/agent` | AI 策略优化循环、工作流图谱、历史记录 |
-| 数据同步 | `/sync` | Baostock 数据拉取进度 |
-| 系统设置 | `/settings` | 数据库配置、用户偏好 |
+- **主題色板**：`DARK_THEME` 常量（暗色主題，軸線/標籤/分割線/tooltip 配色）
+- **tooltip 統一格式化**：`darkTooltipBase` / `darkLegendBase` 基礎配置（可被 builderFn 覆蓋）
+- **空態處理**：無數據時返回「暫無數據」佔位 option（`EMPTY_OPTION`）
+- **loading 狀態**：外部傳入，hook 透明傳遞
 
-## 注意事项
+用法：
 
-- 安装依赖必须用 `--legacy-peer-deps`
-- 修改 `next.config.js` 后需重启 dev server
-- 修改 `.env.local` 后需重启 dev server（`NEXT_PUBLIC_*` 是编译时注入）
-- 如果遇到 webpack chunk 404，删除 `.next` 目录后重启
+```tsx
+const { option, loading, isEmpty } = useEChartsOption(rawData, (data) => ({
+  xAxis: { type: 'category', data: data.map(d => d.date) },
+  series: [{ type: 'line', data: data.map(d => d.value) }],
+}));
+```
+
+## 狀態管理
+
+`src/lib/store/loading.ts` — Zustand 全局加載態，管理全屏 LoadingOverlay 的顯示/隱藏：
+
+```ts
+const { start, stop } = useLoadingStore();
+start('回測中...');  // 顯示全屏遮罩
+stop();              // 隱藏
+```
+
+## 樣式
+
+- **Tailwind CSS 3.4** — 暗色主題（`<html lang="zh-CN" className="dark">`）
+- **shadcn/ui** — 通用 UI 組件在 `src/components/ui/`（9 個：Button/Card/Dialog/Input/Select/Table/Tabs/Tooltip/Badge）
+- 全局樣式在 `src/app/globals.css`
+
+## 類型同步
+
+`src/lib/api/types.ts` 中的 63 個類型**手工鏡像後端 DTO**，改後端 DTO 必須同步此處。
+
+規劃中的 openapi-typescript 管線：
+
+```bash
+npm run gen:api    # openapi-typescript http://localhost:8090/TradingWorkstation/v3/api-docs -o src/lib/api/generated.d.ts
+```
+
+生成 `generated.d.ts` 後可逐步替換手寫類型以消滅契約 drift（目前尚未啟用，types.ts 仍為權威）。
+
+## 測試
+
+**24 個 vitest 測試**（`src/lib/api/__tests__/api.test.ts`），覆蓋 lib/api 層：
+
+```bash
+npm run test    # Test Files 1 passed, Tests 24 passed
+```

@@ -1,219 +1,208 @@
-# AI Agent 服务 (Trading Workstation Agent)
+# AI Agent 服務（Trading Workstation Agent）
 
-> FastAPI + LangGraph 风格优化循环的 AI 策略优化服务，通过多模型 LLM 路由自动生成、回测、反思、改进量化交易策略。
+> FastAPI + LangGraph 風格優化循環，端口 8100，API 前綴 `/api/agent`。
+> 深入文檔：[`docs/AGENT_SERVICE.md`](../docs/AGENT_SERVICE.md)、API [`docs/api.md`](../docs/api.md)、開發規範 [`docs/DEVELOPMENT.md`](../docs/DEVELOPMENT.md)。
 
-## 技术栈
+## 技術棧
 
-- **Python 3.10+**
-- **FastAPI** + **Uvicorn** Web 服务
-- **LangGraph 风格** 六阶段优化循环
-- **多模型 LLM 路由**：支持 7 个供應商（DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin），按階段性價比自動路由 + 自動降級
-- **RAG 經驗記憶**：Milvus Lite + BGE 中文 embedding，策略生成前檢索歷史經驗
-- **Prometheus 指標**：`/metrics` 端點暴露優化/LLM/RAG/後端全鏈路指標
-- **速率限制**：令牌桶算法，防止高頻迭代壓垮後端 API
-- **HTTP 客户端** 调用后端 REST API（选股、回测、策略保存）
+Python 3.10+（<3.15）/ FastAPI / Uvicorn / Pydantic Settings / HTTPX / Milvus Lite (RAG) / sentence-transformers / Prometheus 自定義指標 / LangGraph 風格 async 串聯循環
 
-## 多模型 LLM 路由（2026 性價比最優配置）
+## 架構概覽
 
-每個 AI 節點按需求特點路由到最適合的模型：
+Agent 通過 6 個 AI 階段 + 1 個後端回測步驟構成閉環優化，每輪迭代自動改進選股策略：
 
-| 節點 | 默認供應商 | 理由 | 價格($/1M) |
-|------|-----------|------|-----------|
-| AI 0 行情新聞 | Qwen3.6 | 中文金融文本最佳 | 0.33/1.95 |
-| AI 0.5 行業分析 | GLM-5.2 | JSON 結構化最穩定 | 0.55/1.85 |
-| AI 1 行情分析 | DeepSeek V4-Flash | 性價比最高 | 0.14/0.28 |
-| AI 2 策略生成 ★ | DeepSeek V4-Pro | 推理最強 + JSON strict | 0.44/0.87 |
-| AI 3 回測反思 | DeepSeek V4-Pro | 深度推理分析 | 0.44/0.87 |
-| AI 4 提示詞 | GLM-4-Flash | 免費，短文本足夠 | 0/0 |
-| Judge 評委 | GLM-4-Flash | 免費 + 快速 + 一致 | 0/0 |
-| Monitor 監控 | GLM-4-Flash | 免費 | 0/0 |
+```
+market_news → industry_analysis → market_analysis → strategy_generation
+                                                          ↓
+              prompt_generation ← backtest_reflection ← 後端回測 + 評分
+                      ↓
+                下一輪迭代
+```
 
-用戶可通過前端或 API 為每個階段獨立選擇供應商，支持自動降級。
+- 每個 AI 階段輸出經 **JudgeAI** 把關（pass threshold = 60）
+- 回測由 Java 後端執行（REST 調用），非 AI 步驟
+- 評分超越歷史最佳時自動落庫（`backtest_strategy` 表）
+- 未超越時下一輪回到歷史最優策略重新出發
 
-## 目录结构
+## 六個 AI 階段
+
+| 階段 | 代號 | 職責 |
+|------|------|------|
+| 行情新聞分析 | `market_news` | 抓取財經新聞，AI 摘要市場情緒與事件 |
+| 行業分析 | `industry_analysis` | 基於新聞篩選利好行業 + 候選股票池 |
+| 行情分析 | `market_analysis` | 結合後端市場概覽，AI 分析當前市場狀態 |
+| 策略生成 | `strategy_generation` | 生成 JSON 選股條件（criteria），核心產出 |
+| 回測反思 | `backtest_reflection` | 根據回測統計反思策略優劣，提出改進方向 |
+| 提示詞生成 | `prompt_generation` | 生成下一輪策略生成的改進提示詞 |
+
+## 七個 LLM 供應商
+
+| Provider ID | 模型 | 特點 |
+|-------------|------|------|
+| `deepseek-pro` | deepseek-chat | 付費，能力強 |
+| `deepseek-flash` | deepseek-chat（flash 模式） | 付費，速度快 |
+| `glm-5.2` | glm-5.2 | 智譜免費額度 |
+| `glm-flash` | glm-4-flash | 智譜免費，JSON 穩定（備用首選） |
+| `qwen` | qwen-turbo | 阿里通義 |
+| `qoder` | qoder | Qoder 平台 |
+| `devin` | devin | Devin API |
+
+**降級鏈**：優先免費/低成本供應商，失敗時按鏈降級。每個階段可獨立配置 `stage_providers`。
+
+## 多窗口評分
+
+啟用 `multi_window_backtest=true` 時，對 3 個時間窗口分別回測取加權平均：
+
+| 窗口 | 權重 |
+|------|------|
+| 90 天 | 0.5 |
+| 180 天 | 0.3 |
+| 365 天 | 0.2 |
+
+- 加權平均分用於迭代比較
+- **365 天窗口的完整回測結果**用於反思和落庫（主窗口）
+- 降低單一窗口隨機性，評分更穩定
+
+**綜合評分公式**：return × 0.4 + drawdown × 0.3 + Sharpe × 0.3（`scoring.py:compute_composite_score`）
+
+## 無進展終止
+
+- 每輪 `Δscore = 本輪評分 - 歷史最佳`
+- `Δscore < 1.0` 視為「無實質進展」，`stagnant_count += 1`
+- `max_stagnant_iterations > 0` 且 `stagnant_count >= max_stagnant_iterations` 時自動停止
+- `max_stagnant_iterations=0`（默認）= 不自動停止，持續運行直到用戶手動停止
+
+## JSON 失敗保護
+
+策略生成階段期望 JSON 輸出，解析失敗時分級處理（防止空轉燒 token）：
+
+| 連續失敗次數 | 行為 |
+|--------------|------|
+| 1-2 | 復用當前 criteria 繼續循環 |
+| ≥3 | 切換備用供應商重試一次（優先 glm-flash） |
+| 備用也失敗 | 暫停 60 秒後繼續 |
+| ≥5 | 停止優化循環 |
+
+所有失敗記錄到 `error_store` 供監控。
+
+## 目錄結構
 
 ```text
 agent/
 ├── app/
-│   ├── main.py                    # FastAPI 入口
-│   ├── core/
-│   │   ├── config.py              # 統一配置管理（分層 + 驗證）
-│   │   ├── providers.py           # LLM 供應商註冊表 + 階段路由
-│   │   ├── llm_client.py          # LLM 客戶端（多模型路由 + 降級）
-│   │   ├── metrics.py             # Prometheus 指標
-│   │   ├── rate_limiter.py        # 令牌桶速率限制器
-│   │   ├── logging.py             # 日誌配置（文件輪轉 + 敏感信息過濾）
-│   │   └── model_checker.py       # 模型可用性检查
-│   ├── agents/
-│   │   ├── optimizer.py           # 优化循环主逻辑
-│   │   ├── state.py               # 优化器状态（持久化 + 內存截斷）
-│   │   ├── judge.py               # Judge AI 评分（多維度 rubric）
-│   │   ├── monitor.py             # 系统监控
-│   │   ├── monitor_ai.py          # AI 诊断监控
-│   │   ├── charter.py             # Agent 憲章（共享身份/職責/約束）
-│   │   ├── few_shot.py            # 少樣本提示示例
-│   │   ├── scoring.py             # 综合评分计算
-│   │   └── stages/                # 六阶段 AI 节点
-│   │       ├── base.py            # 阶段基类（含供應商路由 + JSON mode）
-│   │       ├── market_news.py     # 阶段 1：市场新闻分析
-│   │       ├── industry_analysis.py  # 阶段 2：行业分析与选股
-│   │       ├── market_analysis.py    # 阶段 3：市场分析
-│   │       ├── strategy_generation.py  # 阶段 4：策略生成
-│   │       ├── backtest_reflection.py  # 阶段 5：回测反思
-│   │       └── prompt_generation.py    # 阶段 6：Prompt 生成
+│   ├── main.py                    # FastAPI 入口 + lifespan 初始化
 │   ├── api/
-│   │   └── routes.py              # API 路由（含 /metrics + /providers）
-│   └── services/
-│       ├── backend_client.py      # 后端 REST API 客户端（連接池 + 重試 + 速率限制 + 景氣度/輪動預測/資金遷移）
-│       ├── experience_store.py    # RAG 經驗存儲/檢索
-│       ├── vector_store.py        # Milvus Lite 向量數據庫
-│       └── market_data_client.py  # 市场数据客户端（含景氣度/輪動預測格式化）
-├── tests/                         # pytest 測試套件（173 個測試）
+│   │   └── routes.py              # 22 個 API 端點
+│   ├── core/
+│   │   ├── config.py              # Pydantic Settings（從 .env 讀取）
+│   │   ├── llm_client.py          # LLM 客戶端（7 供應商 + 降級鏈）
+│   │   ├── providers.py           # 供應商註冊與默認分配
+│   │   ├── rate_limiter.py        # 令牌桶限流（backtest/screener/read）
+│   │   ├── metrics.py             # Prometheus 自定義指標
+│   │   └── logging.py             # 結構化日誌
+│   ├── agents/
+│   │   ├── optimizer.py           # 主優化循環（run_optimization_loop）
+│   │   ├── judge.py               # JudgeAI（pass_threshold=60）
+│   │   ├── scoring.py             # compute_composite_score
+│   │   ├── safety.py              # JSON 安全檢查 + 輸出消毒
+│   │   ├── state.py               # OptimizerState + checkpoint 恢復
+│   │   ├── charter.py             # 系統人設/charter 文本
+│   │   ├── few_shot.py            # few-shot 示例
+│   │   ├── monitor.py             # 節點監控（run_id/耗時/評分）
+│   │   └── stages/                # 6 個 AI 階段實現
+│   │       ├── market_news.py
+│   │       ├── industry_analysis.py
+│   │       ├── market_analysis.py
+│   │       ├── strategy_generation.py
+│   │       ├── backtest_reflection.py
+│   │       └── prompt_generation.py
+│   ├── services/
+│   │   ├── backend_client.py      # 調用 Java 後端 REST API
+│   │   ├── market_data_client.py  # 市場數據客戶端
+│   │   ├── vector_store.py        # Milvus Lite 向量庫（RAG）
+│   │   ├── experience_store.py    # RAG 經驗存取
+│   │   ├── error_store.py         # 錯誤記錄（供監控）
+│   │   └── model_checker.py       # 模型可用性檢查
+│   └── utils/
+│       └── json_extractor.py      # JSON 提取工具
+├── tests/                         # 197 個 pytest 測試
+├── data/                          # checkpoint + Milvus 數據
 ├── requirements.txt
-├── requirements-dev.txt           # 測試依賴
-├── pytest.ini
-├── .env.example                   # 环境变量模板
-└── start.ps1                      # Windows 启动脚本
+└── .env.example
 ```
 
-## 优化循环流程
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    AI 优化循环                            │
-│                                                          │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐            │
-│  │ 1.市场新闻 │→│ 2.行业分析 │→│ 3.市场分析 │            │
-│  │   分析    │   │   选股    │   │          │            │
-│  └────┬─────┘   └────┬─────┘   └────┬─────┘            │
-│       │Judge AI     │Judge AI     │Judge AI            │
-│       ↓             ↓             ↓                    │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐            │
-│  │ 4.策略生成 │→│ 5.回测反思 │→│ 6.Prompt  │            │
-│  │          │   │          │   │   生成   │            │
-│  └────┬─────┘   └────┬─────┘   └────┬─────┘            │
-│       │Judge AI     │Judge AI     │Judge AI            │
-│       ↓             ↓             ↓                    │
-│  ┌──────────────────────────────────────┐              │
-│  │  评分 > 历史最优？ → 更新 best_criteria │              │
-│  │  保存策略到后端数据库                  │              │
-│  └──────────────────────────────────────┘              │
-│                       ↓                                 │
-│              下一轮（基于历史最优）                       │
-└─────────────────────────────────────────────────────────┘
-```
-
-**关键策略**：每轮迭代始终基于历史最优策略（`best_criteria` + `best_config`），而非上一轮的结果。只有当新一轮评分严格高于 `best_score` 时才更新基准。
-
-## 环境变量
-
-从 `agent/.env` 读取：
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `DEVIN_API_KEY` | (空) | Devin (Cognition) API Key |
-| `QODER_PERSONAL_ACCESS_TOKEN` | (空) | Qoder Personal Access Token |
-| `BACKEND_API_URL` | http://localhost:8090/TradingWorkstation | 后端 API 地址 |
-| `AGENT_PORT` | 8100 | Agent 服务端口 |
-| `OPTIMIZATION_INTERVAL` | 5 | 迭代间隔（秒） |
-| `MAX_ITERATIONS` | 0 | 最大迭代次数（0=无限制） |
-| `MODEL_CHECK_INTERVAL` | 300 | 模型检查间隔（秒） |
-
-> 至少配置一个 LLM API Key（`DEVIN_API_KEY` 或 `QODER_PERSONAL_ACCESS_TOKEN`），否则 AI 优化功能不可用。
-
-## 安装与运行
+## 構建與運行
 
 ```bash
-# 安装依赖
+# 安裝依賴
 pip install -r requirements.txt
 
-# 配置环境变量
-cp .env.example .env
-# 编辑 .env，填写 API Key
+# 啟動（開發）
+python -m uvicorn app.main:app --port 8100 --reload
 
-# 启动服务
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8100
-
-# 或用启动脚本（Windows）
-.\start.ps1
+# 或用啟動腳本
+.\start.ps1    # Windows
 ```
 
-## API 端点
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/agent/health` | GET | 模型可用性检查 |
-| `/api/agent/status` | GET | 优化器当前状态 |
-| `/api/agent/history` | GET | 优化历史记录 |
-| `/api/agent/criteria` | GET | 当前选股条件 |
-| `/api/agent/criteria` | POST | 更新选股条件 |
-| `/api/agent/config` | POST | 更新回測配置（含日期區間校驗） |
-| `/api/agent/data-range` | GET | 獲取數據庫日期覆蓋範圍（最早+最新交易日） |
-| `/api/agent/monitor` | GET | 系统监控数据 |
-| `/api/agent/start` | POST | 启动优化循环（可攜帶自定義 config，含日期校驗） |
-| `/api/agent/stop` | POST | 停止优化循环 |
-| `/api/agent/check-model` | POST | 手动触发模型检查 |
-| `/api/agent/providers` | GET | 可用 LLM 供應商列表 |
-| `/api/agent/providers/stage` | POST | 設置某階段供應商偏好 |
-| `/api/agent/metrics` | GET | Prometheus 指標端點 |
-
-### 手動調整回測日期區間
-
-用戶可通過前端 UI 或 API 手動指定回測的 `startDate` 和 `endDate`，系統會自動校驗日期是否在數據庫覆蓋範圍內：
+驗證：
 
 ```bash
-# 獲取數據庫日期範圍
-curl http://localhost:8100/api/agent/data-range
-# 返回: {"earliestTradeDate":"2021-01-04","latestTradeDate":"2026-08-20"}
-
-# 啟動優化時指定回測日期區間
-curl -X POST http://localhost:8100/api/agent/start \
-  -H "Content-Type: application/json" \
-  -d '{"config":{"startDate":"2024-06-01","endDate":"2026-08-20","maxPositions":5}}'
-
-# 運行中更新回測配置（下一輪迭代生效）
-curl -X POST http://localhost:8100/api/agent/config \
-  -H "Content-Type: application/json" \
-  -d '{"config":{"startDate":"2024-06-01","endDate":"2026-08-20","rebalanceInterval":10}}'
+curl http://localhost:8100/api/agent/health     # → {"available":true,...}
+curl http://localhost:8100/docs                  # Swagger UI
+curl http://localhost:8100/api/agent/metrics     # Prometheus 指標
 ```
 
-日期校驗規則：
-- `startDate` 不能早於數據庫最早交易日
-- `endDate` 不能晚於數據庫最新交易日
-- `startDate` 不能晚於 `endDate`
-- 不符合時返回 HTTP 400 + 錯誤消息
+## 配置
 
-Swagger 文档：`http://localhost:8100/docs`
+`agent/.env`（從 `.env.example` 複製）：
 
-## 评分机制
+| 配置組 | 關鍵項 | 默認 | 說明 |
+|--------|--------|------|------|
+| 後端 | `BACKEND_API_URL` | `http://localhost:8090/TradingWorkstation` | **必須帶 context-path** |
+| 服務 | `AGENT_PORT` | 8100 | |
+| LLM Keys | `DEEPSEEK_API_KEY`/`GLM_API_KEY`/`QWEN_API_KEY`/`QODER_PERSONAL_ACCESS_TOKEN`/`DEVIN_API_KEY` | — | 至少配一個 |
+| 優化 | `OPTIMIZATION_INTERVAL` | 5 | 輪間隔秒數 |
+| 優化 | `MAX_ITERATIONS` | 0 | 0=不限 |
+| 優化 | `MAX_STAGNANT_ITERATIONS` | 0 | 0=不自動停 |
+| 優化 | `MULTI_WINDOW_BACKTEST` | false | true=啟用多窗口評分 |
+| 限流 | `RATE_LIMIT_BACKTEST_*`/`RATE_LIMIT_SCREENER_*`/`RATE_LIMIT_READ_*` | — | 令牌桶限流 |
+| RAG | `RAG_ENABLED`/`EMBEDDING_MODEL` | true/BAAI/bge-small-zh | Milvus Lite + sentence-transformers |
+| 監控 | `ENABLE_METRICS`/`LOG_LEVEL`/`ENVIRONMENT` | true/INFO/development | |
 
-综合评分（`compute_composite_score`）基于回测统计指标：
+## API 端點
 
-- 总收益率（权重高）
-- 夏普比率
-- 最大回撤（负向）
-- 超额收益
+完整 22 端點見 [`docs/api.md`](../docs/api.md)，核心端點：
 
-评分越高策略越优。历史最优策略从后端数据库加载，确保重启后不丢失。
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| `POST` | `/api/agent/start` | **啟動優化循環**（含可選 config 覆蓋） |
+| `POST` | `/api/agent/stop` | 停止優化循環 |
+| `GET` | `/api/agent/status` | 當前狀態（運行中/迭代數/最佳評分） |
+| `GET` | `/api/agent/history` | 歷史迭代記錄 |
+| `GET` | `/api/agent/criteria` | 當前選股條件 |
+| `GET` | `/api/agent/config` | 當前回測配置 |
+| `GET` | `/api/agent/metrics` | Prometheus 指標 |
+| `GET` | `/api/agent/health` | 健康檢查（含模型可用性） |
+| `GET` | `/api/agent/providers` | 供應商列表與狀態 |
+| `GET` | `/api/agent/monitoring` | 監控數據（run_id/節點耗時/評分序列） |
 
-## 行業數據注入
+> **⚠️ 端點名稱**：啟動優化的端點是 `POST /api/agent/start`（非 `/optimize`）。
 
-Agent 策略生成階段（AI 2）接收以下行業分析上下文，輔助 AI 選擇強勢行業：
+## 狀態行為
 
-| 數據源 | API | 用途 |
-|--------|-----|------|
-| 行業景氣度 | `/stock/industry-prosperity` | 4 維度綜合評分 + 5 級等級，選擇景氣度高的行業 |
-| 資金遷移 | `/stock/industry-capital-migration` | 桑基圖資金流向，參考資金流入行業 |
-| 輪動預測 | `/stock/rotation-prediction` | 動量+資金+趨勢綜合評分，優先預測領漲行業 |
+- **啟動來源**：優先從後端 DB 讀取評分最高的已保存策略作為 `f0`；無歷史策略時用默認參數
+- **崩潰恢復**：有 checkpoint 時恢復迭代數/最佳評分/reflection/next_prompt
+- **用戶配置優先**：`/start` 時手動設置的 config 字段優先保留，不被 checkpoint/DB 覆蓋
+- **內存控制**：最多保留 100 輪迭代記錄在內存（`MAX_IN_MEMORY_ITERATIONS`）
+- **checkpoint**：每輪結束寫本地文件，崩潰後可恢復
 
-Prompt 中的佔位符：
-- `{industry_prosperity_text}` — 景氣度排行與等級
-- `{capital_migration_text}` — 資金遷移摘要
-- `{rotation_prediction_text}` — 輪動預測 Top 5 領漲 + Top 3 滯後
+## 測試
 
-## 注意事项
+**197 個 pytest 測試**：
 
-- Agent 依赖后端 REST API，必须先启动 Java 后端
-- 至少需要一个可用的 LLM API Key
-- 优化循环是长时间运行的任务，建议在后台运行
-- 每轮迭代结果会自动保存到后端数据库的 `backtest_strategy` 表
+```bash
+python -m pytest tests/           # 197 tests collected
+python -m pytest tests/ --cov=app # 覆蓋率 ~18.6%（閾值 40%，當前未達標）
+```
+
+> 覆蓋率閾值 40% 是 `pyproject.toml` 中的 `--cov-fail-under` 配置；當前實際覆蓋率 ~18.6%，測試本身全部通過但命令因覆蓋率未達標而退出非零碼。這是既有狀態，非本次文檔變更引入。
