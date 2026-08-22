@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import Link from 'next/link';
 import useSWR from 'swr';
 import { api } from '@/lib/api';
 import { IndustryTreemap } from '@/components/industry/IndustryTreemap';
@@ -50,6 +51,7 @@ import {
   Target,
   AlertTriangle,
   Zap,
+  GraduationCap,
 } from 'lucide-react';
 import type { IndustryDailyDto, IndexDailyDto } from '@/lib/api/types';
 import { agentApi, type IndustryNewsItem } from '@/lib/api/agent';
@@ -338,7 +340,7 @@ export default function IndustryPage() {
       )}
 
       {/* 視圖分組導航（一級分類） */}
-      <div className="flex flex-wrap gap-2 border-b border-border pb-2">
+      <div className="flex flex-wrap gap-2 border-b border-border pb-2 items-center">
         {VIEW_GROUPS.map(({ group, label, icon: Icon }) => {
           const active = currentGroup === group;
           return (
@@ -356,6 +358,16 @@ export default function IndustryPage() {
             </button>
           );
         })}
+        {currentGroup === 'advanced' && (
+          <Link
+            href="/analysis-guide"
+            className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-slate-400 hover:text-accent hover:bg-bg-hover transition-colors"
+            title="進階分析方法教學"
+          >
+            <GraduationCap className="w-4 h-4" />
+            教學
+          </Link>
+        )}
       </div>
 
       {/* 視圖子導航（二級分類，僅顯示當前分組的視圖） */}

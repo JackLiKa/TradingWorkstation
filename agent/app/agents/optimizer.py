@@ -387,6 +387,89 @@ async def run_optimization_loop():
     # 連續無進展計數器（max_stagnant_iterations：連續 N 輪 Δscore < 1 自動停止）
     stagnant_count = 0
 
+    # === 冷啟動預熱輪（warmup）===
+    # 前幾輪 state.iterations 為空，AI 易輸出「上下文不足，無法生成策略」。
+    # 預熱輪跑 AI0→AI0.5→AI1→AI2 生成初始策略，替代 DEFAULT_CRITERIA 作為 f0。
+    # 預熱輪不評分、不存入 iterations；失敗時降級為 DEFAULT_CRITERIA（保持兼容）。
+    if state.current_iteration == 0 and db_best_score <= -999:
+        logger.info("冷啟動預熱輪：生成初始策略以替代默認參數")
+        state.status_message = "預熱輪：生成初始策略中..."
+        state.current_stage_results = []
+        warmup_results: list[dict] = []
+
+        def _add_warmup_result(sr: StageResult, _results: list[dict] = warmup_results):
+            """記錄預熱輪階段結果（標記 phase=warmup，用於前端區分）。"""
+            d = sr.to_dict()
+            d["phase"] = "warmup"
+            _results.append(d)
+            state.current_stage_results = list(_results)
+
+        try:
+            # AI 0: 行情新聞
+            news_result = await _market_news_stage.run(
+                state=state, judge=_judge, max_attempts=2, history=state.iterations,
+            )
+            _add_warmup_result(news_result)
+            market_news = sanitize_output(news_result.output)
+
+            # AI 0.5: 行業分析
+            industry_result = await _industry_stage.run(
+                state=state, judge=_judge, max_attempts=2, market_news=market_news,
+            )
+            _add_warmup_result(industry_result)
+
+            # AI 1: 行情分析
+            market_data = await backend_client.get_market_overview()
+            market_result = await _market_stage.run(
+                state=state, judge=_judge, max_attempts=2,
+                market_data=market_data, history=state.iterations,
+                prev_reflection=state.current_reflection,
+            )
+            _add_warmup_result(market_result)
+            market_context = sanitize_output(market_result.output)
+
+            # AI 2: 策略生成
+            strategy_result = await _strategy_stage.run(
+                state=state, judge=_judge, max_attempts=2,
+                market_context=market_context,
+                current_criteria=state.current_criteria,
+                config=state.current_config,
+                history=state.iterations,
+                prev_reflection=state.current_reflection,
+                next_prompt=state.current_next_prompt,
+                rag_experiences="",
+            )
+            _add_warmup_result(strategy_result)
+
+            # 解析策略 → 作為 f0 初始策略
+            try:
+                parsed = parse_strategy_output(strategy_result.output)
+                new_criteria = parsed.get("criteria", state.current_criteria)
+                # 行業相關性後處理
+                new_criteria = await _dedup_high_corr_industries(new_criteria)
+                state.current_criteria = new_criteria
+                state.best_criteria = dict(new_criteria)
+                logger.info("預熱輪成功：已生成初始策略替代默認參數")
+                state.status_message = "預熱輪完成，進入正式迭代"
+            except ValueError as e:
+                logger.warning(f"預熱輪策略解析失敗，降級為默認參數: {e}")
+                state.status_message = "預熱輪失敗，使用默認參數進入正式迭代"
+        except Exception as e:
+            logger.warning(f"預熱輪異常，降級為默認參數: {e}")
+            state.status_message = "預熱輪異常，使用默認參數進入正式迭代"
+        finally:
+            state.current_stage = ""
+            state.current_stage_status = ""
+
+        # 預熱輪中被用戶停止
+        if _stop_event.is_set():
+            state.running = False
+            state.stopped_at = datetime.now().isoformat()
+            state.status_message = "已停止（預熱輪中斷）"
+            node_monitor.end_run()
+            logger.info("優化循環在預熱輪被停止")
+            return
+
     while not _stop_event.is_set():
         iteration = state.current_iteration + 1
         stage_results: list[dict] = []

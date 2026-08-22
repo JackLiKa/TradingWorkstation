@@ -31,8 +31,11 @@ export function IndustryTreemap({ data }: Props) {
       },
       tooltip: {
         formatter: (params: any) => {
-          const pct = params.data.avgPctChg;
-          const amt = params.value;
+          const pct = params?.data?.avgPctChg;
+          const amt = params?.value ?? 0;
+          if (pct == null || typeof pct !== 'number' || isNaN(pct)) {
+            return `${params?.name ?? ''}<br/>成交金額: ${(amt / 1e8).toFixed(2)} 億`;
+          }
           return `${params.name}<br/>平均漲跌幅: ${pct.toFixed(3)}%<br/>成交金額: ${(amt / 1e8).toFixed(2)} 億`;
         },
       },
@@ -54,12 +57,15 @@ export function IndustryTreemap({ data }: Props) {
           label: {
             show: true,
             formatter: (params: any) => {
-              const pct = params.data.avgPctChg;
-              const amt = params.value;
-              const name = params.name;
+              const pct = params?.data?.avgPctChg;
+              const amt = params?.value ?? 0;
+              const name = params?.name ?? '';
               // 截斷長名稱
               const shortName = name.length > 8 ? name.slice(0, 8) + '…' : name;
               const amtStr = amt >= 1e8 ? `${(amt / 1e8).toFixed(1)}億` : `${(amt / 1e4).toFixed(0)}萬`;
+              if (pct == null || typeof pct !== 'number' || isNaN(pct)) {
+                return `${shortName}\n${amtStr}`;
+              }
               return `${shortName}\n${pct.toFixed(2)}%\n${amtStr}`;
             },
             color: '#fff',

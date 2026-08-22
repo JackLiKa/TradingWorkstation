@@ -226,9 +226,9 @@ class MarketNewsStage(BaseStage):
         keyword_news = await _search_keyword_news(sector_perf)
         keyword_news_text = _format_keyword_news(keyword_news)
 
-        # 構建歷史摘要
+        # 構建歷史摘要（最近 5 輪，冷啟動時由種子上下文補充）
         history_text = ""
-        for h in history[-3:]:
+        for h in history[-5:]:
             stats = h.backtest_statistics
             history_text += f"  第{h.iteration}輪: 評分={h.composite_score}, 收益={stats.get('totalReturn', 0)}%\n"
 

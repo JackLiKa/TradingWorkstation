@@ -7,10 +7,12 @@
 
 import json
 import logging
+from typing import Any
 
 from app.agents.few_shot import get_few_shot
 from app.agents.stages.base import BaseStage
 from app.agents.stages.market_news import _format_market_breadth, _format_rotation
+from app.services.backend_client import backend_client
 from app.services.market_data_client import market_data_client
 
 logger = logging.getLogger("agent.stage.market")
@@ -51,6 +53,9 @@ PROMPT_TEMPLATE = """請分析當前 A 股市場環境，識別市場形態並�
 
 ## 行業日聚合（最新交易日）
 {industry_text}
+
+## 行業景氣度概覽
+{prosperity_summary}
 
 ## 歷史優化記錄
 {history_text}
@@ -113,9 +118,19 @@ class MarketAnalysisStage(BaseStage):
         industry_daily = await market_data_client._get_industry_daily()
         industry_text = _format_industry_daily(industry_daily)
 
-        # 構建歷史摘要
+        # === 獲取行業景氣度摘要 ===
+        logger.info("[AI1] 獲取行業景氣度摘要...")
+        prosperity_summary = ""
+        try:
+            prosperity = await backend_client.get_industry_prosperity()
+            prosperity_summary = _format_prosperity_summary(prosperity)
+        except Exception as e:
+            logger.warning(f"[AI1] 景氣度獲取失敗: {e}")
+            prosperity_summary = "數據不足"
+
+        # 構建歷史摘要（最近 5 輪，冷啟動時由種子上下文補充）
         history_text = ""
-        for h in history[-3:]:
+        for h in history[-5:]:
             stats = h.backtest_statistics
             history_text += (
                 f"  第{h.iteration}輪: 收益={stats.get('totalReturn', 0)}%, "
@@ -130,6 +145,7 @@ class MarketAnalysisStage(BaseStage):
             breadth_text=breadth_text,
             rotation_text=rotation_text,
             industry_text=industry_text,
+            prosperity_summary=prosperity_summary,
             history_text=history_text if history_text else "無（首輪）",
             prev_reflection=prev_reflection if prev_reflection else "無（首輪）",
             few_shot=get_few_shot("market_analysis"),
@@ -193,5 +209,29 @@ def _format_industry_daily(data: list[dict[str, Any]]) -> str:
         amount_str = f"{amount:.2f}" if amount is not None else "N/A"
         count = item.get("stockCount", 0)
         lines.append(f"{industry} | {avg_str} | {rising} | {falling} | {amount_str} | {count}")
+
+    return "\n".join(lines)
+
+
+def _format_prosperity_summary(data: list[dict[str, Any]]) -> str:
+    """格式化行業景氣度摘要（前 10 強 + 後 5 弱）。"""
+    if not data:
+        return "數據不足"
+
+    lines = ["景氣度最強行業（前 10）:"]
+    for item in data[:10]:
+        industry = item.get("industry", "")
+        index = item.get("prosperityIndex", 0)
+        grade = item.get("grade", "")
+        lines.append(f"- {industry}: 景氣度 {index:.1f} ({grade})")
+
+    if len(data) > 10:
+        lines.append("")
+        lines.append("景氣度最弱行業（後 5）:")
+        for item in data[-5:]:
+            industry = item.get("industry", "")
+            index = item.get("prosperityIndex", 0)
+            grade = item.get("grade", "")
+            lines.append(f"- {industry}: 景氣度 {index:.1f} ({grade})")
 
     return "\n".join(lines)

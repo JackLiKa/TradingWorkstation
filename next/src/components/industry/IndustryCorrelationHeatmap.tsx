@@ -9,6 +9,7 @@ import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { RefreshButton } from '@/components/ui/RefreshButton';
 import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
+import { AnalysisTutorial } from '@/components/industry/AnalysisTutorial';
 
 const TOP_N_OPTIONS = [10, 15, 20, 30];
 
@@ -215,6 +216,7 @@ export function IndustryCorrelationHeatmap({ rangeStart, rangeEnd }: Props) {
 
   return (
     <div className="space-y-3">
+      <AnalysisTutorial tutorialKey="correlation" />
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm text-muted">顯示行業數：</span>
         {TOP_N_OPTIONS.map((n) => (

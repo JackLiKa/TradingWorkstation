@@ -9,6 +9,7 @@ import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { RefreshButton } from '@/components/ui/RefreshButton';
 import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
+import { AnalysisTutorial } from '@/components/industry/AnalysisTutorial';
 
 interface Props {
   rangeStart: string;
@@ -144,6 +145,7 @@ export function ProsperityHeatmapMatrix({ rangeStart, rangeEnd }: Props) {
 
   return (
     <div className="space-y-3">
+      <AnalysisTutorial tutorialKey="prosperityHeatmap" />
       <div className="flex items-center gap-2">
         <RefreshButton
           onClick={() => mutate()}

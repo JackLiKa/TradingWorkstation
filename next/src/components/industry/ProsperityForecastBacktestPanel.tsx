@@ -10,6 +10,7 @@ import { ErrorState } from '@/components/ui/ErrorState';
 import { Target, TrendingUp, CheckCircle, AlertCircle } from 'lucide-react';
 import { RefreshButton } from '@/components/ui/RefreshButton';
 import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
+import { AnalysisTutorial } from '@/components/industry/AnalysisTutorial';
 
 const MONTH_OPTIONS = [3, 6, 12];
 const FORECAST_OPTIONS = [3, 5, 10];
@@ -148,6 +149,7 @@ export function ProsperityForecastBacktestPanel() {
 
   return (
     <div className="space-y-3">
+      <AnalysisTutorial tutorialKey="forecastBacktest" />
       {/* 參數選擇器 */}
       <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-bg-panel p-3">
         <div className="flex items-center gap-2">
