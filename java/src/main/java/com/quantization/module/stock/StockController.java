@@ -1,6 +1,8 @@
 package com.quantization.module.stock;
 
 import com.quantization.common.api.ApiResponse;
+import com.quantization.module.forecast.ForecastService;
+import com.quantization.module.industry.IndustryService;
 import com.quantization.module.stock.dto.HotSymbolDto;
 import com.quantization.module.stock.dto.IndustryDailyDto;
 import com.quantization.module.stock.dto.IndustryProsperityDto;
@@ -47,6 +49,8 @@ import java.util.Map;
 public class StockController {
 
     private final StockService stockService;
+    private final IndustryService industryService;
+    private final ForecastService forecastService;
     private final StockIndustryRepository industryRepository;
     private final IndexDailyRepository indexDailyRepository;
     private final IndexMetadataRepository indexMetadataRepository;
@@ -54,11 +58,15 @@ public class StockController {
 
     public StockController(
             StockService stockService,
+            IndustryService industryService,
+            ForecastService forecastService,
             StockIndustryRepository industryRepository,
             IndexDailyRepository indexDailyRepository,
             IndexMetadataRepository indexMetadataRepository,
             com.quantization.module.system.NotificationService notificationService) {
         this.stockService = stockService;
+        this.industryService = industryService;
+        this.forecastService = forecastService;
         this.industryRepository = industryRepository;
         this.indexDailyRepository = indexDailyRepository;
         this.indexMetadataRepository = indexMetadataRepository;
@@ -67,10 +75,14 @@ public class StockController {
 
     /**
      * 获取汇总指标（总记录数、股票数、最新交易日等）。
+     * <p>
+     * 已弃用：前端统一使用 {@code /api/dashboard/summary}（走 Caffeine 缓存）。
+     * 此端点与 DashboardController#summary 功能重复，保留仅为向后兼容。
      *
      * @return 汇总指标 DTO
      */
-    @Operation(summary = "汇总指标")
+    @Deprecated(forRemoval = true)
+    @Operation(summary = "汇总指标（已弃用，请用 /api/dashboard/summary）")
     @GetMapping("/summary")
     public ApiResponse<SummaryMetricsDto> summary() {
         return ApiResponse.ok(stockService.summaryMetrics());
@@ -177,7 +189,7 @@ public class StockController {
     @GetMapping("/industry-daily")
     public ApiResponse<List<IndustryDailyDto>> industryDaily(
             @RequestParam(required = false) LocalDate tradeDate) {
-        return ApiResponse.ok(stockService.industryDailyByDate(tradeDate));
+        return ApiResponse.ok(industryService.industryDailyByDate(tradeDate));
     }
 
     /**
@@ -194,7 +206,7 @@ public class StockController {
             @RequestParam String industry,
             @RequestParam LocalDate start,
             @RequestParam LocalDate end) {
-        return ApiResponse.ok(stockService.industryDailyRange(industry, start, end));
+        return ApiResponse.ok(industryService.industryDailyRange(industry, start, end));
     }
 
     /**
@@ -209,7 +221,7 @@ public class StockController {
     public ApiResponse<List<IndustryDailyDto>> allIndustryDailyRange(
             @RequestParam LocalDate start,
             @RequestParam LocalDate end) {
-        return ApiResponse.ok(stockService.allIndustryDailyRange(start, end));
+        return ApiResponse.ok(industryService.allIndustryDailyRange(start, end));
     }
 
     /**
@@ -222,7 +234,7 @@ public class StockController {
     @GetMapping("/industry-prosperity")
     public ApiResponse<List<IndustryProsperityDto>> industryProsperity(
             @RequestParam(required = false) LocalDate tradeDate) {
-        return ApiResponse.ok(stockService.industryProsperity(tradeDate));
+        return ApiResponse.ok(industryService.industryProsperity(tradeDate));
     }
 
     /**
@@ -239,7 +251,7 @@ public class StockController {
             @RequestParam LocalDate start,
             @RequestParam LocalDate end,
             @RequestParam(required = false, defaultValue = "15") int topN) {
-        return ApiResponse.ok(stockService.industryProsperityRange(start, end, topN));
+        return ApiResponse.ok(industryService.industryProsperityRange(start, end, topN));
     }
 
     /**
@@ -252,7 +264,7 @@ public class StockController {
     @GetMapping("/rotation-prediction")
     public ApiResponse<RotationPredictionDto> rotationPrediction(
             @RequestParam(required = false, defaultValue = "20") int lookbackDays) {
-        return ApiResponse.ok(stockService.predictRotation(lookbackDays));
+        return ApiResponse.ok(forecastService.predictRotation(lookbackDays));
     }
 
     /**
@@ -269,7 +281,7 @@ public class StockController {
             @RequestParam(required = false, defaultValue = "20") int lookbackDays,
             @RequestParam(required = false, defaultValue = "5") int forwardDays,
             @RequestParam(required = false, defaultValue = "90") int backtestDays) {
-        return ApiResponse.ok(stockService.backtestRotationPrediction(lookbackDays, forwardDays, backtestDays));
+        return ApiResponse.ok(forecastService.backtestRotationPrediction(lookbackDays, forwardDays, backtestDays));
     }
 
     /**
@@ -282,7 +294,7 @@ public class StockController {
     @GetMapping("/rotation-prediction/automl")
     public ApiResponse<RotationAutoMlDto> rotationPredictionAutoMl(
             @RequestParam(required = false, defaultValue = "90") int backtestDays) {
-        return ApiResponse.ok(stockService.autoTuneRotationPrediction(backtestDays));
+        return ApiResponse.ok(forecastService.autoTuneRotationPrediction(backtestDays));
     }
 
     /**
@@ -296,7 +308,7 @@ public class StockController {
     public ApiResponse<ProsperityAlertDto> prosperityAlerts(
             @RequestParam(required = false, defaultValue = "10.0") double threshold,
             @RequestParam(required = false, defaultValue = "false") boolean notify) {
-        ProsperityAlertDto result = stockService.prosperityAlerts(threshold);
+        ProsperityAlertDto result = industryService.prosperityAlerts(threshold);
         // 若請求通知且有預警，異步發送郵件/Webhook
         if (notify && !result.alerts().isEmpty()) {
             java.util.List<java.util.Map<String, Object>> alertMaps = new java.util.ArrayList<>();
@@ -330,7 +342,7 @@ public class StockController {
     public ApiResponse<ProsperitySeasonalityDto> prosperitySeasonality(
             @RequestParam(required = false, defaultValue = "12") int months) {
         months = Math.max(1, Math.min(60, months));
-        return ApiResponse.ok(stockService.prosperitySeasonality(months));
+        return ApiResponse.ok(forecastService.prosperitySeasonality(months));
     }
 
     /**
@@ -344,7 +356,7 @@ public class StockController {
     public ApiResponse<ProsperityMarkovDto> prosperityMarkov(
             @RequestParam(required = false, defaultValue = "12") int months) {
         months = Math.max(1, Math.min(36, months));
-        return ApiResponse.ok(stockService.prosperityMarkov(months));
+        return ApiResponse.ok(forecastService.prosperityMarkov(months));
     }
 
     /**
@@ -361,7 +373,7 @@ public class StockController {
             @RequestParam(required = false, defaultValue = "5") int forecastDays) {
         months = Math.max(1, Math.min(24, months));
         forecastDays = Math.max(1, Math.min(20, forecastDays));
-        return ApiResponse.ok(stockService.prosperityForecast(months, forecastDays));
+        return ApiResponse.ok(forecastService.prosperityForecast(months, forecastDays));
     }
 
     /**
@@ -382,7 +394,7 @@ public class StockController {
         months = Math.max(1, Math.min(24, months));
         forecastDays = Math.max(1, Math.min(20, forecastDays));
         backtestDays = Math.max(10, Math.min(180, backtestDays));
-        return ApiResponse.ok(stockService.prosperityForecastBacktest(months, forecastDays, backtestDays));
+        return ApiResponse.ok(forecastService.prosperityForecastBacktest(months, forecastDays, backtestDays));
     }
 
     /**
@@ -397,7 +409,7 @@ public class StockController {
             @RequestParam(required = false, defaultValue = "30") int lookbackDays) {
         // 安全邊界：限制回溯天數，防止數據庫過載
         lookbackDays = Math.max(5, Math.min(180, lookbackDays));
-        return ApiResponse.ok(stockService.rotationMarkov(lookbackDays));
+        return ApiResponse.ok(forecastService.rotationMarkov(lookbackDays));
     }
 
     // ===== 指數歷史（市場形態識別）=====

@@ -51,6 +51,8 @@ const defaultBacktestConfig: BacktestConfigDto = {
   commissionBps: 3,
   stopLossPct: null,
   takeProfitPct: null,
+  riskFreeRate: 0.02,
+  slippageBps: 0,
 };
 
 /**

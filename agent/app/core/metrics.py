@@ -13,6 +13,7 @@
 - agent_backend_calls_total: 後端 API 調用總數
 - agent_backend_errors_total: 後端 API 錯誤總數
 - agent_backend_retry_total: 後端重試總數
+- agent_json_failure_total: JSON 提取失敗總數（按 stage/recovered）
 
 指標端點: GET /metrics（Prometheus 格式）
 """
@@ -190,3 +191,8 @@ def record_backend_call(endpoint: str, success: bool, retried: bool = False):
         inc_counter("agent_backend_errors_total", {"endpoint": endpoint})
     if retried:
         inc_counter("agent_backend_retry_total", {"endpoint": endpoint})
+
+
+def record_json_failure(stage: str = "strategy_generation", recovered: bool = False):
+    """記錄 JSON 提取失敗（用於監控連續空轉問題 P4-7）。"""
+    inc_counter("agent_json_failure_total", {"stage": stage, "recovered": str(recovered).lower()})

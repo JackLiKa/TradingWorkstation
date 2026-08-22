@@ -35,7 +35,9 @@ public record RotationAutoMlDto(
             double avgExcessReturn,
             double avgLeaderReturn,
             int totalPredictions,
-            double compositeScore
+            double compositeScore,
+            double evalHitRate,
+            double evalExcessReturn
     ) {
     }
 }

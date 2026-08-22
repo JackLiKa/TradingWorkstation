@@ -1,5 +1,6 @@
 package com.quantization.common.exception;
 
+import com.quantization.common.api.ErrorCode;
 import lombok.Getter;
 
 /**
@@ -7,8 +8,8 @@ import lombok.Getter;
  */
 @Getter
 public class BusinessException extends RuntimeException {
-    /** 错误码（参见 {@link com.quantization.common.api.ErrorCode}） */
-    private final String code;
+    /** 错误码（类型安全枚举，参见 {@link ErrorCode}） */
+    private final ErrorCode code;
 
     /**
      * 构建业务异常。
@@ -16,7 +17,7 @@ public class BusinessException extends RuntimeException {
      * @param code    错误码
      * @param message 异常消息
      */
-    public BusinessException(String code, String message) {
+    public BusinessException(ErrorCode code, String message) {
         super(message);
         this.code = code;
     }
@@ -28,7 +29,7 @@ public class BusinessException extends RuntimeException {
      * @param message 异常消息
      * @param cause   根因异常
      */
-    public BusinessException(String code, String message, Throwable cause) {
+    public BusinessException(ErrorCode code, String message, Throwable cause) {
         super(message, cause);
         this.code = code;
     }

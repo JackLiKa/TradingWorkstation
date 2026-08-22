@@ -41,7 +41,8 @@ export default function SettingsPage() {
       if (!update.password) delete update.password;
       await api.updateDatabaseConfig(update);
       setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
+      setError('配置已校验。请手动修改 .env 文件中的 DB_* 键后重启后端生效。');
+      setTimeout(() => setSaved(false), 5000);
       await mutateHealth();
     } catch (e) {
       setError((e as Error).message);

@@ -52,26 +52,17 @@ public class BacktestController {
      * 运行回测并自动保存结果到数据库（source=auto）。
      * 用于前端「回测后自动保存」功能，供 AI 优化策略参考。
      *
+     * <p>注意：自 {@code runBacktest} 改为自动落库后，此端点与 {@code /run} 行为等价，
+     * 保留端点路径以维持 API 兼容性。
+     *
      * @param request 回测请求（含选股条件和回测配置）
      * @return 回测结果（已自动保存到数据库）
      */
     @Operation(summary = "运行回测并自动保存")
     @PostMapping("/run-and-save")
     public ApiResponse<BacktestResultDto> runAndSave(@Valid @RequestBody BacktestRequestDto request) {
-        BacktestResultDto result = backtestService.runBacktest(request);
-        // 自動保存到數據庫
-        try {
-            String autoName = "回測-" + java.time.LocalDateTime.now().format(
-                    java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
-            SaveStrategyDto saveDto = new SaveStrategyDto(
-                    autoName, request.criteria(), request.config(), result, "auto");
-            strategyService.save(saveDto);
-        } catch (Exception e) {
-            // 自動保存失敗不影響回測結果返回
-            org.slf4j.LoggerFactory.getLogger(BacktestController.class)
-                    .warn("回測自動保存失敗: {}", e.getMessage());
-        }
-        return ApiResponse.ok(result);
+        // runBacktest 已内置自动落库（source=auto），此处直接复用
+        return ApiResponse.ok(backtestService.runBacktest(request));
     }
 
     /**
@@ -84,6 +75,19 @@ public class BacktestController {
     @PostMapping("/strategies")
     public ApiResponse<SavedStrategyDetailDto> saveStrategy(@RequestBody SaveStrategyDto dto) {
         return ApiResponse.ok(strategyService.save(dto));
+    }
+
+    /**
+     * 获取最近 N 次回测记录（按创建时间倒序，source=auto）。
+     *
+     * @param limit 返回记录数上限（默认 20）
+     * @return 策略摘要列表
+     */
+    @Operation(summary = "最近回测记录")
+    @GetMapping("/recent")
+    public ApiResponse<List<SavedStrategySummaryDto>> listRecentRuns(
+            @RequestParam(defaultValue = "20") int limit) {
+        return ApiResponse.ok(backtestService.listRecentRuns(limit));
     }
 
     /**

@@ -1,6 +1,6 @@
 /**
- * Agent 服務 API 客戶端 — 連接到 agent 服務 (端口 8100)。
- * 與主後端 (8090) 分離，使用獨立的 fetch 包裝。
+ * Agent 服務 API 客戶端 — 通過 next rewrites 反代到 agent 服務 (端口 8100)。
+ * 統一走 next 反代避免瀏覽器直連 :8100 的 CORS 問題。
  */
 import type {
   AgentState,
@@ -25,10 +25,12 @@ export interface IndustryNewsItem {
   url: string;
 }
 
-const AGENT_BASE = process.env.NEXT_PUBLIC_AGENT_API_BASE || 'http://localhost:8100';
+// 通過 next rewrites 反代：/TradingWorkstation/agent-api/* → agent:8100/api/agent/*
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/TradingWorkstation';
+const AGENT_PROXY = `${API_BASE}/agent-api`;
 
 async function agentFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`${AGENT_BASE}/api/agent${path}`, {
+  const res = await fetch(`${AGENT_PROXY}${path}`, {
     headers: { 'Content-Type': 'application/json' },
   });
   if (!res.ok) {
@@ -43,7 +45,7 @@ async function agentFetch<T>(path: string): Promise<T> {
 }
 
 async function agentPost<T>(path: string, payload?: unknown): Promise<T> {
-  const res = await fetch(`${AGENT_BASE}/api/agent${path}`, {
+  const res = await fetch(`${AGENT_PROXY}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: payload ? JSON.stringify(payload) : undefined,

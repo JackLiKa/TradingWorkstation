@@ -89,6 +89,12 @@ export function BacktestConfigPanel({ config, onChange, onRun, loading, autoSave
           <Field label="止盈(%)">
             <Input type="number" value={config.takeProfitPct ?? ''} onChange={(e) => update('takeProfitPct', e.target.value ? Number(e.target.value) : null)} />
           </Field>
+          <Field label="无风险利率">
+            <Input type="number" step="0.001" value={config.riskFreeRate ?? 0.02} onChange={(e) => update('riskFreeRate', e.target.value ? Number(e.target.value) : null)} />
+          </Field>
+          <Field label="滑点(bp)">
+            <Input type="number" step="1" value={config.slippageBps ?? 0} onChange={(e) => update('slippageBps', e.target.value ? Number(e.target.value) : null)} />
+          </Field>
         </div>
       </CardContent>
     </Card>

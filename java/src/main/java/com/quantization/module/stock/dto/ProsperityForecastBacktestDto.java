@@ -26,7 +26,11 @@ public record ProsperityForecastBacktestDto(
         double avgMarketReturn,
         double avgExcessReturn,
         String summary,
-        List<BacktestEntry> entries
+        List<BacktestEntry> entries,
+        double arimaMae,
+        double hwMae,
+        double linearMae,
+        String optimalWeights
 ) {
     /**
      * 單次回測記錄。

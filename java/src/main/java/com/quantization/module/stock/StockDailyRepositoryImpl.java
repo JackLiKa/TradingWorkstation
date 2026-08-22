@@ -355,24 +355,39 @@ public class StockDailyRepositoryImpl implements StockDailyRepositoryCustom {
         String q = CodeUtils.normalize(query);
         if (q.isEmpty()) return List.of();
 
-        // 構建 code 匹配條件（與 buildCodeFilter 邏輯一致，但用於最新交易日）
-        StringBuilder codeCondition = new StringBuilder();
+        // 構建參數化 code 匹配條件（防止 SQL 注入）
+        String codeCondition;
+        List<Object> params = new java.util.ArrayList<>();
         if (CodeUtils.isFullCode(q)) {
-            codeCondition.append("code = '").append(q).append("'");
+            codeCondition = "code = ?";
+            params.add(q);
         } else if (CodeUtils.isPureSixDigit(q)) {
-            codeCondition.append("code IN ('sh.").append(q).append("','sz.").append(q).append("','bj.").append(q).append("')");
+            codeCondition = "code IN (?, ?, ?)";
+            params.add("sh." + q);
+            params.add("sz." + q);
+            params.add("bj." + q);
         } else if (CodeUtils.startsWithMarket(q)) {
-            codeCondition.append("code LIKE '").append(q).append("%'");
+            codeCondition = "code LIKE ?";
+            params.add(q + "%");
         } else if (q.chars().allMatch(Character::isDigit) && q.length() < 6) {
-            codeCondition.append("(code LIKE 'sh.").append(q).append("%' OR code LIKE 'sz.").append(q).append("%' OR code LIKE 'bj.").append(q).append("%')");
+            codeCondition = "(code LIKE ? OR code LIKE ? OR code LIKE ?)";
+            params.add("sh." + q + "%");
+            params.add("sz." + q + "%");
+            params.add("bj." + q + "%");
         } else {
-            codeCondition.append("code LIKE '").append(q).append("%'");
+            codeCondition = "code LIKE ?";
+            params.add(q + "%");
         }
 
         // 子查詢取最新交易日，主查詢在最新交易日內按 code 匹配 + 漲跌幅絕對值排序
-        String sql = "SELECT * FROM stock_daily WHERE date = (SELECT MAX(date) FROM stock_daily) AND adjustflag = 3 AND " + codeCondition + " ORDER BY ABS(pctChg) DESC LIMIT " + limit;
+        String sql = "SELECT * FROM stock_daily WHERE date = (SELECT MAX(date) FROM stock_daily) AND adjustflag = 3 AND "
+                + codeCondition + " ORDER BY ABS(pctChg) DESC LIMIT ?";
 
         var nativeQuery = em.createNativeQuery(sql, StockDailyEntity.class);
+        for (int i = 0; i < params.size(); i++) {
+            nativeQuery.setParameter(i + 1, params.get(i));
+        }
+        nativeQuery.setParameter(params.size() + 1, limit);
         return nativeQuery.getResultList();
     }
 

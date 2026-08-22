@@ -27,6 +27,9 @@ spring:
         order_inserts: true
         order_updates: true
     show-sql: false
+  sql:
+    init:
+      mode: always
   jackson:
     default-property-inclusion: non_null
     serialization:
@@ -47,6 +50,10 @@ app:
   cache:
     summary-ttl-seconds: ${CACHE_SUMMARY_TTL_SECONDS:60}
     metrics-ttl-seconds: ${CACHE_METRICS_TTL_SECONDS:30}
+    stock-ttl-seconds: ${CACHE_STOCK_TTL_SECONDS:30}
+    industry-ttl-seconds: ${CACHE_INDUSTRY_TTL_SECONDS:60}
+    forecast-ttl-seconds: ${CACHE_FORECAST_TTL_SECONDS:120}
+    rotation-ttl-seconds: ${CACHE_ROTATION_TTL_SECONDS:120}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3010}
   notification:
@@ -63,11 +70,24 @@ app:
       enabled: ${WEBHOOK_ENABLED:false}
       url: ${WEBHOOK_URL:}
       secret: ${WEBHOOK_SECRET:}
+    alert-scheduler:
+      enabled: ${ALERT_SCHEDULER_ENABLED:false}
+      threshold: ${ALERT_SCHEDULER_THRESHOLD:15.0}
+      cron: ${ALERT_SCHEDULER_CRON:0 30 15 * * MON-FRI}
   sync:
     python-executable: ${SYNC_PYTHON_EXECUTABLE:python}
     ingestion-script: ${SYNC_INGESTION_SCRIPT:ingestion/baostock_ingest.py}
     batch-size: ${SYNC_BATCH_SIZE:1000}
     default-start-date: ${SYNC_DEFAULT_START_DATE:2021-01-01}
+  preference:
+    path: ${PREFERENCE_PATH:preference.json}
+  aicalllog:
+    retention-days: ${AICALLLOG_RETENTION_DAYS:90}
+    cleanup:
+      enabled: ${AICALLLOG_CLEANUP_ENABLED:false}
+      cron: ${AICALLLOG_CLEANUP_CRON:0 0 2 * * *}
+  chart:
+    batch-size: ${CHART_BATCH_SIZE:500}
 
 management:
   endpoints:

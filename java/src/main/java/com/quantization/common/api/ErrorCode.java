@@ -1,17 +1,17 @@
 package com.quantization.common.api;
 
-import lombok.Getter;
-
 /**
- * 错误码常量定义，用于 {@link ApiResponse} 和 {@link com.quantization.common.exception.BusinessException}。
+ * 错误码枚举，用于 {@link ApiResponse} 和 {@link com.quantization.common.exception.BusinessException}。
+ * <p>
+ * 改为枚举以提供编译期类型安全；序列化时通过 {@link #name()} 保持原有字符串响应格式不变。
+ * </p>
  */
-@Getter
-public class ErrorCode {
-    public static final String OK = "OK";
-    public static final String BAD_REQUEST = "BAD_REQUEST";
-    public static final String VALIDATION_ERROR = "VALIDATION_ERROR";
-    public static final String NOT_FOUND = "NOT_FOUND";
-    public static final String DB_ERROR = "DB_ERROR";
-    public static final String SYNC_ERROR = "SYNC_ERROR";
-    public static final String INTERNAL_ERROR = "INTERNAL_ERROR";
+public enum ErrorCode {
+    OK,
+    BAD_REQUEST,
+    VALIDATION_ERROR,
+    NOT_FOUND,
+    DB_ERROR,
+    SYNC_ERROR,
+    INTERNAL_ERROR
 }

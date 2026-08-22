@@ -105,13 +105,24 @@ public class ScreenerCore {
     }
 
     private Double sortValue(ScreenedStockDto s, String sortBy) {
-        try {
-            java.lang.reflect.Field f = ScreenedStockDto.class.getDeclaredField(sortBy);
-            f.setAccessible(true);
-            Object value = f.get(s);
-            if (value instanceof Number n) return n.doubleValue();
-        } catch (Exception ignored) {
-        }
-        return Double.NEGATIVE_INFINITY;
+        // P4-6: 型別安全排序，取代反射（原反射用 snake_case 查 camelCase field 永遠失敗）
+        return switch (sortBy) {
+            case "score" -> s.score();
+            case "pct_change" -> s.pctChange();
+            case "turn" -> s.turn();
+            case "amplitude" -> s.amplitude();
+            case "volume_ratio" -> s.volumeRatio() != null ? s.volumeRatio() : 0;
+            case "return_20" -> s.return20() != null ? s.return20() : 0;
+            case "return_60" -> s.return60() != null ? s.return60() : 0;
+            case "return_120" -> s.return120() != null ? s.return120() : 0;
+            case "rsi14" -> s.rsi14() != null ? s.rsi14() : 0;
+            case "k_value" -> s.kValue() != null ? s.kValue() : 0;
+            case "d_value" -> s.dValue() != null ? s.dValue() : 0;
+            case "j_value" -> s.jValue() != null ? s.jValue() : 0;
+            case "macd_hist" -> s.macdHist() != null ? s.macdHist() : 0;
+            case "boll_width" -> s.bollWidth() != null ? s.bollWidth() : 0;
+            case "boll_percent_b" -> s.bollPercentB() != null ? s.bollPercentB() : 0;
+            default -> s.score(); // 未知字段預設按綜合評分排序
+        };
     }
 }
