@@ -88,6 +88,11 @@ app:
       cron: ${AICALLLOG_CLEANUP_CRON:0 0 2 * * *}
   chart:
     batch-size: ${CHART_BATCH_SIZE:500}
+  forecast:
+    # 滾動窗口集成權重適應（避免 look-ahead bias）。默認關閉以保持與 Phase 4 固定權重行為一致。
+    adaptive-weights: ${FORECAST_ADAPTIVE_WEIGHTS:false}
+    # 滾動窗口天數（僅 adaptive-weights=true 時生效），默認 60 天
+    rolling-window-days: ${FORECAST_ROLLING_WINDOW_DAYS:60}
 
 management:
   endpoints:

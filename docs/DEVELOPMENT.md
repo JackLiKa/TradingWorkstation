@@ -281,7 +281,7 @@ CI 見 `.github/workflows/`。
 | 緩存名/TTL | CacheConfig 常量與 CacheManager 註冊 + MODULE_GUIDE.md 緩存表 |
 | agent 階段/供應商 | providers.py STAGE_DEFAULT_PROVIDERS + few_shot.py 示例 + AGENT_SERVICE.md |
 
-**中期改進方向**：接入 `openapi-typescript` 從後端 `/v3/api-docs` 生成前端類型，消滅 types.ts 手工同步。
+**OpenAPI 類型生成管線**：已接入 `openapi-typescript` 從後端 `/v3/api-docs` 生成前端類型，逐步消滅 types.ts 手工同步（詳見下方 §12「OpenAPI 類型生成」）。
 
 ---
 
@@ -398,3 +398,76 @@ if (criteria.minMyFilter() != null && snapshot.myIndicator() < criteria.minMyFil
 4. 🟡 CacheConfig 單一 TTL（`CACHE_SUMMARY_TTL_SECONDS` 是死配置）
 5. 🟡 IndicatorController 忽略請求 config（一行修復）
 6. 🟡 前端 types.ts 手工鏡像已有漂移（`SummaryMetricsDto` 缺 `earliestTradeDate`）
+
+---
+
+## 12. OpenAPI 類型生成
+
+前端 TypeScript 類型已接入 `openapi-typescript` 自動生成管線，從後端 Spring Boot 的 springdoc-openapi spec（`/TradingWorkstation/v3/api-docs`）生成，消滅 `types.ts` 手工同步的契約 drift。
+
+### 12.1 管線概覽
+
+```
+後端 springdoc-openapi  →  /TradingWorkstation/v3/api-docs (OpenAPI 3.0 JSON)
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+        gen:api          gen:api:local    gen:api:smart
+       (URL 直連)       (本地文件)      (自動選擇+刷新)
+              │               │               │
+              └───────┬───────┴───────┬───────┘
+                      ▼               ▼
+        src/lib/api/generated.ts   src/lib/api/openapi.json
+        (自動生成類型)             (本地 spec 快照/fallback)
+```
+
+### 12.2 三個生成腳本
+
+| 腳本 | 命令 | 來源 | 後端要求 |
+|------|------|------|----------|
+| `gen:api` | `npm run gen:api` | 後端 URL | 需啟動 |
+| `gen:api:local` | `npm run gen:api:local` | 本地 `openapi.json` | 不需要 |
+| `gen:api:smart` | `npm run gen:api:smart` | 自動（URL → 文件 fallback） | 可選 |
+
+- `gen:api` / `gen:api:local` 直接調用 `openapi-typescript` CLI
+- `gen:api:smart` 走 `scripts/generate-api-types.ts`：先嘗試 URL 拉取（5s 超時），成功則刷新本地 `openapi.json`；失敗則 fallback 到本地文件。支持 `--url` / `--file` 顯式模式
+
+### 12.3 文件職責
+
+| 文件 | 職責 | 是否提交 Git |
+|------|------|-------------|
+| `src/lib/api/types.ts` | 手寫類型（權威，63 個），與後端 DTO 逐一對應 | ✅ |
+| `src/lib/api/generated.ts` | 自動生成類型（`paths`/`components`/`operations` 命名空間） | ✅（可 regen） |
+| `src/lib/api/openapi.json` | 後端 spec 本地快照（離線 fallback） | ✅ |
+| `scripts/generate-api-types.ts` | 智能生成腳本（URL + 文件 fallback） | ✅ |
+
+### 12.4 工作流
+
+**後端改了 DTO 後**：
+
+```bash
+# 1. 啟動後端（或確保已啟動）
+# 2. 重新生成前端類型
+cd next
+npm run gen:api          # 或 npm run gen:api:smart
+
+# 3. 對比 generated.ts 與 types.ts，逐步遷移手寫類型
+#    （diff 兩者的 interface 定義，發現漂移點）
+
+# 4. 確認 build/test 通過
+npm run typecheck && npm run test && npm run build
+```
+
+**離線開發（後端未啟動）**：
+
+```bash
+cd next
+npm run gen:api:local    # 從上次保存的 openapi.json 生成
+```
+
+### 12.5 設計原則
+
+- **不破壞**：`types.ts` 手寫類型保留不動，`generated.ts` 是補充；在完全遷移前 `types.ts` 仍為權威
+- **冪等**：重複運行 `gen:api` 產出一致（spec 不變時）
+- **離線友好**：`openapi.json` 快照確保後端未啟動時仍可生成
+- **漸進遷移**：可逐個 interface 從 `types.ts` 切換到 `generated.ts` 的 `components["schemas"]`，無需一次性全替

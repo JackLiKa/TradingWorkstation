@@ -259,3 +259,140 @@ sharpe = (mean(日收益) - rf/252) / std(日收益) × √252
 | 回測超時 | 區間過長/選股條件過鬆導致調倉頻繁；縮短區間或加大 `rebalanceInterval` |
 | 夏普比舊版偏高 | Phase 4 前未減無風險利率，現已修正（默認 rf=0.02） |
 | 滑點未生效 | 檢查 `slippageBps` 是否為 null/0；用 `effectiveSlippageBps()` 確認 |
+
+---
+
+## 12. 滾動窗口集成權重適應（forecast 模塊）
+
+> 對應代碼：`ForecastService.computeAdaptiveWeights()` / `inverseMaeWeights()`
+> 配置：`app.forecast.adaptive-weights`（默認 `false`）、`app.forecast.rolling-window-days`（默認 `60`）
+
+### 12.1 背景與動機
+
+行業景氣度多模型預測（ARIMA + Holt-Winters + 線性回歸）的集成權重，Phase 4 默認固定為 0.35/0.35/0.30。回測端點（`/api/stock/industry-prosperity/forecast/backtest`）會計算各模型 per-model MAE 並給出逆 MAE 最優權重供參考，但**生產預測不自動回饋**——設計上是為了避免過擬合到特定回測區間（look-ahead bias）。
+
+Phase 4 後續新增**滾動窗口逆 MAE 動態權重**，在嚴格避免 look-ahead bias 的前提下讓生產預測自適應近期模型表現。
+
+### 12.2 算法
+
+啟用 `adaptive-weights=true` 後，對每個行業的景氣度序列：
+
+1. **滾動窗口**：取過去 `rolling-window-days`（默認 60）個時間點作為評估窗口 `[evalStart, n)`。
+2. **one-step-ahead 預測**：對窗口內每個時間點 t，用 `data[0..t-1]`（截至 t 的歷史）預測 `data[t]`，分別得到 ARIMA/HW/LR 三個模型的預測值。
+3. **per-model MAE**：累計各模型絕對誤差，除以窗口內時間點數得到 MAE。
+4. **逆 MAE 歸一化**：`w_i = (1/mae_i) / sum(1/mae_j)`，MAE 越小（模型越準）權重越大。
+5. **動態權重應用**：用這三個權重加權三個模型的未來預測得到整合預測。
+
+### 12.3 look-ahead bias 防護設計
+
+| 防護點 | 實現 |
+|--------|------|
+| 每個預測點只用歷史 | `Arrays.copyOf(data, t)` 只含索引 0..t-1，不包含目標值 `data[t]` |
+| 評估窗口只取歷史區間 | `evalStart = max(10, n - windowDays)`，窗口 `[evalStart, n)` 全部是已發生的歷史 |
+| 不接觸未來預測目標 | 權重計算與未來 `forecastDays` 預測完全隔離——權重只用歷史算，再用於未來 |
+| 數據不足安全回退 | 序列過短或所有 MAE≈0 時回退到固定權重 0.35/0.35/0.30，永不拋異常 |
+
+### 12.4 配置與兼容性
+
+```yaml
+app:
+  forecast:
+    adaptive-weights: ${FORECAST_ADAPTIVE_WEIGHTS:false}   # 默認關閉，保持 Phase 4 行為
+    rolling-window-days: ${FORECAST_ROLLING_WINDOW_DAYS:60} # 僅 adaptive=true 時生效
+```
+
+- `adaptive-weights=false`（默認）：行為與 Phase 4 完全一致，使用固定權重。
+- `adaptive-weights=true`：啟用滾動窗口動態權重。
+- 緩存鍵含 `adaptive/fixed` + `rollingWindowDays` 後綴，切換配置不會命中彼此的緩存。
+
+### 12.5 DTO 變更
+
+`ProsperityForecastDto` 新增頂層 `weightSource`（"fixed" 或 "adaptive"）；`IndustryForecast` 新增 `arimaWeight` / `holtWintersWeight` / `linearWeight` 三個字段，標識該行業集成預測實際使用的權重。固定模式下所有行業權重均為 0.35/0.35/0.30；自適應模式下各行業權重依其歷史序列動態計算。
+
+### 12.6 測試覆蓋
+
+`ForecastAdaptiveWeightsTest`（`src/test/java/com/quantization/test/ForecastAdaptiveWeightsTest.java`）共 7 個測試：
+
+| 測試方法 | 覆蓋場景 |
+|----------|----------|
+| `weightSourceLabel_fixedWhenAdaptiveOff` | `adaptive=false` 時標籤為 "fixed" |
+| `weightSourceLabel_adaptiveWhenAdaptiveOn` | `adaptive=true` 時標籤為 "adaptive" |
+| `computeAdaptiveWeights_weightsSumToOne` | 動態權重三分量和為 1.0、均在 [0,1] |
+| `computeAdaptiveWeights_insufficientData_fallsBackToFixed` | 數據不足回退固定權重 |
+| `computeAdaptiveWeights_linearTrend_favorsLinearRegression` | 純線性趨勢下線性回歸權重更高 |
+| `computeAdaptiveWeights_doesNotThrow_onEdgeCases` | 短序列/常數序列不拋異常 |
+| `computeAdaptiveWeights_variousWindowSizes_sumToOne` | 不同窗口大小權重和均為 1.0 |
+
+---
+
+## 12. AutoML 嚴格日期隔離 Out-of-Sample 評估
+
+> 對應代碼：`ForecastService.autoTuneRotationPrediction()`（`ForecastService.java`）
+> 端點：`GET /api/stock/rotation-prediction/automl`
+
+### 12.1 設計動機
+
+AutoML 用 15 組合網格搜索（lookback×forward = 5×3）尋找最佳輪動預測參數。早期版本的 tune/eval 分離不嚴格——內部回測用近期窗口，調參和評估數據有重疊，導致 in-sample 過擬合風險：評估段表現可能被調參段數據「污染」。
+
+### 12.2 嚴格日期隔離設計
+
+採用**日期隔離 out-of-sample 評估**，將數據嚴格分為兩個不重疊區間：
+
+```
+時間軸 ──────────────────────────────────────────►
+        ├── 區間 A（調參 tune） ──┤├── 區間 B（評估 eval） ──┤
+        tuneStart          tuneEnd  evalStart          evalEnd
+```
+
+| 階段 | 區間 | 數據使用 | 目的 |
+|------|------|----------|------|
+| **調參（tune）** | 區間 A [tuneStartDate, tuneEndDate] | 只用區間 A 的數據做 15 組合網格搜索 | 選出綜合評分最高的參數組合 |
+| **評估（eval）** | 區間 B [evalStartDate, evalEndDate] | 只用區間 B 的數據，用選出的最佳參數跑回測 | 報告真正的 out-of-sample 表現 |
+
+**關鍵保證**：
+- 區間 B 必須在區間 A 之後（`evalStartDate > tuneEndDate`），兩者完全不重疊
+- 評估階段絕不接觸區間 A 的數據——數據拉取從 `evalStartDate` 開始，不拉取之前的數據
+- 回溯窗口 [T-lookback, T] 也嚴格限制在區間 B 內（預測日期 T 至少是區間 B 內第 lookbackDays 個交易日）
+- 前瞻驗證窗口 [T+1, T+forward] 可延伸到區間 B 之後（已預留緩衝數據，屬於「未來驗證」而非調參數據）
+
+### 12.3 默認分割（不傳日期參數時）
+
+不傳日期參數時，以當前日期為終點、向前回溯 `backtestDays` 天為總區間，按 70/30 分割：
+
+| 參數 | 默認值 | 說明 |
+|------|--------|------|
+| `backtestDays` | 90 | 總回測天數 |
+| 區間 A（調參） | 前 70%（約 63 天） | `today - backtestDays` ~ `today - backtestDays×30%` |
+| 區間 B（評估） | 後 30%（約 27 天） | `today - backtestDays×30% + 1天` ~ `today` |
+
+### 12.4 自定義區間
+
+通過可選查詢參數指定兩個區間：
+
+```
+GET /api/stock/rotation-prediction/automl
+    ?backtestDays=180
+    &tuneStartDate=2025-01-01
+    &tuneEndDate=2025-06-30
+    &evalStartDate=2025-07-01
+    &evalEndDate=2025-09-30
+```
+
+若傳入的區間有重疊（`evalStartDate ≤ tuneEndDate`），系統自動將 `evalStartDate` 調整到 `tuneEndDate + 1天` 以保證不重疊。
+
+### 12.5 輸出結構
+
+`RotationAutoMlDto` 新增兩個字段標明區間：
+
+| 字段 | 說明 |
+|------|------|
+| `tuneRange` | 調參區間 A 的日期範圍描述（如 `"2025-01-01 ~ 2025-06-30"`） |
+| `evalRange` | 評估區間 B 的日期範圍描述（如 `"2025-07-01 ~ 2025-09-30"`） |
+
+`ParamCombination` 中的 `evalHitRate` 和 `evalExcessReturn` 僅對最佳組合在區間 B 上有值，其餘組合為 0（因為評估階段只用選出的最佳參數跑回測）。
+
+### 12.6 方法論限制
+
+- **搜索空間有限**：15 組合窮舉，無貝葉斯/隨機搜索，泛化能力受限
+- **單一評估區間**：僅在一段連續區間 B 上評估，未做 walk-forward 或交叉驗證
+- **參數空間固定**：lookback/forward 選項硬編碼，無法自適應擴展

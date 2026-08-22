@@ -287,14 +287,26 @@ public class StockController {
     /**
      * 輪動預測 AutoML 自動調參 — 自動尋找最佳 lookback/forward 組合。
      *
-     * @param backtestDays 回測總天數（默認 90）
+     * <p>採用嚴格日期隔離 out-of-sample 評估：調參只用區間 A，評估只用區間 B（B 在 A 之後，不重疊）。
+     * 不傳日期參數時，默認前 70% 區間調參、後 30% 區間評估。
+     *
+     * @param backtestDays  回測總天數（默認 90，用於計算默認分割區間）
+     * @param tuneStartDate 調參區間 A 起始日期（可選，格式 yyyy-MM-dd）
+     * @param tuneEndDate   調參區間 A 結束日期（可選）
+     * @param evalStartDate 評估區間 B 起始日期（可選，須在 tuneEndDate 之後）
+     * @param evalEndDate   評估區間 B 結束日期（可選）
      * @return AutoML 結果 DTO
      */
-    @Operation(summary = "輪動預測 AutoML 自動調參")
+    @Operation(summary = "輪動預測 AutoML 自動調參（嚴格日期隔離 out-of-sample 評估）")
     @GetMapping("/rotation-prediction/automl")
     public ApiResponse<RotationAutoMlDto> rotationPredictionAutoMl(
-            @RequestParam(required = false, defaultValue = "90") int backtestDays) {
-        return ApiResponse.ok(forecastService.autoTuneRotationPrediction(backtestDays));
+            @RequestParam(required = false, defaultValue = "90") int backtestDays,
+            @RequestParam(required = false) LocalDate tuneStartDate,
+            @RequestParam(required = false) LocalDate tuneEndDate,
+            @RequestParam(required = false) LocalDate evalStartDate,
+            @RequestParam(required = false) LocalDate evalEndDate) {
+        return ApiResponse.ok(forecastService.autoTuneRotationPrediction(
+                backtestDays, tuneStartDate, tuneEndDate, evalStartDate, evalEndDate));
     }
 
     /**

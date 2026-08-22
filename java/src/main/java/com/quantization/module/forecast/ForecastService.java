@@ -1,6 +1,7 @@
 package com.quantization.module.forecast;
 
 import com.quantization.config.CacheConfig;
+import com.quantization.config.properties.AppProperties;
 import com.quantization.module.stock.IndustryDailyEntity;
 import com.quantization.module.stock.IndustryDailyRepository;
 import com.quantization.module.stock.StockMathUtils;
@@ -18,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,9 +42,17 @@ public class ForecastService {
     private static final double W_LR = 0.30;
 
     private final IndustryDailyRepository industryDailyRepository;
+    private final AppProperties appProperties;
 
-    public ForecastService(IndustryDailyRepository industryDailyRepository) {
+    public ForecastService(IndustryDailyRepository industryDailyRepository, AppProperties appProperties) {
         this.industryDailyRepository = industryDailyRepository;
+        this.appProperties = appProperties;
+    }
+
+    /** 供 {@code @Cacheable} SpEL 引用的預測權重配置後綴，確保 fixed/adaptive 切換不命中彼此的緩存。 */
+    public String forecastCacheKeySuffix() {
+        AppProperties.Forecast f = appProperties.getForecast();
+        return (f.isAdaptiveWeights() ? "adaptive" : "fixed") + "-" + f.getRollingWindowDays();
     }
 
     // ------------------------------------------------------------------------
@@ -366,6 +376,146 @@ public class ForecastService {
     }
 
     /**
+     * 日期隔離回測 — 僅在 [rangeStart, rangeEnd] 區間內運行回測，保證不接觸區間外的數據。
+     *
+     * 與 {@link #backtestRotationPrediction(int, int, int)} 的區別：
+     * - 數據拉取範圍為 [rangeStart, rangeEnd + forwardDays 緩衝]，**不拉取 rangeStart 之前的數據**
+     * - 預測日期 T 嚴格限制在 [rangeStart, rangeEnd] 內
+     * - 回溯窗口 [T-lookback, T] 也嚴格在 [rangeStart, rangeEnd] 內（T 至少是區間內第 lookbackDays 個交易日）
+     * - 前瞻驗證窗口 [T+1, T+forward] 可延伸到 rangeEnd 之後（已預留緩衝數據）
+     *
+     * 此方法用於 AutoML 的嚴格 out-of-sample 評估：調參區間 A 和評估區間 B 的數據完全不重疊。
+     *
+     * @param lookbackDays 回溯天數
+     * @param forwardDays  前瞻驗證天數
+     * @param rangeStart   回測區間起始日期（含）
+     * @param rangeEnd     回測區間結束日期（含）
+     * @return 回測結果 DTO
+     */
+    private RotationBacktestDto backtestRotationPredictionInRange(
+            int lookbackDays, int forwardDays, LocalDate rangeStart, LocalDate rangeEnd) {
+        // 數據拉取：從 rangeStart 起（不含之前數據），到 rangeEnd + forwardDays 緩衝（供前瞻驗證）
+        LocalDate dataStart = rangeStart;
+        LocalDate dataEnd = rangeEnd.plusDays(forwardDays + 20);
+
+        List<IndustryDailyEntity> allEntities = industryDailyRepository
+                .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(dataStart, dataEnd);
+
+        if (allEntities.isEmpty()) {
+            return new RotationBacktestDto(lookbackDays, forwardDays, 0, 0, 0, 0, 0, 0,
+                    "數據不足，無法回測", List.of());
+        }
+
+        // 按日期分組
+        Map<LocalDate, List<IndustryDailyEntity>> byDate = new LinkedHashMap<>();
+        for (IndustryDailyEntity e : allEntities) {
+            byDate.computeIfAbsent(e.getTradeDate(), k -> new ArrayList<>()).add(e);
+        }
+
+        List<LocalDate> sortedDates = new ArrayList<>(byDate.keySet());
+        sortedDates.sort(LocalDate::compareTo);
+
+        if (sortedDates.size() < lookbackDays + forwardDays + 5) {
+            return new RotationBacktestDto(lookbackDays, forwardDays, 0, 0, 0, 0, 0, 0,
+                    "交易日不足，無法回測（需要至少 " + (lookbackDays + forwardDays + 5) + " 個交易日）", List.of());
+        }
+
+        // 預測日期窗口：從第 lookbackDays 個交易日開始（保證回溯窗口在區間內），
+        // 到倒數 forwardDays 個交易日結束（保證前瞻驗證有足夠數據）
+        int startIdx = Math.max(lookbackDays, 5);
+        int endIdx = sortedDates.size() - forwardDays;
+
+        List<RotationBacktestDto.BacktestEntry> entries = new ArrayList<>();
+        int hitCount = 0;
+        double totalLeaderReturn = 0.0;
+        double totalMarketReturn = 0.0;
+
+        // 每隔幾個交易日取樣一次（避免過多回測點）
+        int step = Math.max(1, (endIdx - startIdx) / 30);
+
+        for (int i = startIdx; i < endIdx; i += step) {
+            LocalDate predictDate = sortedDates.get(i);
+
+            // 1. 用 predictDate 之前 lookbackDays 的數據生成預測（窗口嚴格在區間內）
+            int windowStart = Math.max(0, i - lookbackDays);
+            List<IndustryDailyEntity> windowData = new ArrayList<>();
+            for (int j = windowStart; j <= i; j++) {
+                windowData.addAll(byDate.get(sortedDates.get(j)));
+            }
+
+            List<String> predictedTop5 = predictTopIndustries(windowData, 5);
+            if (predictedTop5.isEmpty()) continue;
+
+            // 2. 計算 predictDate → actualEndDate 內各行業實際累計漲跌幅
+            Map<String, Double> actualReturns = new HashMap<>();
+            for (int j = i + 1; j <= Math.min(i + forwardDays, sortedDates.size() - 1); j++) {
+                for (IndustryDailyEntity e : byDate.get(sortedDates.get(j))) {
+                    if (e.getAvgPctChg() != null) {
+                        actualReturns.merge(e.getIndustry(), e.getAvgPctChg().doubleValue(), Double::sum);
+                    }
+                }
+            }
+
+            if (actualReturns.isEmpty()) continue;
+
+            // 3. 找出實際 Top 5 行業
+            List<String> actualTop5 = actualReturns.entrySet().stream()
+                    .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                    .limit(5)
+                    .map(Map.Entry::getKey)
+                    .toList();
+
+            String actualTop = actualTop5.isEmpty() ? "無" : actualTop5.get(0);
+
+            // 4. 計算預測領漲行業的實際收益
+            String topPredicted = predictedTop5.get(0);
+            double predictedReturn = actualReturns.getOrDefault(topPredicted, 0.0);
+            double marketAvg = actualReturns.values().stream()
+                    .mapToDouble(Double::doubleValue).average().orElse(0.0);
+            double excessReturn = predictedReturn - marketAvg;
+
+            // 5. 命中判定：預測 Top 5 與實際 Top 5 有交集
+            boolean hit = predictedTop5.stream().anyMatch(actualTop5::contains);
+            if (hit) hitCount++;
+
+            totalLeaderReturn += predictedReturn;
+            totalMarketReturn += marketAvg;
+            entries.add(new RotationBacktestDto.BacktestEntry(
+                    predictDate.toString(),
+                    topPredicted,
+                    actualTop,
+                    Math.round(predictedReturn * 1000.0) / 1000.0,
+                    Math.round(marketAvg * 1000.0) / 1000.0,
+                    Math.round(excessReturn * 1000.0) / 1000.0,
+                    hit
+            ));
+        }
+
+        int total = entries.size();
+        double hitRate = total > 0 ? (double) hitCount / total * 100.0 : 0.0;
+        double avgLeaderReturn = total > 0 ? totalLeaderReturn / total : 0.0;
+        double avgMarketReturn = total > 0 ? totalMarketReturn / total : 0.0;
+        double avgExcessReturn = avgLeaderReturn - avgMarketReturn;
+
+        String summary = String.format(
+                "回測 %d 次（lookback=%d日, forward=%d日, 區間=%s~%s）。命中率 %.1f%%。" +
+                "預測領漲平均收益 %.3f%%，市場平均 %.3f%%，超額收益 %.3f%%。",
+                total, lookbackDays, forwardDays, rangeStart, rangeEnd, hitRate,
+                avgLeaderReturn, avgMarketReturn, avgExcessReturn
+        );
+
+        return new RotationBacktestDto(
+                lookbackDays, forwardDays, total, hitCount,
+                Math.round(hitRate * 100.0) / 100.0,
+                Math.round(avgLeaderReturn * 1000.0) / 1000.0,
+                Math.round(avgMarketReturn * 1000.0) / 1000.0,
+                Math.round(avgExcessReturn * 1000.0) / 1000.0,
+                summary,
+                entries
+        );
+    }
+
+    /**
      * 內部方法：用給定數據窗口預測 Top N 領漲行業。
      * 邏輯與 predictRotation 相同，但不依賴當前日期。
      */
@@ -457,34 +607,94 @@ public class ForecastService {
     /**
      * 輪動預測 AutoML 自動調參 — 自動尋找最佳 lookbackDays × forwardDays 組合。
      *
-     * 搜尋空間：
-     * - lookbackDays: [5, 10, 15, 20, 30]
-     * - forwardDays: [3, 5, 10]
-     * 共 15 組合，每組用 backtestDays 回測。
+     * <p>採用<b>嚴格日期隔離 out-of-sample 評估設計</b>：
+     * <ul>
+     *   <li><b>調參階段（tune，區間 A）</b>：只用區間 A [tuneStartDate, tuneEndDate] 的數據
+     *       做 15 組合網格搜索，選出綜合評分最高的參數組合。評估階段絕不接觸區間 A 的數據。</li>
+     *   <li><b>評估階段（eval，區間 B）</b>：用選出的最佳參數在區間 B [evalStartDate, evalEndDate]
+     *       上跑回測，報告 out-of-sample 表現。區間 B 在區間 A 之後，兩者完全不重疊。</li>
+     *   <li><b>最終報告</b>：在區間 B 上的命中率與超額收益，即真正的樣本外表現。</li>
+     * </ul>
      *
-     * 評分公式：compositeScore = hitRate * 0.6 + excessReturnNormalized * 0.4
+     * <p>若不傳日期參數（調用 {@link #autoTuneRotationPrediction(int)}），使用默認分割：
+     * 以當前日期為終點、向前回溯 backtestDays 天為總區間，前 70% 為調參區間 A，後 30% 為評估區間 B。
      *
-     * @param backtestDays 回測總天數（默認 90）
+     * <p>搜尋空間：
+     * <ul>
+     *   <li>lookbackDays: [5, 10, 15, 20, 30]</li>
+     *   <li>forwardDays: [3, 5, 10]</li>
+     * </ul>
+     * 共 15 組合。
+     *
+     * <p>評分公式：compositeScore = hitRate * 0.6 + excessReturnNormalized * 0.4（基於調參段指標）
+     *
+     * @param backtestDays 回測總天數（默認 90，用於計算默認分割區間）
      * @return AutoML 結果 DTO
      */
     @Cacheable(value = CacheConfig.ROTATION_CACHE, key = "'rotation-automl-' + #p0")
     public RotationAutoMlDto autoTuneRotationPrediction(int backtestDays) {
+        // 默認分割：前 70% 調參，後 30% 評估
+        LocalDate today = LocalDate.now();
+        LocalDate totalStart = today.minusDays(backtestDays);
+        LocalDate splitPoint = totalStart.plusDays((long) (backtestDays * 0.7));
+        LocalDate tuneStart = totalStart;
+        LocalDate tuneEnd = splitPoint;
+        LocalDate evalStart = splitPoint.plusDays(1);
+        LocalDate evalEnd = today;
+        return autoTuneRotationPrediction(backtestDays, tuneStart, tuneEnd, evalStart, evalEnd);
+    }
+
+    /**
+     * 輪動預測 AutoML 自動調參（嚴格日期隔離版）— 指定調參區間 A 和評估區間 B。
+     *
+     * <p>嚴格保證：
+     * <ul>
+     *   <li>調參只用區間 A [tuneStartDate, tuneEndDate] 的數據</li>
+     *   <li>評估只用區間 B [evalStartDate, evalEndDate] 的數據</li>
+     *   <li>區間 B 必須在區間 A 之後（evalStartDate &gt; tuneEndDate），兩者不重疊</li>
+     *   <li>評估階段絕不接觸區間 A 的數據</li>
+     * </ul>
+     *
+     * @param backtestDays  回測總天數（保留參數以兼容緩存鍵，實際區間由日期參數決定）
+     * @param tuneStartDate 調參區間 A 起始日期（含），null 時用默認前 70%
+     * @param tuneEndDate   調參區間 A 結束日期（含），null 時用默認
+     * @param evalStartDate 評估區間 B 起始日期（含），null 時用默認後 30%
+     * @param evalEndDate   評估區間 B 結束日期（含），null 時用默認
+     * @return AutoML 結果 DTO，含 tuneRange 和 evalRange 字段標明兩個區間
+     */
+    public RotationAutoMlDto autoTuneRotationPrediction(int backtestDays,
+                                                        LocalDate tuneStartDate, LocalDate tuneEndDate,
+                                                        LocalDate evalStartDate, LocalDate evalEndDate) {
+        // 若任一日期為 null，回退到默認 70/30 分割
+        if (tuneStartDate == null || tuneEndDate == null || evalStartDate == null || evalEndDate == null) {
+            LocalDate today = LocalDate.now();
+            LocalDate totalStart = today.minusDays(backtestDays);
+            LocalDate splitPoint = totalStart.plusDays((long) (backtestDays * 0.7));
+            if (tuneStartDate == null) tuneStartDate = totalStart;
+            if (tuneEndDate == null) tuneEndDate = splitPoint;
+            if (evalStartDate == null) evalStartDate = splitPoint.plusDays(1);
+            if (evalEndDate == null) evalEndDate = today;
+        }
+
+        // 驗證區間 B 在區間 A 之後（嚴格不重疊）
+        if (!evalStartDate.isAfter(tuneEndDate)) {
+            // 區間重疊時自動調整：將 evalStart 移到 tuneEnd 之後
+            evalStartDate = tuneEndDate.plusDays(1);
+        }
+
+        String tuneRange = tuneStartDate + " ~ " + tuneEndDate;
+        String evalRange = evalStartDate + " ~ " + evalEndDate;
+
         int[] lookbackOptions = {5, 10, 15, 20, 30};
         int[] forwardOptions = {3, 5, 10};
 
-        // P4-4: 切分 tune/eval 兩段，防止 in-sample 過擬合
-        int tuneDays = (int) (backtestDays * 2.0 / 3.0);
-        int evalDays = backtestDays - tuneDays;
-        if (tuneDays < 30) tuneDays = backtestDays; // 數據太少時不分段
-
+        // ===== 調參階段：只用區間 A 的數據做網格搜索 =====
         List<RotationAutoMlDto.ParamCombination> combinations = new ArrayList<>();
 
         for (int lookback : lookbackOptions) {
             for (int forward : forwardOptions) {
-                RotationBacktestDto tuneBt = backtestRotationPrediction(lookback, forward, tuneDays);
-                // eval 段：用最後 evalDays 天驗證
-                RotationBacktestDto evalBt = tuneDays < backtestDays
-                        ? backtestRotationPrediction(lookback, forward, evalDays) : tuneBt;
+                RotationBacktestDto tuneBt = backtestRotationPredictionInRange(
+                        lookback, forward, tuneStartDate, tuneEndDate);
                 if (tuneBt.totalPredictions() == 0) {
                     combinations.add(new RotationAutoMlDto.ParamCombination(
                             lookback, forward, 0, 0, 0, 0, 0, 0, 0));
@@ -494,7 +704,7 @@ public class ForecastService {
                         lookback, forward,
                         tuneBt.hitRate(), tuneBt.avgExcessReturn(), tuneBt.avgLeaderReturn(),
                         tuneBt.totalPredictions(), 0, // compositeScore 稍後計算
-                        evalBt.hitRate(), evalBt.avgExcessReturn()
+                        0, 0 // eval 段稍後只對最佳組合計算
                 ));
             }
         }
@@ -517,19 +727,37 @@ public class ForecastService {
             ));
         }
 
-        // 按 tune 段綜合評分排序
+        // 按 tune 段綜合評分排序，選出最佳參數
         scored.sort((a, b) -> Double.compare(b.compositeScore(), a.compositeScore()));
-
         RotationAutoMlDto.ParamCombination best = scored.isEmpty() ? null : scored.get(0);
+
+        // ===== 評估階段：只用區間 B 的數據，用最佳參數跑回測 =====
+        double evalHitRate = 0.0;
+        double evalExcessReturn = 0.0;
+        if (best != null && best.totalPredictions() > 0) {
+            RotationBacktestDto evalBt = backtestRotationPredictionInRange(
+                    best.lookbackDays(), best.forwardDays(), evalStartDate, evalEndDate);
+            evalHitRate = evalBt.hitRate();
+            evalExcessReturn = evalBt.avgExcessReturn();
+
+            // 將最佳組合的 eval 結果填入
+            int bestIdx = scored.indexOf(best);
+            scored.set(bestIdx, new RotationAutoMlDto.ParamCombination(
+                    best.lookbackDays(), best.forwardDays(),
+                    best.hitRate(), best.avgExcessReturn(), best.avgLeaderReturn(),
+                    best.totalPredictions(), best.compositeScore(),
+                    evalHitRate, evalExcessReturn
+            ));
+        }
 
         String summary = best == null
                 ? "數據不足，無法調參"
                 : String.format(
-                        "最佳參數：lookback=%d日, forward=%d日。調參段命中率 %.1f%%，超額 %.3f%%；" +
-                        "樣本外驗證命中率 %.1f%%，超額 %.3f%%（防 in-sample 過擬合）。",
+                        "最佳參數：lookback=%d日, forward=%d日。調參區間(%s)命中率 %.1f%%，超額 %.3f%%；" +
+                        "評估區間(%s)命中率 %.1f%%，超額 %.3f%%（嚴格 out-of-sample，區間不重疊）。",
                         best.lookbackDays(), best.forwardDays(),
-                        best.hitRate(), best.avgExcessReturn(),
-                        best.evalHitRate(), best.evalExcessReturn()
+                        tuneRange, best.hitRate(), best.avgExcessReturn(),
+                        evalRange, evalHitRate, evalExcessReturn
                 );
 
         return new RotationAutoMlDto(
@@ -539,7 +767,9 @@ public class ForecastService {
                 best == null ? 0 : best.avgExcessReturn(),
                 best == null ? 0 : best.compositeScore(),
                 summary,
-                scored
+                scored,
+                tuneRange,
+                evalRange
         );
     }
 
@@ -857,11 +1087,19 @@ public class ForecastService {
      * 2. Holt-Winters：三重指數平滑
      * 3. 線性回歸：OLS 趨勢預測
      *
+     * <p>集成權重來源由 {@code app.forecast.adaptive-weights} 配置決定：
+     * <ul>
+     *   <li>{@code false}（默認）：固定權重 W_ARIMA/W_HW/W_LR，行為與 Phase 4 一致。</li>
+     *   <li>{@code true}：調用 {@link #computeAdaptiveWeights} 用滾動窗口逆 MAE 計算動態權重，
+     *       僅使用截至預測日的歷史數據，避免 look-ahead bias。</li>
+     * </ul>
+     *
      * @param months        分析回溯月數（默認 6）
      * @param forecastDays  預測天數（默認 5）
      * @return 多模型預測 DTO
      */
-    @Cacheable(value = CacheConfig.FORECAST_CACHE, key = "'prosperity-forecast-' + #p0 + '-' + #p1")
+    @Cacheable(value = CacheConfig.FORECAST_CACHE,
+            key = "'prosperity-forecast-' + #p0 + '-' + #p1 + '-' + #root.target.forecastCacheKeySuffix()")
     public ProsperityForecastDto prosperityForecast(int months, int forecastDays) {
         LocalDate end = LocalDate.now();
         LocalDate start = end.minusMonths(months);
@@ -870,7 +1108,7 @@ public class ForecastService {
                 .findByTradeDateBetweenOrderByTradeDateAscIndustryAsc(start, end);
 
         if (entities.isEmpty()) {
-            return new ProsperityForecastDto(end.toString(), forecastDays, Map.of(), "數據不足，無法預測");
+            return new ProsperityForecastDto(end.toString(), forecastDays, Map.of(), "數據不足，無法預測", weightSourceLabel());
         }
 
         // 按日期分組
@@ -883,7 +1121,7 @@ public class ForecastService {
         sortedDates.sort(LocalDate::compareTo);
 
         if (sortedDates.size() < 10) {
-            return new ProsperityForecastDto(end.toString(), forecastDays, Map.of(), "交易日不足，無法預測（需至少 10 日）");
+            return new ProsperityForecastDto(end.toString(), forecastDays, Map.of(), "交易日不足，無法預測（需至少 10 日）", weightSourceLabel());
         }
 
         // 預計算每日景氣度
@@ -914,6 +1152,10 @@ public class ForecastService {
             }
         }
 
+        boolean adaptive = appProperties.getForecast().isAdaptiveWeights();
+        int windowDays = appProperties.getForecast().getRollingWindowDays();
+        String weightSource = weightSourceLabel();
+
         Map<String, ProsperityForecastDto.IndustryForecast> result = new LinkedHashMap<>();
 
         for (Map.Entry<String, List<Double>> entry : industrySeries.entrySet()) {
@@ -932,10 +1174,16 @@ public class ForecastService {
             // 3. 線性回歸預測
             double[] linearForecast = forecastLinearRegression(data, forecastDays);
 
-            // 4. 整合預測（固定權重 W_ARIMA/W_HW/W_LR；回測端點可揭示最優權重）
+            // 4. 整合預測（權重來源：固定 or 滾動窗口逆 MAE 動態權重）
+            double[] weights = adaptive
+                    ? computeAdaptiveWeights(data, windowDays)
+                    : new double[]{W_ARIMA, W_HW, W_LR};
+            double wArima = weights[0];
+            double wHw = weights[1];
+            double wLinear = weights[2];
             double[] ensemble = new double[forecastDays];
             for (int i = 0; i < forecastDays; i++) {
-                ensemble[i] = arimaForecast[i] * W_ARIMA + hwForecast[i] * W_HW + linearForecast[i] * W_LR;
+                ensemble[i] = arimaForecast[i] * wArima + hwForecast[i] * wHw + linearForecast[i] * wLinear;
                 ensemble[i] = Math.max(0, Math.min(100, ensemble[i]));
             }
 
@@ -957,7 +1205,10 @@ public class ForecastService {
                     hwTrend,
                     linearTrend,
                     consensusTrend,
-                    forecastDates
+                    forecastDates,
+                    Math.round(wArima * 10000.0) / 10000.0,
+                    Math.round(wHw * 10000.0) / 10000.0,
+                    Math.round(wLinear * 10000.0) / 10000.0
             ));
         }
 
@@ -979,7 +1230,7 @@ public class ForecastService {
                 sorted.isEmpty() ? "" : sorted.get(sorted.size() - 1).getValue().consensusTrend()
         );
 
-        return new ProsperityForecastDto(end.toString(), forecastDays, result, summary);
+        return new ProsperityForecastDto(end.toString(), forecastDays, result, summary, weightSource);
     }
 
     /**
@@ -1644,16 +1895,86 @@ public class ForecastService {
 
     /** P4-3: 根據各模型 MAE 計算逆 MAE 最優權重（MAE 越小權重越大）。 */
     private static String computeOptimalWeights(double arimaMae, double hwMae, double linearMae) {
-        // 逆 MAE 加權：w_i = (1/mae_i) / sum(1/mae_j)
+        double[] w = inverseMaeWeights(arimaMae, hwMae, linearMae);
+        if (w == null) return "N/A（數據不足）";
+        return String.format("ARIMA %.2f / HW %.2f / LR %.2f", w[0], w[1], w[2]);
+    }
+
+    /** 當前預測使用的權重來源標籤（"fixed" 或 "adaptive"），用於 DTO 與緩存鍵。 */
+    private String weightSourceLabel() {
+        return appProperties.getForecast().isAdaptiveWeights() ? "adaptive" : "fixed";
+    }
+
+    /**
+     * 滾動窗口逆 MAE 自適應集成權重計算（避免 look-ahead bias）。
+     * <p>
+     * 在過去 {@code windowDays} 個時間點構成的滾動窗口內，對每個時間點 t 做 one-step-ahead 預測：
+     * 預測 data[t] 時<strong>只用 data[0..t-1]</strong>（截至 t 的歷史），絕不接觸 t 及之後的數據，
+     * 從而杜絕 look-ahead bias。累計各模型絕對誤差得到 MAE，再以逆 MAE 歸一化得到動態權重。
+     *
+     * <h3>look-ahead bias 防護設計</h3>
+     * <ul>
+     *   <li>每個時間點的預測輸入 {@code Arrays.copyOf(data, t)} 只含索引 0..t-1，不包含目標值 data[t]。</li>
+     *   <li>評估窗口僅取歷史區間 [evalStart, n)，不觸及未來預測目標。</li>
+     *   <li>數據不足（無法構成有效窗口）時回退到固定權重，保證永不拋異常。</li>
+     * </ul>
+     *
+     * @param data       景氣度歷史序列（按時間升序）
+     * @param windowDays 滾動窗口天數（評估的歷史時間點數量）
+     * @return {@code double[3]}：[ARIMA 權重, HW 權重, LR 權重]，和為 1.0
+     */
+    double[] computeAdaptiveWeights(double[] data, int windowDays) {
+        int n = data.length;
+        // 評估窗口起點：確保每個預測點之前至少有 10 個歷史點供模型擬合
+        int minHistory = 10;
+        int evalStart = Math.max(minHistory, n - Math.max(1, windowDays));
+        if (evalStart >= n - 1) {
+            // 數據不足以構成滾動窗口，回退到固定權重
+            return new double[]{W_ARIMA, W_HW, W_LR};
+        }
+
+        double totalArimaError = 0;
+        double totalHwError = 0;
+        double totalLinearError = 0;
+        int count = 0;
+
+        for (int t = evalStart; t < n; t++) {
+            // 關鍵：只用 data[0..t-1] 預測 data[t]，不接觸 t 及之後的數據（無 look-ahead bias）
+            double[] history = Arrays.copyOf(data, t);
+            double[] arimaF = forecastARIMA(history, 1);
+            double[] hwF = forecastHoltWinters(history, 1, HW_SEASON_LENGTH);
+            double[] linearF = forecastLinearRegression(history, 1);
+            double actual = data[t];
+            totalArimaError += Math.abs(arimaF[0] - actual);
+            totalHwError += Math.abs(hwF[0] - actual);
+            totalLinearError += Math.abs(linearF[0] - actual);
+            count++;
+        }
+
+        if (count == 0) {
+            return new double[]{W_ARIMA, W_HW, W_LR};
+        }
+        double arimaMae = totalArimaError / count;
+        double hwMae = totalHwError / count;
+        double linearMae = totalLinearError / count;
+        double[] w = inverseMaeWeights(arimaMae, hwMae, linearMae);
+        return w != null ? w : new double[]{W_ARIMA, W_HW, W_LR};
+    }
+
+    /**
+     * 逆 MAE 權重歸一化：{@code w_i = (1/mae_i) / sum(1/mae_j)}。
+     * <p>
+     * MAE 越小（模型越準）權重越大。當所有 MAE 都接近 0 或數據不足時返回 {@code null}（由調用方回退）。
+     *
+     * @return {@code double[3]} 歸一化權重（和為 1.0），或 {@code null} 表示無法計算
+     */
+    private static double[] inverseMaeWeights(double arimaMae, double hwMae, double linearMae) {
         double invArima = arimaMae > 0.01 ? 1.0 / arimaMae : 0;
         double invHw = hwMae > 0.01 ? 1.0 / hwMae : 0;
         double invLinear = linearMae > 0.01 ? 1.0 / linearMae : 0;
         double sum = invArima + invHw + invLinear;
-        if (sum < 1e-9) return "N/A（數據不足）";
-        double wArima = invArima / sum;
-        double wHw = invHw / sum;
-        double wLinear = invLinear / sum;
-        return String.format("ARIMA %.2f / HW %.2f / LR %.2f", wArima, wHw, wLinear);
+        if (sum < 1e-9) return null;
+        return new double[]{invArima / sum, invHw / sum, invLinear / sum};
     }
 
     /** 高斯消去法解線性方程組 Ax=b。 */
