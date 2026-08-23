@@ -5,7 +5,7 @@
 - `java/` — 后端：Java 21 + Spring Boot 3.3 + Spring Data JPA + Caffeine
   - 入口：`src/main/java/com/quantization/QuantizationApplication.java`
   - 配置：`src/main/resources/application.yml`（从 `.env` 读取）
-  - 模块：`com.quantization.module.{stock,industry,forecast,indicator,dashboard,screener,backtest,chart,sync,system,preference,aicalllog,news}`（**13 個模塊**，`stock` 已三分拆為 `stock`（行情）+ `industry`（景氣度）+ `forecast`（預測），`aicalllog` 為 AI 調用日誌，`news` 為財經新聞）
+  - 模块：`com.quantization.module.{stock,industry,forecast,indicator,dashboard,screener,backtest,chart,sync,system,preference,aicalllog,news,chat}`（**14 個模塊**，`stock` 已三分拆為 `stock`（行情）+ `industry`（景氣度）+ `forecast`（預測），`aicalllog` 為 AI 調用日誌，`news` 為財經新聞，`chat` 為 AI 聊天對話持久化）
   - 行業分析：`module.industry` 含行業景氣度計算、異常預警；`module.forecast` 含輪動預測、Markov 模型、多模型預測（ARIMA/Holt-Winters/線性回歸）、AutoML 調參、季節性分析、回測驗證
   - 指標引擎：`module.indicator` 已改為 `IndicatorCalculator` 註冊表模式（`Map<String,IndicatorCalculator>`），新增指標只需實現接口 + `@Component`，無需改 `IndicatorEngine`
   - 通知服務：`module.system` 含 `NotificationService`（SMTP 郵件 + Webhook，異步推送，獨立 `notificationExecutor` 線程池）+ `ProsperityAlertScheduler`（P4-8：可配置定時調度，`ALERT_SCHEDULER_ENABLED=true` + cron，預設關閉）
@@ -14,12 +14,14 @@
   - API 安全：`SecurityConfig` + `ApiKeyFilter`（`SECURITY_ENABLED=true` + `API_KEY` 環境變量啟用，開發環境默認關閉）；Agent 端 `ApiKeyMiddleware`（`API_KEY` 非空時啟用）
   - 數據同步：`module.sync` 含 `QuarterlyRefreshScheduler`（每季度自動全刷 adjustflag=2 前復權數據，消除陳舊化，`SYNC_QUARTERLY_REFRESH=true`）
   - 財經新聞：`module.news` 提供華爾街見聞新聞的查詢與管理（`financial_news` 表，URI 去重）；新聞抓取由 Agent 服務的 `wallstreetcn_client.py` + `news_store.py`（MySQL + Milvus 向量庫雙寫）負責，後端僅負責已入庫新聞的分頁查詢與過期清理
+  - AI 聊天：`module.chat` 提供 AI 投研聊天的對話持久化（`chat_conversation` + `chat_message` 表，單用戶模式 user_id='default'）；前端懸浮卡片發送消息 → Java 保存用戶消息 → Agent SSE 流式回復（ToolCalling + 7 工具）→ Java 保存 AI 回復（含引用來源 JSON）；支持歷史對話切換、模型選擇、引用追溯
   - 緩存：已按域拆名（`STOCK_DAILY_CACHE`/`INDUSTRY_DAILY_CACHE`/`FORECAST_CACHE`/`ROTATION_CACHE`），各域獨立 TTL
   - 构建：`mvn -DskipTests compile`（需 JDK 21）
   - 运行：`mvn spring-boot:run`，默认 `http://localhost:8090`，**context-path 默認 `/TradingWorkstation`**，Swagger `/TradingWorkstation/swagger-ui.html`
 - `next/` — 前端：Next.js 15.1.9 (App Router) + ECharts + shadcn/ui + Tailwind
   - 入口：`src/app/layout.tsx`、`src/app/page.tsx`
   - API 客户端：`src/lib/api/`，类型与后端 DTO 一一对应
+  - AI 聊天懸浮卡片：`src/components/chat/`（FloatingChatCard + ChatMessageList + ChatInput + ConversationList），`src/lib/api/chat.ts` 封裝對話 CRUD（Java 後端）+ SSE 流式聊天（Agent）；支持模型選擇、歷史對話切換、引用來源展示、工具調用狀態實時顯示
   - ECharts 共用封裝：`src/hooks/useEChartsOption.ts`（統一主題/tooltip/空態/loading）
   - 測試：`npm run test`（vitest，24 個測試覆蓋 lib/api 層）
   - 构建：`npm run build`（需 `--legacy-peer-deps` 安装，因 SWR peer dep 限制）
@@ -30,7 +32,8 @@
   - LLM 供應商：DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin、ox-alpha（8 個供應商，按階段性價比路由）+ 熔斷器（CircuitBreaker，連續失敗 3 次暫停 5 分鐘）
   - 財經新聞：`agent/app/services/wallstreetcn_client.py`（華爾街見聞公開 API 抓取，無需 API Key）+ `news_store.py`（MySQL `financial_news` 表 + Milvus 向量庫雙寫，30 天 TTL，URI 去重）；`market_news.py` 階段集成語義檢索 + 實時抓取，按強弱勢行業關鍵詞補充搜索；Agent 端點 `/api/agent/news/sync`、`/news/wallstreetcn/search`、`/news/wallstreetcn/latest`、向量語義檢索
   - 優化循環改進：`optimizer.py` 防死循環（連續重複回退注入強變異 next_prompt）；`scoring.py` 新增超額收益(excessReturn) + 交易活躍度(totalTrades)評分維度，懲罰空倉「假穩健」；`strategy_generation.py` 重複策略警告 + 超短線交易鐵律
-  - 測試：`cd agent && python -m pytest tests/`（22 個測試文件，324 個測試，覆蓋率門檻 40%）
+  - AI 聊天（懸浮卡片）：`agent/app/chat/` 模組提供 ToolCalling 聊天引擎 + 7 工具（5 個直接 API 工具 + 2 個 MCP 協議工具）；`engine.py` 編排 LLM 調用 + 工具調用循環（最多 5 輪）；SSE 流式端點 `/api/agent/chat/stream`；工具分兩類：Tools（`open_web_search`/`exa_search`/`baidu_search`/`grep_app_search`/`context7_search`）+ MCP（`ftshare_mcp`/`a_share_mcp`）；環境變量 `EXA_API_KEY`/`BAIDU_QIANFAN_API_KEY`/`FTSHARE_MCP_URL`/`A_SHARE_MCP_URL`
+  - 測試：`cd agent && python -m pytest tests/`（23 個測試文件，342 個測試，覆蓋率門檻 40%）
   - 監控：`/api/agent/metrics`（Prometheus 指標端點）
   - 运行：`uvicorn app.main:app`，默认 `http://localhost:8100`，Swagger `/docs`
 - `ingestion/` — Python Baostock 数据采集（由后端 sync 模块编排；已拆分為 `baostock_fetch.py`（API 調用層）+ `baostock_write.py`（DB 寫入層）+ `baostock_ingest.py`（入口/CLI/菜單）；寫入 stock_daily / index_daily / index_metadata / stock_industry / **industry_daily 聚合**；⚠️ 前復權(adjustflag=2)增量陳舊化風險，每季度需跑 `--full-refresh-adjustflag2`；支持 `--progress-json` JSON 進度協議）

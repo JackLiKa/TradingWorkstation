@@ -1,8 +1,9 @@
-# Agent 服務專題（LLM 路由與優化循環）
+# Agent 服務專題（LLM 路由與優化循環 + AI 聊天）
 
 > 對應代碼：`agent/app/`
 > 服務：FastAPI，端口 8100，前綴 `/api/agent`，Swagger `:8100/docs`
 > 定位：無人值守的選股策略自動優化循環——用多個 LLM 分工生成/反思策略，用後端回測 API 驗證，用向量庫記憶經驗。
+> **新增**：AI 聊天引擎（`agent/app/chat/`）— ToolCalling + 7 工具 + SSE 流式，為前端懸浮聊天卡片提供投研問答能力。
 
 ---
 
@@ -10,7 +11,7 @@
 
 ```mermaid
 flowchart TD
-    subgraph API["api/routes.py (22 端點)"]
+    subgraph API["api/routes.py (29 端點)"]
         start["POST /start"] --> task["asyncio.create_task(run_optimization_loop)"]
     end
     subgraph LOOP["agents/optimizer.py 優化循環"]
@@ -403,6 +404,10 @@ agent_json_failure_total{recovered="true",stage="strategy_generation"} 1
 | | `DEEPSEEK_API_KEY` | "" | DeepSeek V4-Pro/Flash |
 | | `GLM_API_KEY` | "" | GLM-5.2/4-Flash |
 | | `QWEN_API_KEY` | "" | Qwen3.6 |
+| **聊天工具** | `EXA_API_KEY` | "" | Exa.ai 語義搜索（每日 150 次免費） |
+| | `BAIDU_QIANFAN_API_KEY` | "" | 百度千帆 AI 搜索 |
+| | `FTSHARE_MCP_URL` | `https://market.ft.tech/gateway/mcp` | FTShare MCP 服務地址（無需 Key） |
+| | `A_SHARE_MCP_URL` | `http://localhost:8101/mcp` | a-share-mcp 服務地址（需本地啟動） |
 | **後端** | `BACKEND_API_URL` | `http://localhost:8090/TradingWorkstation` | **帶前綴** |
 | | `BACKEND_TIMEOUT` | 600 | 後端調用超時（秒） |
 | | `BACKEND_MAX_RETRIES` | 3 | 最大重試次數 |
@@ -434,7 +439,7 @@ agent_json_failure_total{recovered="true",stage="strategy_generation"} 1
 cd agent && pip install -r requirements.txt
 cp .env.example .env   # 填至少一個 LLM key
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8100
-python -m pytest tests/          # 200+ 個測試，覆蓋率門檻 40%
+python -m pytest tests/          # 342 個測試，覆蓋率門檻 40%
 ```
 
 ### 11.1 測試覆蓋（200+ 個測試）
@@ -458,6 +463,7 @@ python -m pytest tests/          # 200+ 個測試，覆蓋率門檻 40%
 | `test_user_config_preservation.py` | 5 | 用戶配置保留 |
 | **`test_news_store.py`** | — | **新聞存儲/檢索/URI 去重/降級（news 模塊）** |
 | **`test_wallstreetcn_client.py`** | — | **華爾街見聞抓取/數據清洗/降級（news 模塊）** |
+| **`test_chat.py`** | **16** | **聊天引擎/工具註冊表/系統提示詞（chat 模組）** |
 
 **Phase 5 多窗口測試**（`test_optimizer_multi_window.py`，24 個）：
 - `TestWeightedAverageScore`（7）：權重計算/邊界條件/常量一致性
@@ -481,3 +487,93 @@ python -m pytest tests/          # 200+ 個測試，覆蓋率門檻 40%
 | 7 | **防死循環**（`optimizer.py`）：連續 2+ 輪生成與 best 完全相同的策略時，自動注入強變異 next_prompt（擴展行業/加止損/降低調倉頻率/調整 minTurn/minVolumeRatio），打破局部最優 |
 | 8 | **空倉懲罰**（`scoring.py`）：0 筆交易 = 0 分（交易活躍度維度），防止通過不交易規避回撤的「假穩健」策略被高分獎勵 |
 | 9 | **華爾街見聞新聞**（`wallstreetcn_client.py`）：使用公開 API 無需 API Key，但需遵守 llms.txt 引用規範（須注明來源：華爾街見聞，[標題]，[日期]，URL） |
+| 10 | **AI 聊天工具**（`chat/`）：a-share-mcp 需本地啟動 MCP 服務（默認端口 8101），否則該工具返回錯誤提示；Context7 公開 API 可能尚未完全開放，搜索失敗時優雅降級 |
+
+---
+
+## 13. AI 聊天引擎（chat/ 模組）
+
+> 對應代碼：`agent/app/chat/`
+> 定位：為前端懸浮聊天卡片提供 ToolCalling + SSE 流式投研問答能力。
+
+### 13.1 架構
+
+```mermaid
+flowchart TD
+    subgraph CHAT["chat/ 模組"]
+        engine["engine.py<br/>ChatEngine<br/>工具調用編排（最多5輪）"]
+        registry["registry.py<br/>ToolRegistry<br/>延遲初始化7工具"]
+        prompt["prompt.py<br/>系統提示詞<br/>（量化投研助手角色）"]
+    end
+
+    subgraph TOOLS["tools/（直接 API 調用）"]
+        t1["open_web_search<br/>DuckDuckGo 搜索"]
+        t2["exa_search<br/>Exa.ai 語義搜索"]
+        t3["baidu_search<br/>百度千帆搜索"]
+        t4["grep_app_search<br/>GitHub 代碼搜索"]
+        t5["context7_search<br/>官方文檔搜索"]
+    end
+
+    subgraph MCP["mcp/（MCP 協議）"]
+        m1["ftshare_mcp<br/>FTShare 金融數據<br/>（150+ 工具）"]
+        m2["a_share_mcp<br/>A股歷史數據<br/>（Baostock）"]
+    end
+
+    engine --> registry
+    registry --> TOOLS
+    registry --> MCP
+    engine --> prompt
+    engine -->|"OpenAI function calling"| llm["LLM<br/>glm-5.2/qwen/deepseek"]
+    llm -->|"tool_calls"| engine
+```
+
+### 13.2 工具調用流程
+
+1. 前端發送 `POST /api/agent/chat/stream`（消息歷史 + 可選 provider）
+2. `ChatEngine` 構建 system prompt + tool definitions + 歷史消息
+3. 調用 LLM（OpenAI function calling 格式）
+4. 若 LLM 返回 `tool_calls` → 執行工具 → 將結果餵回 LLM → 重複（最多 5 輪）
+5. LLM 返回最終文本 → SSE 流式輸出（content 塊 + done 事件）
+6. 前端收到 done 事件後，調用 Java 後端保存 AI 回復
+
+### 13.3 SSE 事件協議
+
+| 事件類型 | 字段 | 說明 |
+|----------|------|------|
+| `tool_start` | tool, arguments | 工具開始執行 |
+| `tool_end` | tool, success, citations, error | 工具執行完成（含引用來源） |
+| `content` | text | 文本塊（打字機效果，20 字/塊） |
+| `done` | provider, model, citations, tool_calls_log, tokens | 全部完成（含所有引用 + 工具鏈） |
+| `error` | message | 錯誤 |
+
+### 13.4 7 個工具
+
+| 分類 | 工具名 | 顯示名 | 數據源 | API Key |
+|------|--------|--------|--------|---------|
+| Tools | `open_web_search` | 全網資訊檢索 | DuckDuckGo Lite HTML 解析 | 無需 |
+| Tools | `exa_search` | Exa 深度語義搜索 | Exa.ai API | `EXA_API_KEY`（每日 150 次免費） |
+| Tools | `baidu_search` | 百度中文資訊搜索 | 百度千帆 AI 搜索 API | `BAIDU_QIANFAN_API_KEY` |
+| Tools | `grep_app_search` | 開源代碼搜索 | grep.app API | 無需 |
+| Tools | `context7_search` | Context7 文檔搜索 | Context7 API | 無需 |
+| MCP | `ftshare_mcp` | FTShare 金融數據 | FTShare MCP（streamableHttp） | 無需（公開服務） |
+| MCP | `a_share_mcp` | A股歷史數據 | a-share-mcp（本地 MCP 服務） | 無需（需本地啟動） |
+
+### 13.5 支持 function calling 的供應商
+
+僅以下供應商用於聊天（按優先級排序）：
+
+| 供應商 | 模型 | 說明 |
+|--------|------|------|
+| `glm-5.2` | GLM-5.2 | JSON 最穩定，默認首選 |
+| `qwen` | Qwen3.6 | 中文金融文本最佳 |
+| `deepseek-flash` | DeepSeek V4-Flash | 性價比高 |
+| `deepseek-pro` | DeepSeek V4-Pro | 推理最強 |
+
+### 13.6 系統提示詞要點
+
+- 角色：頂尖量化交易與智能投研助手
+- 核心目標：結合實時網路資訊 + 金融數據接口，提供基於真實數據的分析
+- 工具調用規則：禁止僅憠訓練數據回答金融事實類問題
+- 數據交叉驗證：先調用金融 MCP 獲取基本面，再調用搜索補充市場情緒
+- 輸出規範：必須標註數據來源，優先使用 Markdown 表格
+- 容錯機制：數據不可用時明確告知，嚴禁編造

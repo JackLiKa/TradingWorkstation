@@ -78,7 +78,7 @@ pip install -r ingestion/requirements.txt
 |----|------|--------|-----------|
 | **Java** | `cd java && mvn test` | **80**（3 skipped） | — |
 | **前端** | `cd next && npm run test` | **24** | — |
-| **Agent** | `cd agent && python -m pytest tests/` | **197** | 40%（pytest.ini） |
+| **Agent** | `cd agent && python -m pytest tests/` | **342** | 40%（pytest.ini） |
 
 ### 3.2 Java 測試（80 個）
 
@@ -102,9 +102,9 @@ pip install -r ingestion/requirements.txt
 
 `src/lib/api/__tests__/api.test.ts`，覆蓋 lib/api 層（API 客戶端函數/類型映射）。
 
-### 3.4 Agent 測試（197 個 pytest）
+### 3.4 Agent 測試（342 個 pytest）
 
-15 個測試文件，覆蓋率門檻 40%（`pytest.ini`）。含 **24 個多窗口評分測試**（Phase 5 新增，`test_optimizer_multi_window.py`）：
+23 個測試文件，覆蓋率門檻 40%（`pytest.ini`）。含 **24 個多窗口評分測試**（Phase 5 新增，`test_optimizer_multi_window.py`）+ **16 個聊天引擎測試**（chat 模組，`test_chat.py`）：
 
 | 測試類 | 測試數 | 覆蓋場景 |
 |--------|--------|----------|
@@ -280,6 +280,7 @@ CI 見 `.github/workflows/`。
 | 環境變量 | .env.example（或 agent/.env.example）+ AppProperties/config.py 綁定 + DEPLOYMENT.md §4 |
 | 緩存名/TTL | CacheConfig 常量與 CacheManager 註冊 + MODULE_GUIDE.md 緩存表 |
 | agent 階段/供應商 | providers.py STAGE_DEFAULT_PROVIDERS + few_shot.py 示例 + AGENT_SERVICE.md |
+| chat 工具/提示詞 | `agent/app/chat/registry.py` 工具註冊 + `agent/app/chat/prompt.py` 系統提示詞 + AGENT_SERVICE.md §13 + 前端 `chat.ts` 工具展示 |
 
 **OpenAPI 類型生成管線**：已接入 `openapi-typescript` 從後端 `/v3/api-docs` 生成前端類型，逐步消滅 types.ts 手工同步（詳見下方 §12「OpenAPI 類型生成」）。
 

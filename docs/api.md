@@ -1,7 +1,7 @@
-# REST API 參考（API Reference）
+﻿# REST API 參考（API Reference）
 
-> 覆蓋 Java 後端全部 52 個端點 + Agent 服務 22 個端點。權威來源是 Swagger（後端 `/TradingWorkstation/swagger-ui.html`、agent `:8100/docs`），本文檔提供帶示例的速查。
-> 最後校準日期：2026-08-22（基於代碼實讀，覆蓋 Phase 4 + Phase 5 全部變更）。
+> 覆蓋 Java 後端全部 59 個端點 + Agent 服務 29 個端點。權威來源是 Swagger（後端 `/TradingWorkstation/swagger-ui.html`、agent `:8100/docs`），本文檔提供帶示例的速查。
+> 最後校準日期：2026-08-24（基於代碼實讀，覆蓋 Phase 4 + Phase 5 + chat 模塊全部變更）。
 
 ---
 
@@ -409,11 +409,54 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 
 ---
 
-## 14. Agent 服務（http://localhost:8100/api/agent，26 端點）
+## 14. chat（/api/chat，7 端點）
+
+> AI 投研聊天對話持久化。前端懸浮卡片發送消息 → Java 保存用戶消息 → Agent SSE 流式回復 → Java 保存 AI 回復。
+
+### 15.1 對話管理
+
+| 方法 | 路徑 | 參數 | 出參 | 說明 |
+|------|------|------|------|------|
+| POST | /conversations | `{title?, provider?}` | ChatConversationDto | 創建新對話 |
+| GET | /conversations | — | List\<ChatConversationDto\> | 列出全部對話（按 updated_at 倒序） |
+| PATCH | /conversations/{id} | `{title}` | ChatConversationDto | 更新對話標題 |
+| DELETE | /conversations/{id} | — | void | 刪除對話（級聯刪除消息） |
+
+### 15.2 消息管理
+
+| 方法 | 路徑 | 參數 | 出參 | 說明 |
+|------|------|------|------|------|
+| GET | /conversations/{id}/messages | — | List\<ChatMessageDto\> | 獲取對話消息列表（按 created_at 正序） |
+| POST | /conversations/{id}/messages | `{content, provider?}` | ChatMessageDto | 保存用戶消息（首條消息自動生成對話標題） |
+| POST | /conversations/{id}/reply | `{content, provider, modelName, citationsJson, toolCallsJson, tokensUsed}` | ChatMessageDto | 保存 AI 回復（Agent 流式完成後調用） |
+
+**ChatMessageDto**：
+
+```json
+{
+  "id": 1,
+  "conversationId": 1,
+  "role": "assistant",
+  "content": "## 搜索結果\n...",
+  "provider": "glm-5.2",
+  "modelName": "glm-5.2",
+  "citationsJson": "[{\"source\":\"OpenWebSearch\",\"title\":\"...\",\"url\":\"...\"}]",
+  "toolCallsJson": "[{\"tool\":\"open_web_search\",\"success\":true}]",
+  "tokensUsed": 1234,
+  "createdAt": "2026-08-24T00:00:00"
+}
+```
+
+> **citationsJson**：引用來源 JSON 數組，每項含 `source`/`title`/`url`/`snippet`/`date`。
+> **toolCallsJson**：工具調用鏈 JSON 數組，每項含 `tool`/`arguments`/`success`/`content_preview`。
+
+---
+
+## 15. Agent 服務（http://localhost:8100/api/agent，29 端點）
 
 > Agent 有獨立 OpenAPI 文檔：`http://localhost:8100/docs`。注意：agent 響應**不使用**後端的 ApiResponse 信封，為 FastAPI 原生 JSON。
 
-### 14.1 生命週期
+### 15.1 生命週期
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
@@ -421,7 +464,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 | POST | /stop | 停止（cancel asyncio task） |
 | GET | /status | 當前狀態：迭代數、best_score、當前階段、階段結果流 |
 
-### 14.2 歷史與配置
+### 15.2 歷史與配置
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
@@ -431,7 +474,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 | POST | /config | 更新回測配置（校驗日期區間） |
 | GET | /data-range | 數據庫最早/最新交易日（供配置回測區間） |
 
-### 14.3 供應商管理
+### 15.3 供應商管理
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
@@ -440,7 +483,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 | POST | /providers/stage/reset | 重置為自動路由 |
 | POST | /model/check | 手動觸發全供應商探活 |
 
-### 14.4 監控
+### 15.4 監控
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
@@ -454,7 +497,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 | POST | /monitor/alerts/{alert_id}/resolve | 標記告警已解決 |
 | GET | /news/search | 關鍵詞搜財經新聞 |
 
-### 14.5 財經新聞（華爾街見聞）
+### 15.5 財經新聞（華爾街見聞）
 
 | 方法 | 路徑 | 參數 | 說明 |
 |------|------|------|------|
@@ -481,11 +524,34 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 > **頻道**：`a-stock`（A股）、`global`（全球）、`us-stock`（美股）、`hk-stock`（港股）、`forex`（外匯）、`commodity`（商品）。
 > **自動降級**：Milvus/MySQL 不可用時靜默跳過，不影響優化循環。
 
+### 15.6 AI 聊天（懸浮卡片，SSE 流式）
+
+| 方法 | 路徑 | 參數 | 說明 |
+|------|------|------|------|
+| GET | /chat/providers | — | 可用 LLM 供應商列表（僅支持 function calling 的模型） |
+| GET | /chat/tools | — | 可用工具列表（7 個工具元數據） |
+| POST | /chat/stream | `{messages: [{role, content}], provider?}` | SSE 流式聊天（返回 tool_start/tool_end/content/done/error 事件） |
+
+**POST /chat/stream SSE 事件協議**：
+
+```
+data: {"type":"tool_start","tool":"open_web_search","arguments":{"query":"A股行情"}}
+
+data: {"type":"tool_end","tool":"open_web_search","success":true,"citations":[{"source":"OpenWebSearch","title":"...","url":"..."}]}
+
+data: {"type":"content","text":"## 搜索結果\n..."}
+
+data: {"type":"done","provider":"glm-5.2","model":"glm-5.2","citations":[...],"tool_calls_log":[...],"tokens":1234}
+```
+
+> **7 個工具**：`open_web_search`（DuckDuckGo）、`exa_search`（Exa.ai 語義搜索）、`baidu_search`（百度千帆）、`ftshare_mcp`（FTShare 金融數據 MCP）、`a_share_mcp`（A股歷史數據 MCP）、`context7_search`（官方文檔）、`grep_app_search`（GitHub 代碼搜索）。
+> **工具調用循環**：最多 5 輪，LLM 自動決定調用哪些工具。
+
 ---
 
-## 15. 調度器配置
+## 16. 調度器配置
 
-### 15.1 ProsperityAlertScheduler（景氣度預警定時調度）
+### 16.1 ProsperityAlertScheduler（景氣度預警定時調度）
 
 | 配置項 | 默認 | 說明 |
 |--------|------|------|
@@ -497,7 +563,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 - 條件裝配：`@ConditionalOnProperty(prefix="app.notification.alert-scheduler", name="enabled", havingValue="true")`
 - 啟用後定時調 `industryService.prosperityAlerts(threshold)`，有異常則推送通知
 
-### 15.2 AiCallLogCleanupScheduler（AI 調用日誌清理）
+### 16.2 AiCallLogCleanupScheduler（AI 調用日誌清理）
 
 | 配置項 | 默認 | 說明 |
 |--------|------|------|
@@ -511,7 +577,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 
 ---
 
-## 16. 契約維護說明
+## 17. 契約維護說明
 
 前端 `next/src/lib/api/types.ts`（63 類型）目前為**手寫鏡像**，無生成管線。修改任何 DTO 時必須同步三處：
 
@@ -520,3 +586,5 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 3. （若 agent 消費）agent 的解析代碼
 
 規劃改進：以 `openapi-typescript` 從 `/v3/api-docs` 生成類型（見 `DEVELOPMENT.md`）。
+
+

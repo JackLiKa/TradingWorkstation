@@ -8,7 +8,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1.svg)](https://www.mysql.com/)
 
-> **A 股量化交易工作台** — 含行情採集、技術指標、條件選股、策略回測、AI 優化。
+> **A 股量化交易工作台** — 含行情採集、技術指標、條件選股、策略回測、AI 優化、AI 投研問答。
 > 由原 PySide6 桌面端項目 ([Quantization](https://github.com/JackLiKa/Quantization.git)) 重構而來，保持全部功能並做性能優化與 AI 策略優化集成。
 
 **[快速開始](#快速開始)** • **[架構概覽](#架構概覽)** • **[文檔導航](#文檔導航)** • **[開發](#開發)** • **[部署](#部署)** • **[License](#license)**
@@ -24,7 +24,8 @@ Trading Workstation 是一個**單機/小團隊自用**的 A 股量化研究工�
 - **條件選股** — 49 字段條件組合篩選，全市場 parallelStream 過濾
 - **策略回測** — 等權調倉 + 滑點 + 漲跌停約束 + 夏普減無風險利率 + 結果自動落庫
 - **行業分析** — 景氣度/輪動/Markov/多模型預測（ARIMA/Holt-Winters/線性回歸）/AutoML/季節性
-- **AI 優化** — 6 階段 AI 循環（分析→生成→驗證→回測→評分→反思），7 個 LLM 供應商按階段性價比路由
+- **AI 優化** — 6 階段 AI 循環（分析→生成→驗證→回測→評分→反思），8 個 LLM 供應商按階段性價比路由
+- **AI 投研問答** — 懸浮聊天卡片，ToolCalling + 7 工具（全網搜索/語義搜索/百度/金融數據 MCP/A 股歷史 MCP/代碼搜索/文檔搜索），SSE 流式回復 + 引用追溯 + 對話持久化
 
 ## 快速開始
 
@@ -45,11 +46,16 @@ Trading Workstation 是一個**單機/小團隊自用**的 A 股量化研究工�
 git clone https://github.com/JackLiKa/TradingWorkstation.git
 cd TradingWorkstation
 
+# 1b.（可選）克隆 a-share-mcp — A 股歷史數據 MCP 服務（AI 聊天工具依賴）
+git clone https://github.com/lolifamily/ashare-mcp.git a-share-mcp
+cd a-share-mcp && uv sync && cd ..    # 需 uv（pip install uv）
+
 # 2. 配置環境變量
 cp .env.example .env                    # 後端 + 數據採集共用
 #   編輯 .env，填寫 DB_PASSWORD 等
 cp agent/.env.example agent/.env        # Agent 服務（可選）
 #   編輯 agent/.env，填寫至少一個 LLM API key
+#   可選：EXA_API_KEY / BAIDU_QIANFAN_API_KEY（AI 聊天搜索工具）
 
 # 3. 按順序啟動服務（存在依賴鏈：MySQL → Java → Next → Agent）
 ```
@@ -90,17 +96,18 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 
 ## 架構概覽
 
-4 個自研服務 + 1 個數據庫 + 可選監控棧，後端按業務域拆分為 **12 個模塊**：
+4 個自研服務 + 1 個數據庫 + 1 個可選 MCP 服務 + 可選監控棧，後端按業務域拆分為 **14 個模塊**：
 
 ```
 瀏覽器 → Next.js 前端 (:3010)  ──rewrites──→  Java 後端 (:8090)  ──JPA──→  MySQL (:3306)
                     │                              ↑
                     └──rewrites──→  Agent 服務 (:8100)  ──REST──┘
                                          │
-                                         └──→  LLM 供應商 ×7
+                                         ├──→  LLM 供應商 ×8
+                                         └──→  a-share-mcp (:8101，可選)  ← A 股歷史數據 MCP
 ```
 
-**後端 12 模塊**（`com.quantization.module.*`）：
+**後端 14 模塊**（`com.quantization.module.*`）：
 
 | 模塊 | 職責 |
 |------|------|
@@ -113,9 +120,11 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 | `screener` | 選股器（49 字段條件、parallelStream 過濾） |
 | `backtest` | 回測引擎 + 策略庫（滑點+漲跌停+落庫） |
 | `sync` | ProcessBuilder 編排 ingestion Python 腳本 |
-| `system` | 健康檢查、DB 配置、通知（SMTP+Webhook） |
+| `system` | 健康檢查、DB 配置、通知（SMTP+Webhook）、API Key 安全 |
 | `preference` | 用戶偏好（DB 主存 + 文件降級） |
 | `aicalllog` | AI 調用日誌（agent 回寫，供可視化） |
+| `news` | 財經新聞查詢與管理（華爾街見聞，URI 去重） |
+| `chat` | AI 投研聊天對話持久化（對話+消息，引用追溯，工具調用鏈） |
 
 > 完整架構設計、C4 圖、數據流詳見 [`docs/architecture.md`](./docs/architecture.md)。
 
@@ -125,7 +134,8 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 |------|----------|------|--------|------|
 | Java 後端 | 8090 | `/TradingWorkstation` | `SERVER_PORT` | REST API + Swagger `/swagger-ui.html` |
 | Next.js 前端 | 3010 | `basePath: /TradingWorkstation` | `package.json` | App Router SSR/CSR |
-| Agent 服務 | 8100 | `/api/agent` | `AGENT_PORT` | AI 優化循環 + LLM 路由，Swagger `/docs` |
+| Agent 服務 | 8100 | `/api/agent` | `AGENT_PORT` | AI 優化循環 + LLM 路由 + AI 聊天引擎，Swagger `/docs` |
+| a-share-mcp | 8101 | `/mcp` | `A_SHARE_MCP_PORT` | 可選，A 股歷史數據 MCP（Agent 自動拉起子進程） |
 | MySQL | 3306 | — | `DB_PORT` | 庫名 `a_stock_baostock` |
 | Prometheus | 9090 | — | docker-compose | 可選監控（scrape agent /metrics） |
 | Grafana | 3000 | — | docker-compose | 可選儀表盤 |
@@ -138,24 +148,25 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 |----|------|
 | 後端 | Java 21、Spring Boot 3.3.4、Spring Data JPA (Hibernate 6.5)、HikariCP、Caffeine、springdoc-openapi、Lombok、Spring Mail |
 | 前端 | Next.js 15.1.9 (App Router)、React 19、TypeScript 5.6、Tailwind CSS、shadcn/ui、ECharts 5.5、SWR、Zustand |
-| AI Agent | Python 3.10+、FastAPI、Uvicorn、LangGraph 風格優化循環、多模型 LLM 路由（7 供應商）、Milvus Lite (RAG)、Prometheus |
-| 數據庫 | MySQL 8.0+（8 張表：stock_daily / index_daily / index_metadata / stock_industry / industry_daily / backtest_strategy / user_preference / ai_call_log） |
+| AI Agent | Python 3.10+、FastAPI、Uvicorn、LangGraph 風格優化循環、多模型 LLM 路由（8 供應商）、Milvus Lite (RAG)、AI 聊天引擎（ToolCalling + 7 工具）、Prometheus |
+| 數據庫 | MySQL 8.0+（10 張表：stock_daily / index_daily / index_metadata / stock_industry / industry_daily / backtest_strategy / user_preference / ai_call_log / financial_news / chat_conversation + chat_message） |
 | 數據採集 | Python Baostock 腳本（三模塊拆分：fetch + write + ingest），Java SyncService 通過 ProcessBuilder 編排 |
 | 通知 | Spring Mail (SMTP) + Webhook（景氣度預警，異步推送） |
+| 安全 | Spring Security + API Key 認證（`SECURITY_ENABLED=true` + `API_KEY`，開發環境默認關閉） |
 
 ## 文檔導航
 
 ### 架構與設計
 
 - [`docs/architecture.md`](./docs/architecture.md) — 系統架構與模塊設計（C4 圖、服務拓撲、context-path 契約鏈）
-- [`docs/MODULE_GUIDE.md`](./docs/MODULE_GUIDE.md) — 12 模塊逐一說明（端點、分層、緩存、依賴）
-- [`docs/database.md`](./docs/database.md) — 數據庫 Schema（8 張表、索引、ER 圖）
+- [`docs/MODULE_GUIDE.md`](./docs/MODULE_GUIDE.md) — 14 模塊逐一說明（端點、分層、緩存、依賴）
+- [`docs/database.md`](./docs/database.md) — 數據庫 Schema（10 張表、索引、ER 圖）
 
 ### API 與引擎
 
-- [`docs/api.md`](./docs/api.md) — REST API 參考（後端 51 端點 + Agent 22 端點）
+- [`docs/api.md`](./docs/api.md) — REST API 參考（後端 59 端點 + Agent 29 端點）
 - [`docs/BACKTEST_ENGINE.md`](./docs/BACKTEST_ENGINE.md) — 回測引擎原理與使用指南
-- [`docs/AGENT_SERVICE.md`](./docs/AGENT_SERVICE.md) — Agent 服務詳解（LLM 路由、優化循環、RAG）
+- [`docs/AGENT_SERVICE.md`](./docs/AGENT_SERVICE.md) — Agent 服務詳解（LLM 路由、優化循環、RAG、AI 聊天引擎）
 
 ### 數據與運維
 
@@ -186,7 +197,7 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 ```bash
 cd java  && mvn -DskipTests compile          # 後端編譯（需 JDK 21）
 cd next  && npm run build && npm run lint     # 前端構建 + lint
-cd agent && python -m pytest tests/           # Agent 測試（197 個）
+cd agent && python -m pytest tests/           # Agent 測試（342 個）
 cd java  && mvn test                          # 後端測試（80 個）
 cd next  && npm run test                      # 前端測試（24 個 vitest）
 ```

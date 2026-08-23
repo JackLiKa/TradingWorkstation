@@ -27,7 +27,7 @@ next/.pnp
 next/.pnp.js
 next/tsconfig.tsbuildinfo
 
-# ===== Python (ingestion + agent) =====
+# ===== Python (ingestion + agent + a-share-mcp) =====
 ingestion/__pycache__/
 ingestion/.venv/
 ingestion/*.pyc
@@ -38,6 +38,13 @@ agent/**/*.pyc
 agent/.pytest_cache/
 agent/.coverage
 agent/htmlcov/
+a-share-mcp/.venv/
+a-share-mcp/**/__pycache__/
+a-share-mcp/**/*.pyc
+a-share-mcp/.pytest_cache/
+# a-share-mcp 是獨立 git 倉庫（https://github.com/lolifamily/ashare-mcp.git）
+# 用戶需單獨克隆到此目錄，不入主倉庫
+a-share-mcp/
 
 # ===== Agent 運行時數據（不入庫）=====
 agent/data/

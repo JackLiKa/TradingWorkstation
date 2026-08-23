@@ -1,8 +1,8 @@
 # 模塊指南（Module Guide）
 
-> 逐模塊說明職責、REST 端點、分層結構、數據表、緩存與依賴關係。後端共 **13 個模塊**（Phase 5 已將 `stock` 三分拆為 `stock` + `industry` + `forecast`；新增 `news` 財經新聞模塊）。
+> 逐模塊說明職責、REST 端點、分層結構、數據表、緩存與依賴關係。後端共 **14 個模塊**（Phase 5 已將 `stock` 三分拆為 `stock` + `industry` + `forecast`；新增 `news` 財經新聞模塊；新增 `chat` AI 聊天對話持久化模塊）。
 > 路徑均省略前綴 `java/src/main/java/com/quantization/`。
-> 最後校準日期：2026-08-23（覆蓋 Phase 4 + Phase 5 + news 模塊全部變更）。
+> 最後校準日期：2026-08-24（覆蓋 Phase 4 + Phase 5 + news + chat 模塊全部變更）。
 
 ---
 
@@ -23,6 +23,7 @@
 | preference | /api/preference | 2 | user_preference（+文件降級） | 無 | — |
 | aicalllog | /api/aicalllog | 6 | ai_call_log | 無 | —（消費者是 agent） |
 | news | /api/news | 3 | financial_news | 無 | —（抓取由 agent 负责） |
+| chat | /api/chat | 7 | chat_conversation + chat_message | 無 | —（AI 回復由 agent 生成） |
 
 ---
 
@@ -608,7 +609,85 @@ financial_news   financial_news_vectors
 
 ---
 
-## 15. 橫切層（common / config）
+## 15. 模塊：chat（AI 聊天對話持久化）
+
+### 職責
+
+提供 AI 投研聊天的對話和消息持久化。前端懸浮卡片（FloatingChatCard）發送消息時，先通過 Java 後端保存用戶消息，再調用 Agent 服務的 SSE 流式端點獲取 AI 回復，回復完成後通過 Java 後端保存 AI 回復（含引用來源 JSON 和工具調用鏈 JSON）。
+
+支持多對話管理、歷史對話切換延續、模型選擇、引用追溯。當前為**單用戶模式**（`user_id='default'`），未來可擴展多用戶。
+
+### 端點（7 個）
+
+| 方法 | 路徑 | 參數 | 說明 |
+|------|------|------|------|
+| POST | /api/chat/conversations | ChatCreateRequest{title?, provider?} | 創建新對話 |
+| GET | /api/chat/conversations | — | 列出全部對話（按 updated_at 倒序） |
+| GET | /api/chat/conversations/{id}/messages | — | 獲取對話消息列表（按 created_at 正序） |
+| POST | /api/chat/conversations/{id}/messages | ChatSendRequest{content, provider?} | 保存用戶消息（首條消息自動生成對話標題） |
+| POST | /api/chat/conversations/{id}/reply | ChatSaveReplyRequest{content, provider, modelName, citationsJson, toolCallsJson, tokensUsed} | 保存 AI 回復（Agent 流式完成後調用） |
+| PATCH | /api/chat/conversations/{id} | ChatUpdateRequest{title} | 更新對話標題 |
+| DELETE | /api/chat/conversations/{id} | — | 刪除對話（級聯刪除消息） |
+
+### 類清單
+
+| 類型 | 類 |
+|------|-----|
+| Controller | ChatController |
+| Service | ChatService |
+| Repository | ChatConversationRepository / ChatMessageRepository |
+| Entity | ChatConversationEntity / ChatMessageEntity |
+| DTO | ChatConversationDto / ChatMessageDto / ChatCreateRequest / ChatSendRequest / ChatSaveReplyRequest / ChatUpdateRequest |
+
+### 數據表（schema.sql 冪等建表）
+
+**chat_conversation**（對話元數據）
+
+| 欄位 | 類型 | 約束 | 說明 |
+|------|------|------|------|
+| id | BIGINT | PK AUTO_INCREMENT | |
+| user_id | VARCHAR(64) | NOT NULL, 默認 'default' | 用戶標識（單用戶模式） |
+| title | VARCHAR(200) | NOT NULL, 默認 '新對話' | 對話標題（首條消息自動生成） |
+| provider | VARCHAR(32) | | 最後使用的 LLM 供應商 |
+| created_at | DATETIME | NOT NULL | |
+| updated_at | DATETIME | NOT NULL, ON UPDATE CURRENT_TIMESTAMP | |
+
+索引：`idx_chat_conversation_user` / `idx_chat_conversation_updated`。
+
+**chat_message**（對話消息）
+
+| 欄位 | 類型 | 約束 | 說明 |
+|------|------|------|------|
+| id | BIGINT | PK AUTO_INCREMENT | |
+| conversation_id | BIGINT | NOT NULL, FK → chat_conversation(id) ON DELETE CASCADE | |
+| role | VARCHAR(20) | NOT NULL | user / assistant |
+| content | MEDIUMTEXT | | 消息內容（AI 回復含 Markdown） |
+| provider | VARCHAR(32) | | AI 回復使用的 LLM 供應商 |
+| model_name | VARCHAR(64) | | AI 回復使用的模型名稱 |
+| citations_json | TEXT | | 引用來源 JSON（新聞標題/日期/URL、行情數據來源、搜索結果片段） |
+| tool_calls_json | TEXT | | 工具調用鏈 JSON（工具名、參數、結果摘要） |
+| tokens_used | INT | 默認 0 | 本次消息消耗的 token 數 |
+| created_at | DATETIME | NOT NULL | |
+
+索引：`idx_chat_message_conversation` / `idx_chat_message_created`。
+
+### 與 Agent 服務的協作
+
+```
+前端 FloatingChatCard
+  ├─ POST /api/chat/conversations/{id}/messages  → Java 保存用戶消息
+  ├─ POST /agent-api/chat/stream (SSE)           → Agent 流式聊天（ToolCalling + 7 工具）
+  └─ POST /api/chat/conversations/{id}/reply     → Java 保存 AI 回復（含引用 + 工具鏈）
+```
+
+Agent 端聊天端點（`/api/agent/chat/*`）：
+- `GET /chat/providers` — 可用 LLM 供應商列表（僅支持 function calling 的模型）
+- `GET /chat/tools` — 可用工具列表
+- `POST /chat/stream` — SSE 流式聊天（返回 tool_start/tool_end/content/done/error 事件）
+
+---
+
+## 16. 橫切層（common / config）
 
 ### common
 - `common.api`：`ApiResponse{success, code, message, data}`（NON_NULL）、`ErrorCode`（String 常量：OK/BAD_REQUEST/VALIDATION_ERROR/NOT_FOUND/DB_ERROR/SYNC_ERROR/INTERNAL_ERROR）、`PageResponse`
@@ -634,7 +713,7 @@ financial_news   financial_news_vectors
 
 ---
 
-## 16. Phase 5 變更日誌
+## 17. Phase 5 變更日誌
 
 以下為 Phase 5 相對 Phase 4 的全部修改：
 

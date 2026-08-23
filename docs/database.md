@@ -1,8 +1,8 @@
 # 數據庫 Schema（Database）
 
 > MySQL 8.0+，庫名 `a_stock_baostock`，字符集 utf8mb4，時區 Asia/Shanghai。
-> 本文檔面向新人，覆蓋全部 8 張表的欄位、約束、索引、關係與寫入策略。
-> 最後校準日期：2026-08-22（基於代碼實讀，覆蓋 Phase 4 + Phase 5 全部變更）。
+> 本文檔面向新人，覆蓋全部 10 張表的欄位、約束、索引、關係與寫入策略。
+> 最後校準日期：2026-08-24（基於代碼實讀，覆蓋 Phase 4 + Phase 5 + chat 模塊全部變更）。
 
 ---
 
@@ -42,6 +42,7 @@ Hikari 連接池（`application.yml:9-16`）：
 | 行情類 5 表（stock_daily / index_daily / index_metadata / stock_industry / industry_daily） | `ingestion/baostock_write.py` 的 `CREATE TABLE IF NOT EXISTS` | industry_daily 有顯式建表，其餘為歷史遺留預建 |
 | `user_preference` | `java/src/main/resources/schema.sql`（冪等建表，啟動時自動執行） | Phase 5 新增 |
 | `financial_news` | `java/src/main/resources/schema.sql`（冪等建表，啟動時自動執行） | news 模塊新增，由 Agent `news_store.py` 寫入 |
+| `chat_conversation` + `chat_message` | `java/src/main/resources/schema.sql`（冪等建表，啟動時自動執行） | chat 模塊新增，AI 聊天對話持久化 |
 | `ai_call_log` | `docs/migration_ai_call_log.sql`（唯一顯式遷移腳本，需手動執行） | |
 | `backtest_strategy` | 需手動建表（見 §3.6） | |
 
@@ -151,10 +152,44 @@ erDiagram
         text error
         timestamp created_at
     }
+    financial_news {
+        bigint id PK
+        varchar(200) uri UK
+        varchar(500) title
+        varchar(2000) summary
+        text content
+        varchar(50) source
+        varchar(100) author
+        varchar(50) channel
+        datetime published_at
+        varchar(500) url
+        datetime created_at
+    }
+    chat_conversation {
+        bigint id PK
+        varchar(64) user_id
+        varchar(200) title
+        varchar(32) provider
+        datetime created_at
+        datetime updated_at
+    }
+    chat_message {
+        bigint id PK
+        bigint conversation_id FK
+        varchar(20) role
+        mediumtext content
+        varchar(32) provider
+        varchar(64) model_name
+        text citations_json
+        text tool_calls_json
+        int tokens_used
+        datetime created_at
+    }
 
     stock_daily }o--|| stock_industry : "code（分類為最新快照，非時點）"
     industry_daily }o..o{ stock_daily : "由 SQL 聚合生成(adjustflag=3)"
     index_daily }o--|| index_metadata : "code"
+    chat_message }o--|| chat_conversation : "conversation_id（ON DELETE CASCADE）"
 ```
 
 **關係說明**：
@@ -164,6 +199,7 @@ erDiagram
 | stock_daily ↔ stock_industry | `code` | stock_industry 只存**最新快照**（無歷史時點），回測中的行業過濾存在輕微前視偏差 |
 | index_daily ↔ index_metadata | `code` | index_metadata.code 唯一 |
 | industry_daily ← stock_daily + stock_industry | `JOIN ON code WHERE adjustflag=3 GROUP BY date,industry` | 純 SQL 聚合，衍生表 |
+| chat_message ↔ chat_conversation | `conversation_id` | 外鍵 ON DELETE CASCADE，刪除對話自動刪消息 |
 
 ---
 
@@ -385,6 +421,42 @@ DDL：`java/src/main/resources/schema.sql`（`CREATE TABLE IF NOT EXISTS`，啟�
 - 清理：`NewsController` `DELETE /api/news/cleanup?daysBefore=30`（手動觸發）
 - 讀取方：後端 `NewsService` 分頁查詢；前端 `/news` 頁面展示
 
+### 4.10 chat_conversation（AI 聊天對話，chat 模塊新增）
+
+| 欄位 | 類型 | 約束 | 說明 |
+|------|------|------|------|
+| id | BIGINT | PK AUTO_INCREMENT | |
+| user_id | VARCHAR(64) | NOT NULL, 默認 'default' | 用戶標識（單用戶模式） |
+| title | VARCHAR(200) | NOT NULL, 默認 '新對話' | 對話標題（首條消息自動生成） |
+| provider | VARCHAR(32) | NULL | 最後使用的 LLM 供應商 |
+| created_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | |
+| updated_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP | |
+
+索引：`idx_chat_conversation_user(user_id)` / `idx_chat_conversation_updated(updated_at)`。
+
+寫入方：Java `ChatService`（JPA save）。
+
+### 4.11 chat_message（AI 聊天消息，chat 模塊新增）
+
+| 欄位 | 類型 | 約束 | 說明 |
+|------|------|------|------|
+| id | BIGINT | PK AUTO_INCREMENT | |
+| conversation_id | BIGINT | NOT NULL, FK → chat_conversation(id) ON DELETE CASCADE | |
+| role | VARCHAR(20) | NOT NULL | user / assistant |
+| content | MEDIUMTEXT | NULL | 消息內容（AI 回復含 Markdown） |
+| provider | VARCHAR(32) | NULL | AI 回復使用的 LLM 供應商 |
+| model_name | VARCHAR(64) | NULL | AI 回復使用的模型名稱 |
+| citations_json | TEXT | NULL | 引用來源 JSON（新聞/行情/搜索出處） |
+| tool_calls_json | TEXT | NULL | 工具調用鏈 JSON（工具名/參數/結果摘要） |
+| tokens_used | INT | NULL, 默認 0 | 本次消息消耗的 token 數 |
+| created_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | |
+
+索引：`idx_chat_message_conversation(conversation_id)` / `idx_chat_message_created(created_at)`。
+
+外鍵：`fk_chat_message_conversation` → `chat_conversation(id)` ON DELETE CASCADE（刪除對話時自動刪除全部消息）。
+
+寫入方：Java `ChatService`（JPA save）。用戶消息由前端直接 POST 保存；AI 回復由 Agent SSE 流式完成後 POST 保存。
+
 ---
 
 ## 5. 寫入策略總覽
@@ -400,6 +472,8 @@ DDL：`java/src/main/resources/schema.sql`（`CREATE TABLE IF NOT EXISTS`，啟�
 | user_preference | java | JPA save（DB 異常降級文件） | ✅ upsert by user_id |
 | ai_call_log | java（agent 觸發） | JPA save，append-only | — |
 | financial_news | agent（news_store.py） | 批量 upsert（URI 去重），同時寫 Milvus | ✅ URI 去重 |
+| chat_conversation | java（ChatService） | JPA save，append-only | — |
+| chat_message | java（ChatService） | JPA save，append-only；刪除對話級聯刪消息 | — |
 
 ### 5.1 增量 vs 全量
 
@@ -414,7 +488,7 @@ DDL：`java/src/main/resources/schema.sql`（`CREATE TABLE IF NOT EXISTS`，啟�
 
 | 腳本 | 內容 | 執行方式 |
 |------|------|----------|
-| `java/src/main/resources/schema.sql` | `user_preference` + `financial_news` 冪等建表 | **啟動時自動執行**（`spring.sql.init.mode: always`） |
+| `java/src/main/resources/schema.sql` | `user_preference` + `financial_news` + `news_sentiment_score` + `stock_listing` + `backtest_strategy` + `chat_conversation` + `chat_message` 冪等建表 | **啟動時自動執行**（`spring.sql.init.mode: always`） |
 | `docs/migration_ai_call_log.sql` | `ai_call_log` 建表 + `backtest_strategy` 加 `source`/`result_json` 列 | `mysql -u root -p a_stock_baostock < docs/migration_ai_call_log.sql` |
 
 ### 6.1 Schema 演進約定
