@@ -15,6 +15,7 @@
 """
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timedelta
@@ -850,6 +851,31 @@ async def run_optimization_loop():
                     f"第 {iteration} 輪評分 {composite_score} < 最佳 {state.best_score}，"
                     f"下一輪回到歷史最優策略 (第 {state.best_iteration} 輪) 重新迭代"
                 )
+
+                # === 防死循環：檢測連續重複回退 ===
+                # 若連續多輪都回退到 best_criteria 且生成的策略相同，注入強變異 next_prompt
+                new_criteria_sig = json.dumps(new_criteria, ensure_ascii=False, sort_keys=True)
+                best_criteria_sig = json.dumps(state.best_criteria, ensure_ascii=False, sort_keys=True)
+                if new_criteria_sig == best_criteria_sig:
+                    state.repetition_counter = getattr(state, "repetition_counter", 0) + 1
+                else:
+                    state.repetition_counter = 0
+
+                if state.repetition_counter >= 2:
+                    logger.warning(
+                        f"檢測到連續 {state.repetition_counter} 輪生成與 best 相同的策略，注入強變異 next_prompt"
+                    )
+                    state.current_next_prompt = (
+                        f"⚠️ 緊急：連續 {state.repetition_counter} 輪生成與歷史最優完全相同的策略，"
+                        f"這是死循環！本輪必須採取強變異措施：\n"
+                        f"1. 若 industries 只有 1 個行業，立即擴展至 2-3 個景氣度 ≥ 65 的強勢行業\n"
+                        f"2. 若 stopLossPct 為 null，立即設置 stopLossPct=8\n"
+                        f"3. 若 rebalanceInterval ≤ 5，立即改為 10 或 15\n"
+                        f"4. 調整 minTurn（當前值 ±2.0）或 minVolumeRatio（當前值 ±0.3）\n"
+                        f"5. 移除或放寬最嚴格的過濾條件\n"
+                        f"目標：打破重複，探索新的策略空間，即使可能暫時降低評分也要嘗試。\n\n"
+                        f"---\n⚠️ 免責聲明：本系統輸出僅供研究參考，不構成任何投資建議。"
+                    )
             state.current_iteration = iteration
             state.current_stage = ""
             state.current_stage_status = ""

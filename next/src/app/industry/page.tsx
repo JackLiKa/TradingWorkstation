@@ -28,6 +28,7 @@ import { RotationMarkovPanel } from '@/components/industry/RotationMarkovPanel';
 import { ChartSkeleton } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import { useDelayedRender } from '@/lib/hooks/useDelayedRender';
 import {
   Calendar,
@@ -307,10 +308,7 @@ export default function IndustryPage() {
               className="bg-transparent text-sm text-slate-100 outline-none"
             />
           </div>
-          <Button onClick={() => mutateDaily()} size="sm" variant="outline" disabled={dailyValidating}>
-            <RefreshCw className={`w-4 h-4 mr-1 ${dailyValidating ? 'animate-spin' : ''}`} />
-            {dailyValidating ? '刷新中' : '刷新'}
-          </Button>
+          <RefreshButton onClick={() => mutateDaily()} isLoading={dailyValidating} />
         </div>
       </div>
 
@@ -424,14 +422,11 @@ export default function IndustryPage() {
               className="bg-bg-panel text-sm text-slate-100 rounded border border-border px-2 py-1 outline-none"
             />
           </div>
-          <Button onClick={() => mutateTrend()} size="sm" variant="outline" disabled={trendValidating || !selectedIndustry}>
-            {trendValidating ? (
-              <RefreshCw className="w-4 h-4 mr-1 animate-spin" />
-            ) : (
-              <TrendingUp className="w-4 h-4 mr-1" />
-            )}
-            載入走勢
-          </Button>
+          <RefreshButton
+            onClick={() => mutateTrend()}
+            isLoading={trendValidating}
+            label="載入走勢"
+          />
         </div>
       )}
 

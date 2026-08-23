@@ -47,6 +47,11 @@ PROMPT_TEMPLATE = """請分析以下回測結果，得出反思結論（控制�
 3. 風險控制評價（1句，引用上方「回測統計」中的回撤數據）
 4. 改進方向（2-3條，每條必須包含：具體參數名 + 調整方向 + 基於上方數據的預期效果）
 
+【0 交易判定鐵律】
+- 若上方「回測統計」中交易=0筆，則策略為「非功能性空倉」，必須在「優點和不足」中明確標記為「⚠️非功能性策略（0 交易）」
+- 0 交易策略的「低回撤」是假穩健（未持倉導致），不可作為優點；收益來源必須標注為「空倉跑贏弱勢基準，非主動管理貢獻」
+- 改進方向必須針對導致 0 交易的過度收斂條件（如行業過窄、振幅上限過低、RSI 閾值過嚴等），提出具體放寬建議
+
 【數據引用要求】
 - 所有引用的收益、回撤、夏普、交易筆數必須來自上方「回測統計」區塊
 - 改進方向必須針對上方「回測統計」或「當前選股條件」中暴露的具體問題
@@ -85,9 +90,11 @@ class BacktestReflectionStage(BaseStage):
         history_text = ""
         for h in history[-5:]:
             s = h.backtest_statistics
+            trades = s.get("totalTrades", 0)
+            trade_tag = f", 交易={trades}筆" + (" ⚠️空倉" if trades == 0 else "")
             history_text += (
                 f"  第{h.iteration}輪: 評分={h.composite_score}, 收益={s.get('totalReturn', 0)}%, "
-                f"回撤={s.get('maxDrawdown', 0)}%, 夏普={s.get('sharpe', 0)}\n"
+                f"回撤={s.get('maxDrawdown', 0)}%, 夏普={s.get('sharpe', 0)}{trade_tag}\n"
             )
 
         active_filters = {

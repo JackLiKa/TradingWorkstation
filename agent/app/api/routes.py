@@ -503,3 +503,109 @@ async def search_news(keyword: str, page_size: int = 10):
     news = await market_data_client.search_news_by_keyword(keyword, page_size=page_size)
     return {"keyword": keyword, "news": news}
 
+
+@router.post("/news/sync")
+async def sync_wallstreetcn_news(channel: str = "a-stock", limit: int = 20):
+    """觸發華爾街見聞新聞同步 — 抓取最新新聞並存入向量庫。
+
+    Args:
+        channel: 頻道（global/a-stock/us-stock/hk-stock/forex/commodity）
+        limit: 抓取條數（默認 20，最大 50）
+    """
+    limit = max(1, min(limit, 50))
+    from app.services import news_store
+
+    result = await news_store.sync_news_to_vector_store(channel=channel, limit=limit)
+    return {
+        "status": "SUCCESS",
+        "channel": channel,
+        "fetched": result["fetched"],
+        "stored": result["stored"],
+        "duplicated": result["duplicated"],
+        "failed": result["failed"],
+        "mysql_stored": result.get("mysql_stored", 0),
+        "mysql_duplicated": result.get("mysql_duplicated", 0),
+    }
+
+
+@router.get("/news/wallstreetcn/search")
+async def search_wallstreetcn(keyword: str, limit: int = 10):
+    """從華爾街見聞搜索新聞（實時抓取，不入庫）。"""
+    limit = max(1, min(limit, 20))
+    from app.services import wallstreetcn_client
+
+    news = await wallstreetcn_client.search_articles(keyword, limit=limit)
+    return {"keyword": keyword, "news": news, "source": "華爾街見聞"}
+
+
+@router.get("/news/wallstreetcn/latest")
+async def get_wallstreetcn_latest(channel: str = "a-stock", limit: int = 20):
+    """從華爾街見聞抓取最新新聞（實時抓取，不入庫）。"""
+    limit = max(1, min(limit, 50))
+    from app.services import wallstreetcn_client
+
+    if channel == "all":
+        news = await wallstreetcn_client.fetch_all_channels(limit_per_channel=limit // 6)
+    elif channel == "a-stock":
+        news = await wallstreetcn_client.fetch_a_stock_focused(limit=limit)
+    else:
+        news = await wallstreetcn_client.fetch_latest_articles(channel, limit=limit)
+    return {"channel": channel, "news": news, "source": "華爾街見聞"}
+
+
+@router.get("/news/vector/search")
+async def vector_search_news(
+    query: str,
+    top_k: int = 10,
+    channel: str | None = None,
+    days_back: int = 7,
+):
+    """從向量庫語義檢索新聞（需 Milvus + embedding 可用）。"""
+    from app.services import news_store
+
+    if not news_store.is_available():
+        raise HTTPException(status_code=503, detail="新聞向量庫不可用（Milvus 或 embedding 未初始化）")
+
+    news = news_store.search_relevant_news(
+        query=query, top_k=top_k, channel=channel, days_back=days_back
+    )
+    return {"query": query, "news": news, "count": len(news)}
+
+
+@router.get("/news/vector/status")
+async def get_news_vector_status():
+    """獲取新聞向量庫狀態。"""
+    from app.services import news_store
+
+    return news_store.get_status()
+
+
+@router.post("/news/cleanup")
+async def cleanup_expired_news():
+    """清理過期新聞（從向量庫刪除超過 TTL 的記錄）。"""
+    from app.services import news_store
+
+    deleted = news_store.cleanup_expired_news()
+    return {"deleted": deleted, "status": "SUCCESS"}
+
+
+@router.post("/news/dedup")
+async def dedup_vector_store():
+    """清理向量庫中的重複新聞（保留每個 URI 的第一條）。"""
+    from app.services import news_store
+
+    result = news_store.dedup_vector_store()
+    return {"status": "SUCCESS", **result}
+
+
+@router.post("/news/rebuild")
+async def rebuild_vector_store():
+    """重建向量庫 collection — 刪除所有歷史數據並重新創建。
+
+    用於清理錯誤 URL 等歷史髒數據。重建後需重新同步新聞。
+    """
+    from app.services import news_store
+
+    success = news_store.rebuild_collection()
+    return {"status": "SUCCESS" if success else "FAILED", "rebuilt": success}
+

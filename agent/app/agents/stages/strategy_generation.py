@@ -35,7 +35,7 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 ## 上一輪反思結論
 {prev_reflection}
 
-## 下一輪提示詞指引
+## 下一輪提示詞指引（必須遵循）
 {next_prompt}
 
 ## 當前選股條件
@@ -46,6 +46,8 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 
 ## 歷史優化記錄
 {history_text}
+
+{repetition_warning}
 
 {rag_experiences}
 
@@ -62,14 +64,24 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 {few_shot}
 
 ## 你的任務
-1. 根據上方「市場分析」「最新交易日行業強弱」和「上一輪反思結論」，調整選股條件
-2. 若領漲行業動能強勁，可適當提高 minPctChange / minReturn20 / minTurn 等動量條件，捕捉強勢股
-3. 若市場由弱勢行業主導或防禦信號明顯，則偏向低波動、低換手或高紅利風格
-4. **行業聚焦**：若某些行業連續多日領漲且資金集中，可在 criteria 中加入 "industries": ["行業名稱1", "行業名稱2"] 限制選股範圍至這些強勢行業（最多 3 個）；若無明確行業偏好則不要填寫 industries 字段。**重要**：若上方「行業相關性分析」指出某些行業對高度相關（相關係數 ≥ 0.7），應避免在 industries 中同時選擇這些高相關行業，以保持組合分散度。**優先參考**：上方「行業景氣度指標」中景氣度 ≥ 65 的「繁榮」或「景氣」等級行業是更可靠的聚焦目標，避免選擇「低迷」或「衰退」等級行業
-5. 參考上方「歷史優化記錄」和 RAG 經驗（如有），避免重複歷史上效果差的策略
-6. 如有「歷史錯誤教訓」，確保不重複同類錯誤（特別是 JSON 格式錯誤）
-7. 每次只調整 1-3 個參數，不要大幅變動
-8. reasoning 必須說明：為何調整這些參數 + 預期效果 + 是否參考強勢行業 + 是否借鑒了歷史經驗 + 若使用 industries 需說明為何聚焦這些行業
+1. **【強制】必須遵循上方「下一輪提示詞指引」中的改進方向**——若 next_prompt 指出要擴展行業/加止損/降低調倉，你必須在 criteria 中體現這些改動，不可忽略
+2. **【強制】不可原樣輸出當前選股條件**——若上方有「⚠️重複警告」，你必須改變至少 1 個與重複輪不同的參數，打破死循環
+3. 根據上方「市場分析」「最新交易日行業強弱」和「上一輪反思結論」，調整選股條件
+4. 若領漲行業動能強勁，可適當提高 minPctChange / minReturn20 / minTurn 等動量條件，捕捉強勢股
+5. 若市場由弱勢行業主導或防禦信號明顯，則偏向低波動、低換手或高紅利風格
+6. **行業聚焦**：若某些行業連續多日領漲且資金集中，可在 criteria 中加入 "industries": ["行業名稱1", "行業名稱2"] 限制選股範圍至這些強勢行業（最多 3 個）；若無明確行業偏好則不要填寫 industries 字段。**重要**：若上方「行業相關性分析」指出某些行業對高度相關（相關係數 ≥ 0.7），應避免在 industries 中同時選擇這些高相關行業，以保持組合分散度。**優先參考**：上方「行業景氣度指標」中景氣度 ≥ 65 的「繁榮」或「景氣」等級行業是更可靠的聚焦目標，避免選擇「低迷」或「衰退」等級行業
+7. 參考上方「歷史優化記錄」和 RAG 經驗（如有），避免重複歷史上效果差的策略
+8. 如有「歷史錯誤教訓」，確保不重複同類錯誤（特別是 JSON 格式錯誤）
+9. 每次只調整 1-3 個參數，不要大幅變動
+10. reasoning 必須說明：為何調整這些參數 + 預期效果 + 是否參考強勢行業 + 是否借鑒了歷史經驗 + 若使用 industries 需說明為何聚焦這些行業 + **如何遵循了 next_prompt 的指引**
+
+【超短線交易鐵律 — 避免空倉「假穩健」】
+- 策略必須產生實際交易（totalTrades > 0），0 交易 = 策略無功能，評分會被嚴重懲罰
+- 若上方「歷史優化記錄」中某輪交易=0筆且標記 ⚠️空倉，該輪條件過度收斂，必須放寬
+- 超短線核心：高換手（minTurn ≥ 3）、量價齊升（minVolumeRatio ≥ 1.0）、短期動能（minPctChange ≥ 1 或 minReturn20 ≥ 5）
+- 避免同時疊加過多過濾條件（如 maxRsi14 ≤ 30 + priceAboveMa60 + 單一行業），這會導致候選股不足而無交易
+- 行業聚焦最多 2 個，且優先選擇景氣度 ≥ 65 的強勢行業；若歷史顯示單一行業導致 0 交易，立即擴展至 2-3 個行業或移除行業限制
+- 振幅上限 maxAmplitude 不宜過低（≤ 3% 會過濾掉大部分活躍股），建議 ≥ 4%
 
 【數據引用要求】
 - reasoning 中引用的市場狀況必須來自上方「市場分析」區塊
@@ -169,17 +181,49 @@ class StrategyGenerationStage(BaseStage):
         next_prompt = kwargs.get("next_prompt", "")
         rag_experiences = kwargs.get("rag_experiences", "")
 
-        # 構建歷史摘要
+        # 構建歷史摘要（含重複檢測）
         history_text = ""
+        repetition_count = 0
+        last_criteria_signature = ""
         for h in history[-5:]:
             stats = h.backtest_statistics
             active_filters = {
                 k: v for k, v in h.criteria.items() if v is not None and v is not False and v != "any" and v != 0
             }
+            trades = stats.get("totalTrades", 0)
+            trade_tag = f", 交易={trades}筆" + (" ⚠️空倉" if trades == 0 else "")
+            # 計算 criteria 簽名以檢測重複
+            criteria_sig = json.dumps(active_filters, ensure_ascii=False, sort_keys=True)
+            is_repeat = criteria_sig == last_criteria_signature
+            if is_repeat:
+                repetition_count += 1
+            repeat_tag = " ⚠️重複" if is_repeat else ""
             history_text += (
                 f"  第{h.iteration}輪: 評分={h.composite_score}, 收益={stats.get('totalReturn', 0)}%, "
                 f"回撤={stats.get('maxDrawdown', 0)}%, 夏普={stats.get('sharpe', 0)}, "
+                f"超額={stats.get('excessReturn', 0)}%{trade_tag}{repeat_tag}, "
                 f"條件={json.dumps(active_filters, ensure_ascii=False)}\n"
+            )
+            last_criteria_signature = criteria_sig
+
+        # 構建重複警告（連續 2+ 輪相同則注入強變異指引）
+        repetition_warning = ""
+        if repetition_count >= 2:
+            repetition_warning = (
+                "## ⚠️ 重複策略警告（連續 {n} 輪生成相同策略）\n"
+                "上方歷史記錄中連續多輪生成完全相同的選股條件，這是死循環！\n"
+                "你必須打破這個循環，採取以下強變異措施之一：\n"
+                "- 若當前 industries 只有 1 個行業，立即擴展至 2-3 個景氣度 ≥ 65 的強勢行業\n"
+                "- 若 stopLossPct 為 null，立即設置 stopLossPct=8（加止損）\n"
+                "- 若 rebalanceInterval ≤ 5，立即改為 10 或 15（降低調倉頻率）\n"
+                "- 調整 minTurn（當前值 ±2.0）或 minVolumeRatio（當前值 ±0.3）\n"
+                "- 移除或放寬最嚴格的過濾條件（如 maxRsi14、maxAmplitude）\n"
+                "reasoning 中必須明確說明你採取了哪項強變異措施及其理由\n"
+            ).format(n=repetition_count + 1)
+        elif repetition_count == 1:
+            repetition_warning = (
+                "## ⚠️ 重複策略提示\n"
+                "上一輪與再上一輪生成了相同策略，請確保本輪有實質性參數調整。\n"
             )
 
         from datetime import datetime
@@ -245,6 +289,7 @@ class StrategyGenerationStage(BaseStage):
             current_criteria=json.dumps(current_criteria, ensure_ascii=False, indent=2),
             config=json.dumps(config, ensure_ascii=False, indent=2),
             history_text=history_text if history_text else "無（首輪）",
+            repetition_warning=repetition_warning,
             rag_experiences=rag_experiences if rag_experiences else "無（RAG 不可用或無相似經驗）",
             error_lessons=error_lessons if error_lessons else "無（無歷史錯誤記錄）",
             correlation_text=correlation_text if correlation_text else "無（無高相關行業對或數據不足）",

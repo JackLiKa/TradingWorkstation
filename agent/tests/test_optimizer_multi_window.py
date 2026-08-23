@@ -136,15 +136,23 @@ class TestBuildWindowConfig:
 def _stats_for_score(target_score: float) -> dict:
     """構建能產生指定 composite_score 的回測統計。
 
-    compute_composite_score: return_score*0.4 + drawdown_score*0.3 + sharpe_score*0.3
-    固定 maxDrawdown=0（drawdown_score=100→30 分）、sharpe=2（sharpe_score=100→30 分），
-    用 totalReturn 控制剩餘 40 分：
-        return_score = min(max(totalReturn*2, -50), 100)
-        composite = return_score*0.4 + 60
-    故 totalReturn = (target - 60) / 0.8
+    compute_composite_score:
+        return_score*0.35 + drawdown_score*0.25 + sharpe_score*0.20 + excess_score*0.10 + trade_score*0.10
+    固定 maxDrawdown=0（drawdown_score=100→25 分）、sharpe=2（sharpe_score=100→20 分）、
+    totalTrades=10（trade_score=100→10 分）、excessReturn=totalReturn。
+    故 composite = return_score*0.35 + 55 + excess_score*0.10
+    當 totalReturn ≤ 33.33：return_score=totalReturn*2, excess_score=totalReturn*3
+    → composite = totalReturn*0.7 + 55 + totalReturn*0.3 = totalReturn + 55
+    故 totalReturn = target - 55
     """
-    total_return = (target_score - 60) / 0.8
-    return {"totalReturn": total_return, "maxDrawdown": 0, "sharpe": 2}
+    total_return = target_score - 55
+    return {
+        "totalReturn": total_return,
+        "maxDrawdown": 0,
+        "sharpe": 2,
+        "excessReturn": total_return,
+        "totalTrades": 10,
+    }
 
 
 class TestRunMultiWindowBacktest:

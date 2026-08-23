@@ -11,7 +11,8 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { api } from '@/lib/api';
-import { Save, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Save, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import type { DatabaseConfigUpdateDto } from '@/lib/api/types';
 
@@ -58,10 +59,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle>数据库健康检查</CardTitle>
-          <Button variant="outline" size="sm" onClick={() => mutateHealth()}>
-            <RefreshCw className="w-3 h-3 mr-1" />
-            重新检查
-          </Button>
+          <RefreshButton onClick={() => mutateHealth()} label="重新檢查" />
         </CardHeader>
         <CardContent>
           {health ? (

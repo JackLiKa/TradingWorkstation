@@ -11,7 +11,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { agentApi } from '@/lib/api/agent';
 import type { AgentState, AgentHistory, AgentModelStatus } from '@/lib/api/types';
-import { Play, Square, RefreshCw, Loader2, Bot, Activity, TrendingUp, Award, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
+import { Play, Square, Loader2, Bot, Activity, TrendingUp, Award, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import { AgentIterationCard } from '@/components/agent/AgentIterationCard';
 import { AgentStatusPanel } from '@/components/agent/AgentStatusPanel';
 import { AgentIterationFlow } from '@/components/agent/AgentIterationFlow';
@@ -228,10 +229,7 @@ export default function AgentPage() {
       <Card>
         <CardHeader>
           <CardTitle>優化歷史 ({iterations.length} 輪)</CardTitle>
-          <Button variant="outline" size="sm" onClick={() => refreshHistory()}>
-            <RefreshCw className="w-3 h-3 mr-1" />
-            刷新
-          </Button>
+          <RefreshButton onClick={() => refreshHistory()} isLoading={historyValidating} />
         </CardHeader>
         <CardContent>
           {iterations.length === 0 ? (

@@ -84,6 +84,9 @@ PROMPT_TEMPLATE = """請分析最近10個交易日的市場數據，進行深度
 ## 財經新聞（最新市場要聞）
 {news_text}
 
+## 華爾街見聞新聞（語義檢索 + 實時抓取）
+{wscn_news_text}
+
 ## 關鍵詞新聞（按利好/利空方向搜索的相關新聞）
 {keyword_news_text}
 
@@ -98,12 +101,13 @@ PROMPT_TEMPLATE = """請分析最近10個交易日的市場數據，進行深度
 3. **判斷利好延續性**：對每個利好行業，分析是持續性/間歇性/突發性利好，引用10日內的每日漲跌幅數據
 4. **判斷利空性質**：對每個利空行業，分析是持續性/突發性/情緒性利空，引用10日內的每日跌幅數據
 5. **市場情緒**：基於10日數據判斷整體情緒分數（0-100，0=極度恐慌，50=中性，100=極度樂觀）
-6. **新聞追蹤**：結合上方「財經新聞」和「關鍵詞新聞」區塊，驗證利好利空是否有新聞支撐，引用新聞標題
+6. **新聞追蹤**：結合上方「財經新聞」「華爾街見聞新聞」和「關鍵詞新聞」區塊，驗證利好利空是否有新聞支撐，引用新聞標題
 
 【數據引用要求】
 |- 所有引用的指數點位、漲跌幅必須來自上方「實時大盤指數」或「多日市場形態」區塊
 |- 所有引用的板塊漲跌幅必須來自上方「多日板塊表現」區塊
-|- 所有引用的新聞必須來自上方「財經新聞」或「關鍵詞新聞」區塊，引用時使用新聞標題
+|- 所有引用的新聞必須來自上方「財經新聞」「華爾街見聞新聞」或「關鍵詞新聞」區塊，引用時使用新聞標題
+|- 華爾街見聞新聞引用時須注明來源「華爾街見聞」
 |- 禁止編造任何未在輸入中出現的數值、行業名稱、新聞事件
 |- 如果某項數據缺失，標註「未提供」而非編造
 
@@ -221,6 +225,11 @@ class MarketNewsStage(BaseStage):
         news = market_data.get("news", [])
         news_text = _format_news(news)
 
+        # === 華爾街見聞新聞（語義檢索 + 最新抓取）===
+        # 1. 從向量庫檢索與當前市場環境相關的新聞
+        # 2. 若向量庫不可用或無數據，直接抓取最新 A 股新聞
+        wscn_news_text = await _fetch_wallstreetcn_news(sector_perf, market_data)
+
         # === 關鍵詞新聞追蹤 ===
         # 從板塊表現中識別漲幅最大和跌幅最大的行業，搜索相關新聞
         keyword_news = await _search_keyword_news(sector_perf)
@@ -241,6 +250,7 @@ class MarketNewsStage(BaseStage):
             rotation_text=rotation_text,
             sector_text=sector_text,
             news_text=news_text,
+            wscn_news_text=wscn_news_text,
             keyword_news_text=keyword_news_text,
             history_text=history_text if history_text else "無（首輪）",
             few_shot=get_few_shot("market_news"),
@@ -491,3 +501,79 @@ async def _search_keyword_news(sector_perf: list[dict[str, Any]]) -> dict[str, l
             keyword_news[industry] = []
 
     return keyword_news
+
+
+async def _fetch_wallstreetcn_news(
+    sector_perf: list[dict[str, Any]],
+    market_data: dict[str, Any],
+) -> str:
+    """抓取華爾街見聞新聞並格式化為 prompt 文本。
+
+    策略：
+    1. 優先從向量庫語義檢索與當前市場環境相關的新聞
+    2. 若向量庫不可用或無數據，直接抓取最新 A 股新聞
+    3. 按強勢/弱勢行業關鍵詞補充搜索
+
+    自動降級：所有失敗都靜默處理，返回空字符串不影響優化循環。
+    """
+    try:
+        from app.services import news_store, wallstreetcn_client
+
+        # 1. 構建市場環境查詢文本（用於語義檢索）
+        query_parts = []
+        # 加入指數表現
+        for idx in market_data.get("indices", [])[:3]:
+            name = idx.get("name", "")
+            change = idx.get("change_pct", 0)
+            query_parts.append(f"{name}{'上漲' if change > 0 else '下跌'}{abs(change):.2f}%")
+        # 加入強勢/弱勢行業
+        if sector_perf:
+            sorted_sectors = sorted(
+                sector_perf, key=lambda x: x.get("avgPctChange", 0) or 0, reverse=True
+            )
+            top_sectors = [s.get("industry", "") for s in sorted_sectors[:3] if s.get("industry")]
+            if top_sectors:
+                query_parts.append(f"強勢行業: {', '.join(top_sectors)}")
+            bottom_sectors = [
+                s.get("industry", "") for s in sorted_sectors[-3:] if s.get("industry")
+            ]
+            if bottom_sectors:
+                query_parts.append(f"弱勢行業: {', '.join(bottom_sectors)}")
+
+        query = "A股市場 " + " ".join(query_parts) if query_parts else "A股市場最新動態"
+
+        # 2. 語義檢索向量庫
+        wscn_news = []
+        if news_store.is_available():
+            wscn_news = news_store.search_relevant_news(
+                query=query,
+                top_k=10,
+                channel="a-stock",
+                days_back=3,
+            )
+
+        # 3. 若向量庫無數據，直接抓取最新
+        if not wscn_news:
+            fresh_articles = await wallstreetcn_client.fetch_a_stock_focused(limit=10)
+            wscn_news = [
+                {
+                    "title": a.get("title", ""),
+                    "summary": a.get("summary", ""),
+                    "source": a.get("source", "華爾街見聞"),
+                    "date": a.get("date", ""),
+                    "url": a.get("url", ""),
+                    "channel": a.get("channel", ""),
+                    "similarity": 0,
+                }
+                for a in fresh_articles
+                if a.get("title")
+            ]
+
+        # 4. 格式化為 prompt 文本
+        if not wscn_news:
+            return "無華爾街見聞新聞（API 不可用或無數據）"
+
+        return news_store.format_news_for_prompt(wscn_news, max_items=10)
+    except Exception as e:
+        logger.warning(f"[AI0] 華爾街見聞新聞抓取失敗: {e}")
+        return "無華爾街見聞新聞（抓取異常）"

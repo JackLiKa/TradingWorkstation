@@ -9,13 +9,13 @@ import { useState, useMemo } from 'react';
 import useSWR from 'swr';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { api } from '@/lib/api';
 import { agentApi } from '@/lib/api/agent';
 import type { AiCallLog, ScoreTrend, AvailableProvider } from '@/lib/api/types';
-import { ChevronDown, ChevronRight, Activity, Cpu, Clock, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronRight, Activity, Cpu, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 
 /** 階段顯示名稱映射 */
 const STAGE_LABELS: Record<string, string> = {
@@ -84,10 +84,7 @@ export default function AgentDashboardPage() {
           <h1 className="text-xl font-bold text-slate-100">Agent Dashboard</h1>
           <Badge variant="info">AI 可觀測性</Badge>
         </div>
-        <Button variant="outline" onClick={() => mutateTrend()}>
-          <RefreshCw className="w-4 h-4 mr-1" />
-          刷新
-        </Button>
+        <RefreshButton onClick={() => mutateTrend()} />
       </div>
 
       {/* 供應商狀態卡片 */}

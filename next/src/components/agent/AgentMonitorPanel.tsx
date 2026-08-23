@@ -8,8 +8,9 @@ import { useState } from 'react';
 import useSWR from 'swr';
 import {
   Activity, AlertCircle, AlertTriangle, CheckCircle2, XCircle,
-  Clock, Loader2, Brain, TrendingDown, Zap, RefreshCw,
+  Clock, Loader2, Brain, TrendingDown, Zap,
 } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import { agentApi } from '@/lib/api/agent';
 import type { MonitorStatus, MonitorAnalysis, MonitorAlert } from '@/lib/api/types';
 
@@ -179,12 +180,7 @@ export function AgentMonitorPanel() {
             {analyzing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
             AI 診斷
           </button>
-          <button
-            onClick={() => refreshMonitor()}
-            className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-border hover:border-accent/50 transition-colors"
-          >
-            <RefreshCw className="w-3 h-3" />
-          </button>
+          <RefreshButton onClick={() => refreshMonitor()} size="xs" label="" />
         </div>
       </div>
 

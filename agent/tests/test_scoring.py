@@ -10,38 +10,43 @@ class TestComputeCompositeScore:
         """高收益 + 低回撤 + 高夏普 → 高分。"""
         stats = {"totalReturn": 30.0, "maxDrawdown": 5.0, "sharpe": 2.0}
         score = compute_composite_score(stats)
-        # 收益 60, 回撤 90, 夏普 100 → 60*0.4 + 90*0.3 + 100*0.3 = 24+27+30 = 81
-        assert score == 81.0
+        # 收益 60, 回撤 90, 夏普 100, 超額 0, 交易 0
+        # → 60*0.35 + 90*0.25 + 100*0.20 + 0 + 0 = 21 + 22.5 + 20 = 63.5
+        assert score == 63.5
         assert 0 <= score <= 100
 
     def test_zero_return(self):
         """零收益 + 中等回撤 + 零夏普 → 中低分。"""
         stats = {"totalReturn": 0, "maxDrawdown": 10.0, "sharpe": 0}
         score = compute_composite_score(stats)
-        # 收益 0, 回撤 80, 夏普 50 → 0 + 24 + 15 = 39
-        assert score == 39.0
+        # 收益 0, 回撤 80, 夏普 50, 超額 0, 交易 0
+        # → 0 + 80*0.25 + 50*0.20 + 0 + 0 = 20 + 10 = 30.0
+        assert score == 30.0
 
     def test_negative_return(self):
         """負收益 → 懲罰。"""
         stats = {"totalReturn": -20.0, "maxDrawdown": 15.0, "sharpe": -0.5}
         score = compute_composite_score(stats)
-        # 收益 -40, 回撤 70, 夏普 37.5 → -16 + 21 + 11.25 = 16.25
-        assert score == 16.25
+        # 收益 -40, 回撤 70, 夏普 37.5, 超額 0, 交易 0
+        # → -40*0.35 + 70*0.25 + 37.5*0.20 + 0 + 0 = -14 + 17.5 + 7.5 = 11.0
+        assert score == 11.0
         assert score < 50  # 負收益應該低分
 
     def test_extreme_negative_return(self):
         """極端負收益 → 下限 -50。"""
         stats = {"totalReturn": -100.0, "maxDrawdown": 50.0, "sharpe": -3.0}
         score = compute_composite_score(stats)
-        # 收益 -50 (下限), 回撤 0, 夏普 0 → -20 + 0 + 0 = -20
-        assert score == -20.0
+        # 收益 -50 (下限), 回撤 0, 夏普 0, 超額 0, 交易 0
+        # → -50*0.35 + 0 + 0 + 0 + 0 = -17.5
+        assert score == -17.5
 
     def test_missing_fields(self):
         """缺少字段時用默認值 0。"""
         stats = {}
         score = compute_composite_score(stats)
-        # 全 0 → 收益 0, 回撤 100, 夏普 50 → 0 + 30 + 15 = 45
-        assert score == 45.0
+        # 全 0 → 收益 0, 回撤 100, 夏普 50, 超額 0, 交易 0
+        # → 0 + 100*0.25 + 50*0.20 + 0 + 0 = 25 + 10 = 35.0
+        assert score == 35.0
 
     def test_score_range(self):
         """評分應該在合理範圍。"""

@@ -6,7 +6,8 @@
 'use client';
 
 import { useDbHealth } from '@/lib/hooks/useDbHealth';
-import { Database, Loader2, AlertTriangle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { Database, Loader2, AlertTriangle, Wifi, WifiOff } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 
 /**
  * DbStatusBanner 組件 — 數據庫狀態橫幅。
@@ -42,14 +43,7 @@ export function DbStatusBanner() {
         </span>
         <span className="text-muted text-xs truncate max-w-[400px]">{errorMsg}</span>
       </div>
-      <button
-        onClick={() => refresh()}
-        disabled={isLoading}
-        className="flex items-center gap-1 rounded-md border border-up/30 bg-up/10 px-2.5 py-1 text-xs text-up hover:bg-up/20 transition-colors disabled:opacity-50"
-      >
-        <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
-        重新连接
-      </button>
+      <RefreshButton onClick={() => refresh()} isLoading={isLoading} label="重新連接" />
     </div>
   );
 }

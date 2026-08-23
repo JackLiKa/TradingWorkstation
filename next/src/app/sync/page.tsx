@@ -13,7 +13,8 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { api } from '@/lib/api';
-import { Play, Square, RefreshCw } from 'lucide-react';
+import { Play, Square } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import type { SyncRequestDto } from '@/lib/api/types';
 
@@ -170,10 +171,7 @@ export default function SyncPage() {
               <Square className="w-4 h-4 mr-1" />
               取消
             </Button>
-            <Button variant="outline" onClick={() => mutate()}>
-              <RefreshCw className="w-4 h-4 mr-1" />
-              刷新狀態
-            </Button>
+            <RefreshButton onClick={() => mutate()} label="刷新狀態" />
           </div>
         </CardContent>
       </Card>

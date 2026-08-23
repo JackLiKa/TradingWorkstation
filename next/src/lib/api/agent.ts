@@ -25,6 +25,21 @@ export interface IndustryNewsItem {
   url: string;
 }
 
+/** 華爾街見聞新聞項 */
+export interface WallstreetcnNewsItem {
+  uri: string;
+  title: string;
+  summary: string;
+  content?: string;
+  source: string;
+  author?: string;
+  date: string;
+  url: string;
+  channel: string;
+  image_url?: string;
+  similarity?: number;
+}
+
 // 通過 next rewrites 反代：/TradingWorkstation/agent-api/* → agent:8100/api/agent/*
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/TradingWorkstation';
 const AGENT_PROXY = `${API_BASE}/agent-api`;
@@ -93,4 +108,27 @@ export const agentApi = {
   // ===== 行業新聞搜索 =====
   searchNews: (keyword: string, pageSize = 10) =>
     agentFetch<{ keyword: string; news: IndustryNewsItem[] }>(`/news/search?keyword=${encodeURIComponent(keyword)}&page_size=${pageSize}`),
+  // ===== 華爾街見聞新聞 =====
+  syncWallstreetcnNews: (channel = 'a-stock', limit = 20) =>
+    agentPost<{ status: string; channel: string; fetched: number; stored: number; duplicated: number; failed: number }>(
+      `/news/sync?channel=${channel}&limit=${limit}`, {}
+    ),
+  searchWallstreetcn: (keyword: string, limit = 10) =>
+    agentFetch<{ keyword: string; news: WallstreetcnNewsItem[]; source: string }>(
+      `/news/wallstreetcn/search?keyword=${encodeURIComponent(keyword)}&limit=${limit}`
+    ),
+  getWallstreetcnLatest: (channel = 'a-stock', limit = 20) =>
+    agentFetch<{ channel: string; news: WallstreetcnNewsItem[]; source: string }>(
+      `/news/wallstreetcn/latest?channel=${channel}&limit=${limit}`
+    ),
+  vectorSearchNews: (query: string, topK = 10, channel?: string, daysBack = 7) =>
+    agentFetch<{ query: string; news: WallstreetcnNewsItem[]; count: number }>(
+      `/news/vector/search?query=${encodeURIComponent(query)}&top_k=${topK}${channel ? `&channel=${channel}` : ''}&days_back=${daysBack}`
+    ),
+  getNewsVectorStatus: () =>
+    agentFetch<{ available: boolean; collection: string; ttl_days: number; max_vectors: number; init_error: string }>(
+      `/news/vector/status`
+    ),
+  cleanupExpiredNews: () =>
+    agentPost<{ deleted: number; status: string }>(`/news/cleanup`, {}),
 };

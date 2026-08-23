@@ -23,7 +23,8 @@ import {
 } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
-import { Loader2, ChevronDown, Database, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Loader2, ChevronDown, Database, AlertTriangle } from 'lucide-react';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import type { StockDailyDto } from '@/lib/api/types';
 
 /** 默認搜索條件 */
@@ -46,7 +47,7 @@ export default function DashboardPage() {
   const [tableHasMore, setTableHasMore] = useState(false);
   const [tableLoadingMore, setTableLoadingMore] = useState(false);
   const [tableOffset, setTableOffset] = useState(0);
-  const { status: dbStatus, refresh: refreshDb } = useDbHealth();
+  const { status: dbStatus, isLoading: dbLoading, refresh: refreshDb } = useDbHealth();
 
   // 構建搜索參數
   const searchParams = useMemo(() => {
@@ -204,9 +205,7 @@ export default function DashboardPage() {
               <div className="text-xs text-muted">请确认 Java 后端 (8090) 已启动，或点击重新连接</div>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={() => refreshDb()}>
-            <RefreshCw className="w-3 h-3 mr-1" /> 重新连接
-          </Button>
+          <RefreshButton onClick={() => refreshDb()} isLoading={dbLoading} label="重新連接" />
         </div>
       )}
       {dbStatus === 'disconnected' && (
@@ -218,9 +217,7 @@ export default function DashboardPage() {
               <div className="text-xs text-muted">后端服务已启动但无法连接 MySQL，请检查数据库配置</div>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={() => refreshDb()}>
-            <RefreshCw className="w-3 h-3 mr-1" /> 重新检查
-          </Button>
+          <RefreshButton onClick={() => refreshDb()} isLoading={dbLoading} label="重新檢查" />
         </div>
       )}
 
