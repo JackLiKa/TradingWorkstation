@@ -41,6 +41,7 @@ Hikari 連接池（`application.yml:9-16`）：
 |------|------|------|
 | 行情類 5 表（stock_daily / index_daily / index_metadata / stock_industry / industry_daily） | `ingestion/baostock_write.py` 的 `CREATE TABLE IF NOT EXISTS` | industry_daily 有顯式建表，其餘為歷史遺留預建 |
 | `user_preference` | `java/src/main/resources/schema.sql`（冪等建表，啟動時自動執行） | Phase 5 新增 |
+| `financial_news` | `java/src/main/resources/schema.sql`（冪等建表，啟動時自動執行） | news 模塊新增，由 Agent `news_store.py` 寫入 |
 | `ai_call_log` | `docs/migration_ai_call_log.sql`（唯一顯式遷移腳本，需手動執行） | |
 | `backtest_strategy` | 需手動建表（見 §3.6） | |
 
@@ -352,6 +353,38 @@ DDL：`docs/migration_ai_call_log.sql`（需手動執行）
 - 寫入方：agent 服務每次 LLM 調用後 `POST /api/aicalllog/log`
 - 清理：`AiCallLogCleanupScheduler`（預設關閉，`AICALLLOG_CLEANUP_ENABLED=true` 啟用，保留天數 `AICALLLOG_RETENTION_DAYS=90`，每天凌晨 2:00 執行）
 
+### 4.9 financial_news（財經新聞，news 模塊新增）
+
+DDL：`java/src/main/resources/schema.sql`（`CREATE TABLE IF NOT EXISTS`，啟動時自動執行）
+
+| 欄位 | 類型 | 約束 | 說明 |
+|------|------|------|------|
+| id | BIGINT | PK AUTO_INCREMENT | |
+| uri | VARCHAR(200) | NOT NULL, UNIQUE | 文章唯一標識（去重用，華爾街見聞 URI） |
+| title | VARCHAR(500) | NOT NULL | 標題 |
+| summary | VARCHAR(2000) | NULL | 摘要 |
+| content | TEXT | NULL | 正文（清洗後，去 HTML 標籤） |
+| source | VARCHAR(50) | NOT NULL | 來源（如「華爾街見聞」） |
+| author | VARCHAR(100) | NULL | 作者 |
+| channel | VARCHAR(50) | NULL | 頻道（a-stock/global/us-stock/hk-stock/forex/commodity） |
+| published_at | DATETIME | NULL | 發布時間 |
+| url | VARCHAR(500) | NULL | 原文連結 |
+| image_url | VARCHAR(500) | NULL | 配圖 URL |
+| created_at | DATETIME | NOT NULL | 入庫時間 |
+
+**索引**：
+
+| 索引名 | 欄位 | 用途 |
+|--------|------|------|
+| uk_financial_news_uri | uri（UNIQUE） | URI 去重，避免重複入庫 |
+| idx_financial_news_channel | channel | 按頻道分頁查詢 |
+| idx_financial_news_published | published_at | 按發布時間倒序查詢 / 過期清理 |
+
+- 寫入方：Agent 服務 `news_store.py` 抓取華爾街見聞新聞後批量 upsert（`NewsBatchUpsertRequest`，`ON DUPLICATE KEY UPDATE` 語義）
+- 同時寫入 Milvus 向量庫（`financial_news_vectors` collection，30 天 TTL，HNSW + COSINE）
+- 清理：`NewsController` `DELETE /api/news/cleanup?daysBefore=30`（手動觸發）
+- 讀取方：後端 `NewsService` 分頁查詢；前端 `/news` 頁面展示
+
 ---
 
 ## 5. 寫入策略總覽
@@ -366,6 +399,7 @@ DDL：`docs/migration_ai_call_log.sql`（需手動執行）
 | backtest_strategy | java | JPA save（回測自動落庫 source=auto / 手動保存 source=manual） | — |
 | user_preference | java | JPA save（DB 異常降級文件） | ✅ upsert by user_id |
 | ai_call_log | java（agent 觸發） | JPA save，append-only | — |
+| financial_news | agent（news_store.py） | 批量 upsert（URI 去重），同時寫 Milvus | ✅ URI 去重 |
 
 ### 5.1 增量 vs 全量
 
@@ -380,7 +414,7 @@ DDL：`docs/migration_ai_call_log.sql`（需手動執行）
 
 | 腳本 | 內容 | 執行方式 |
 |------|------|----------|
-| `java/src/main/resources/schema.sql` | `user_preference` 冪等建表 | **啟動時自動執行**（`spring.sql.init.mode: always`） |
+| `java/src/main/resources/schema.sql` | `user_preference` + `financial_news` 冪等建表 | **啟動時自動執行**（`spring.sql.init.mode: always`） |
 | `docs/migration_ai_call_log.sql` | `ai_call_log` 建表 + `backtest_strategy` 加 `source`/`result_json` 列 | `mysql -u root -p a_stock_baostock < docs/migration_ai_call_log.sql` |
 
 ### 6.1 Schema 演進約定

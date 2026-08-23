@@ -113,14 +113,20 @@ flowchart LR
 
 ### 3.2 評分與收斂
 
-**綜合評分**（`scoring.py:6-31`）：`收益 40% + 回撤控制 30% + 夏普 30%`
+**綜合評分**（`scoring.py`）：`收益 35% + 回撤控制 25% + 夏普 20% + 超額收益 10% + 交易活躍度 10%`
 
 ```python
 return_score = min(max(total_return * 2, -50), 100)      # 正收益 0-100，負收益 -50-0
 drawdown_score = max(100 - max_drawdown * 2, 0)           # 回撤 0%=100分，50%+=0分
 sharpe_score = min(max(sharpe * 25 + 50, 0), 100)         # 夏普 0=50分，2+=100分
-composite = return_score * 0.4 + drawdown_score * 0.3 + sharpe_score * 0.3
+excess_score = min(max(excess_return * 3, -30), 100)      # 超額收益（相對基準 alpha），正 0-100，負 -30-0
+trade_score = min(total_trades * 10, 100)                 # 交易活躍度：0 筆=0分（懲罰空倉），≥10 筆=100 分
+composite = return_score * 0.35 + drawdown_score * 0.25 + sharpe_score * 0.20 + excess_score * 0.10 + trade_score * 0.10
 ```
+
+> **新增維度**（避免「假穩健」空倉策略被獎勵）：
+> - **超額收益（excessReturn）**：相對基準的 alpha，鼓勵主動管理貢獻
+> - **交易活躍度（totalTrades）**：0 筆交易 = 0 分，懲罰通過不交易來規避回撤的空倉策略
 
 **探索策略**（`optimizer.py:738-769`）：
 - 本輪 ≥ best → 以本輪為新起點
@@ -281,6 +287,40 @@ agent_json_failure_total{recovered="true",stage="strategy_generation"} 1
 - `safety.py`：攔截投資建議措辭、檢測 prompt injection、加免責聲明
 - `monitor.py` / `monitor_ai.py`：節點生命週期 AOP 監控→告警
 
+### 7.4 wallstreetcn_client.py（華爾街見聞新聞抓取）
+- 數據來源：華爾街見聞（wallstreetcn.com）公開 API，**無需 API Key**
+- API 端點：
+  - 最新文章：`https://api-one-wscn.awtmt.com/apiv1/content/information-flow?channel=global&accept=article&limit=10`
+  - 頭條文章：`https://api-one-wscn.awtmt.com/apiv1/content/carousel/information-flow?channel=global&limit=10`
+  - 熱文：`https://api-one-wscn.awtmt.com/apiv1/content/articles/hot?period=all`
+  - 搜索：`https://api-one-wscn.awtmt.com/apiv1/search/article?query={keyword}&limit=10`
+  - 7x24 快訊：`https://api-one.wallstcn.com/apiv1/content/lives?channel={channel}&limit=200`
+- 頻道：`global-channel`（全球）、`a-stock-channel`（A股）、`us-stock-channel`（美股）、`forex-channel`（外匯）、`commodity-channel`（商品）、`hk-stock-channel`（港股）
+- 數據清洗：去 HTML 標籤、規範化日期、提取摘要
+- 來源標注：所有新聞標注來源為「華爾街見聞」，引用格式：`華爾街見聞，[標題]，[YYYY-MM-DD]，https://wallstreetcn.com/articles/[id]`
+- 自動降級：API 不可用時返回空列表，不影響優化循環
+
+### 7.5 news_store.py（財經新聞存儲/檢索）
+- **MySQL + Milvus 向量庫雙寫**
+- MySQL：寫入 `financial_news` 表（URI 去重，`ON DUPLICATE KEY UPDATE` 語義）
+- Milvus：寫入 `financial_news_vectors` collection
+  - 每篇文章 = 1 個向量（embed = 標題 + 摘要 + 關鍵實體）
+  - metadata：日期/來源/頻道/URL/URI
+  - HNSW 索引 + COSINE 距離
+  - 30 天 TTL（自動清理過期新聞）
+  - 最多保留 10000 條向量（`NEWS_MAX_VECTORS`）
+- 與 `vector_store.py` 共享 embedding 模型（`BAAI/bge-small-zh-v1.5`，避免重複載入）
+- 自動降級：Milvus/MySQL 不可用時靜默跳過，不影響優化循環
+- 配置項：`NEWS_TTL_DAYS=30`、`NEWS_MAX_VECTORS=10000`
+
+### 7.6 market_news.py 階段集成
+- `market_news` 階段調用 `_fetch_wallstreetcn_news()`，策略：
+  1. 優先從向量庫語義檢索與當前市場環境相關的新聞
+  2. 若向量庫不可用或無數據，直接抓取最新 A 股新聞
+  3. 按強弱勢行業關鍵詞補充搜索
+- 構建市場環境查詢文本：指數表現 + 強勢/弱勢行業
+- 所有失敗靜默處理，返回空字符串不影響優化循環
+
 ---
 
 ## 8. 可觀測性
@@ -317,7 +357,7 @@ agent_json_failure_total{recovered="true",stage="strategy_generation"} 1
 
 ## 9. API 端點
 
-完整 22 個端點（`api/routes.py`），前綴 `/api/agent`：
+完整 26 個端點（`api/routes.py`），前綴 `/api/agent`：
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
@@ -343,6 +383,10 @@ agent_json_failure_total{recovered="true",stage="strategy_generation"} 1
 | `GET` | `/api/agent/monitor/analyze` | AI 分析異常 |
 | `POST` | `/api/agent/monitor/alerts/{id}/resolve` | 解決告警 |
 | `GET` | `/api/agent/news/search` | 新聞搜索 |
+| `POST` | `/api/agent/news/sync` | **觸發華爾街見聞新聞同步**（抓取 + MySQL + Milvus） |
+| `GET` | `/api/agent/news/wallstreetcn/search` | 華爾街見聞搜索（實時，不入庫） |
+| `GET` | `/api/agent/news/wallstreetcn/latest` | 華爾街見聞最新新聞（實時，不入庫） |
+| `POST` | `/api/agent/news/vector-search` | 向量庫語義檢索新聞（需 Milvus） |
 
 > **啟動優化**：`POST /api/agent/start`（`routes.py:135-172`）即為優化循環入口，可攜帶 `criteria` 和 `config`，日期會校驗是否在數據庫覆蓋範圍內。
 
@@ -373,6 +417,8 @@ agent_json_failure_total{recovered="true",stage="strategy_generation"} 1
 | **RAG** | `EMBEDDING_MODEL` | `BAAI/bge-small-zh-v1.5` | 中文 embedding |
 | | `RAG_TOP_K` | 3 | 檢索返回數量 |
 | | `RAG_MIN_SIMILARITY` | 0.3 | 最低相似度 |
+| **新聞** | `NEWS_TTL_DAYS` | 30 | 新聞保留天數（過期自動清理） |
+| | `NEWS_MAX_VECTORS` | 10000 | 最多保留向量數 |
 | **監控** | `LOG_LEVEL` | INFO | DEBUG/INFO/WARNING/ERROR |
 | | `ENABLE_METRICS` | true | Prometheus 指標 |
 | **環境** | `ENVIRONMENT` | development | development/staging/production |
@@ -388,10 +434,10 @@ agent_json_failure_total{recovered="true",stage="strategy_generation"} 1
 cd agent && pip install -r requirements.txt
 cp .env.example .env   # 填至少一個 LLM key
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8100
-python -m pytest tests/          # 197 個測試，覆蓋率門檻 40%
+python -m pytest tests/          # 200+ 個測試，覆蓋率門檻 40%
 ```
 
-### 11.1 測試覆蓋（197 個測試）
+### 11.1 測試覆蓋（200+ 個測試）
 
 | 測試文件 | 測試數 | 覆蓋場景 |
 |----------|--------|----------|
@@ -407,9 +453,11 @@ python -m pytest tests/          # 197 個測試，覆蓋率門檻 40%
 | `test_rate_limiter.py` | 6 | 令牌桶限流 |
 | `test_routes_validation.py` | 8 | 日期範圍校驗 |
 | `test_safety.py` | 15 | 安全掃描/sanitize/JSON 檢查 |
-| `test_scoring.py` | 7 | 綜合評分計算 |
+| `test_scoring.py` | 7 | 綜合評分計算（含超額收益/交易活躍度） |
 | `test_state.py` | 11 | 狀態持久化/截斷/序列化 |
 | `test_user_config_preservation.py` | 5 | 用戶配置保留 |
+| **`test_news_store.py`** | — | **新聞存儲/檢索/URI 去重/降級（news 模塊）** |
+| **`test_wallstreetcn_client.py`** | — | **華爾街見聞抓取/數據清洗/降級（news 模塊）** |
 
 **Phase 5 多窗口測試**（`test_optimizer_multi_window.py`，24 個）：
 - `TestWeightedAverageScore`（7）：權重計算/邊界條件/常量一致性
@@ -430,3 +478,6 @@ python -m pytest tests/          # 197 個測試，覆蓋率門檻 40%
 | 4 | 單區間回測評分有過擬合風險——多窗口評分（Phase 5）可緩解，但高分策略仍建議手動複測 |
 | 5 | `data/` 目錄（Milvus + checkpoint + 錯誤庫）是 Agent 的全部記憶——備份/遷移時帶上 |
 | 6 | Markov 一階假設（景氣度預測）：下一狀態只依賴當前狀態，長記憶性被忽略，應視為方向性參考 |
+| 7 | **防死循環**（`optimizer.py`）：連續 2+ 輪生成與 best 完全相同的策略時，自動注入強變異 next_prompt（擴展行業/加止損/降低調倉頻率/調整 minTurn/minVolumeRatio），打破局部最優 |
+| 8 | **空倉懲罰**（`scoring.py`）：0 筆交易 = 0 分（交易活躍度維度），防止通過不交易規避回撤的「假穩健」策略被高分獎勵 |
+| 9 | **華爾街見聞新聞**（`wallstreetcn_client.py`）：使用公開 API 無需 API Key，但需遵守 llms.txt 引用規範（須注明來源：華爾街見聞，[標題]，[日期]，URL） |

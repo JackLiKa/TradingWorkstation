@@ -3,6 +3,9 @@
 agent/.env
 next/.env.local
 
+# ===== AI 本地记忆（aim-memory 知识图谱，不入库）=====
+.aim/
+
 # ===== Java / Maven =====
 java/target/
 java/.mvn/wrapper/maven-wrapper.jar

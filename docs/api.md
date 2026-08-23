@@ -366,11 +366,54 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 
 ---
 
-## 13. Agent 服務（http://localhost:8100/api/agent，22 端點）
+## 13. news（/api/news，3 端點）
+
+> 財經新聞查詢與管理。新聞抓取由 Agent 服務負責（`/api/agent/news/*`），後端僅負責已入庫新聞的查詢與清理。
+
+| 方法 | 路徑 | 參數 | 說明 |
+|------|------|------|------|
+| GET | / | page=0, size=20, channel?, source? | 分頁查詢最新新聞（按 published_at 倒序） |
+| GET | /{id} | — | 新聞詳情 |
+| DELETE | /cleanup | daysBefore=30 | 清理 N 天前的新聞 |
+
+**GET / 響應**（`Page<FinancialNewsDto>`，包裹在 ApiResponse 信封中）：
+
+```json
+{
+  "success": true,
+  "code": "OK",
+  "data": {
+    "content": [
+      {
+        "id": 1,
+        "uri": "article/123456",
+        "title": "...",
+        "summary": "...",
+        "source": "華爾街見聞",
+        "author": "...",
+        "channel": "a-stock",
+        "publishedAt": "2026-08-23 14:30:00",
+        "url": "https://wallstreetcn.com/articles/123456",
+        "imageUrl": "https://..."
+      }
+    ],
+    "totalElements": 100,
+    "totalPages": 5,
+    "number": 0,
+    "size": 20
+  }
+}
+```
+
+> **數據來源**：Agent 服務 `wallstreetcn_client.py` 抓取華爾街見聞公開 API → `news_store.py` 清洗 + URI 去重 → 批量 upsert 至 `financial_news` 表（同時寫入 Milvus 向量庫供語義檢索）。
+
+---
+
+## 14. Agent 服務（http://localhost:8100/api/agent，26 端點）
 
 > Agent 有獨立 OpenAPI 文檔：`http://localhost:8100/docs`。注意：agent 響應**不使用**後端的 ApiResponse 信封，為 FastAPI 原生 JSON。
 
-### 13.1 生命週期
+### 14.1 生命週期
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
@@ -378,7 +421,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 | POST | /stop | 停止（cancel asyncio task） |
 | GET | /status | 當前狀態：迭代數、best_score、當前階段、階段結果流 |
 
-### 13.2 歷史與配置
+### 14.2 歷史與配置
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
@@ -388,7 +431,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 | POST | /config | 更新回測配置（校驗日期區間） |
 | GET | /data-range | 數據庫最早/最新交易日（供配置回測區間） |
 
-### 13.3 供應商管理
+### 14.3 供應商管理
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
@@ -397,7 +440,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 | POST | /providers/stage/reset | 重置為自動路由 |
 | POST | /model/check | 手動觸發全供應商探活 |
 
-### 13.4 監控
+### 14.4 監控
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
@@ -411,11 +454,38 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 | POST | /monitor/alerts/{alert_id}/resolve | 標記告警已解決 |
 | GET | /news/search | 關鍵詞搜財經新聞 |
 
+### 14.5 財經新聞（華爾街見聞）
+
+| 方法 | 路徑 | 參數 | 說明 |
+|------|------|------|------|
+| POST | /news/sync | channel=a-stock, limit=20 | 觸發華爾街見聞新聞同步（抓取 + 寫入 MySQL + Milvus） |
+| GET | /news/wallstreetcn/search | keyword, limit=10 | 從華爾街見聞搜索新聞（實時抓取，不入庫） |
+| GET | /news/wallstreetcn/latest | channel=a-stock, limit=20 | 獲取華爾街見聞最新新聞（實時抓取，不入庫） |
+| POST | /news/vector-search | query, topK=10, channel?, daysBack=7 | 向量庫語義檢索新聞（需 Milvus） |
+
+**POST /news/sync 響應**：
+
+```json
+{
+  "status": "SUCCESS",
+  "channel": "a-stock",
+  "fetched": 20,
+  "stored": 15,
+  "duplicated": 4,
+  "failed": 1,
+  "mysql_stored": 15,
+  "mysql_duplicated": 4
+}
+```
+
+> **頻道**：`a-stock`（A股）、`global`（全球）、`us-stock`（美股）、`hk-stock`（港股）、`forex`（外匯）、`commodity`（商品）。
+> **自動降級**：Milvus/MySQL 不可用時靜默跳過，不影響優化循環。
+
 ---
 
-## 14. 調度器配置
+## 15. 調度器配置
 
-### 14.1 ProsperityAlertScheduler（景氣度預警定時調度）
+### 15.1 ProsperityAlertScheduler（景氣度預警定時調度）
 
 | 配置項 | 默認 | 說明 |
 |--------|------|------|
@@ -427,7 +497,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 - 條件裝配：`@ConditionalOnProperty(prefix="app.notification.alert-scheduler", name="enabled", havingValue="true")`
 - 啟用後定時調 `industryService.prosperityAlerts(threshold)`，有異常則推送通知
 
-### 14.2 AiCallLogCleanupScheduler（AI 調用日誌清理）
+### 15.2 AiCallLogCleanupScheduler（AI 調用日誌清理）
 
 | 配置項 | 默認 | 說明 |
 |--------|------|------|
@@ -441,7 +511,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 
 ---
 
-## 15. 契約維護說明
+## 16. 契約維護說明
 
 前端 `next/src/lib/api/types.ts`（63 類型）目前為**手寫鏡像**，無生成管線。修改任何 DTO 時必須同步三處：
 

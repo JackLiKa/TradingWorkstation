@@ -1,26 +1,43 @@
+================================================================================
+  Trading Workstation — Business Source License 1.1
+================================================================================
+
+  This file contains the license text in three languages:
+
+    1. English (Authoritative / 具有法律效力的正本)
+    2. 简体中文 (Simplified Chinese — Reference Translation / 参考翻译)
+    3. 繁體中文 (Traditional Chinese — Reference Translation / 參考翻譯)
+
+  In the event of any conflict or inconsistency between the English version
+  and any translated version, the English version shall prevail and govern.
+
+================================================================================
+  1. ENGLISH (AUTHORITATIVE)
+================================================================================
+
 Business Source License 1.1
 
 Parameters
 
 Licensor:             JackLiKa
 Licensed Work:        Trading Workstation (A 股量化交易工作台)
-                     The Software, Source Code, and associated documentation
-                     made available under this License by the Licensor,
-                     identified by the repository located at
-                     https://github.com/JackLiKa/TradingWorkstation and any
-                     successor repository designated by the Licensor.
+                      The Software, Source Code, and associated documentation
+                      made available under this License by the Licensor,
+                      identified by the repository located at
+                      https://github.com/JackLiKa/TradingWorkstation and any
+                      successor repository designated by the Licensor.
 Additional Use Grant: You may use the Licensed Work solely for non-production
-                     purposes, including personal study, teaching, academic
-                     research, evaluation, and internal testing. Any use of
-                     the Licensed Work in a production environment, or in any
-                     form for commercial purposes (including, without
-                     limitation, internal business operations, providing
-                     services to third parties, integrating the Licensed
-                     Work into a commercial product or offering, or any use
-                     from which you or your organization derives revenue or
-                     other commercial benefit), requires a separate
-                     commercial license or a copyright buyout from the
-                     Licensor.
+                      purposes, including personal study, teaching, academic
+                      research, evaluation, and internal testing. Any use of
+                      the Licensed Work in a production environment, or in any
+                      form for commercial purposes (including, without
+                      limitation, internal business operations, providing
+                      services to third parties, integrating the Licensed
+                      Work into a commercial product or offering, or any use
+                      from which you or your organization derives revenue or
+                      other commercial benefit), requires a separate
+                      commercial license or a copyright buyout from the
+                      Licensor.
 Change Date:          2030-08-23
 Change License:       Apache License, Version 2.0
 
@@ -36,8 +53,7 @@ Additional Use Grant, govern all use of the Licensed Work.
 For any use of the Licensed Work that is not permitted by the
 Additional Use Grant, you must obtain a commercial license or a
 copyright buyout from the Licensor. To request a commercial license or
-copyright buyout, contact the Licensor at the commercial contact
-address published in the repository's README file.
+copyright buyout, contact the Licensor at jacklika.business@gmail.com.
 
 Terms
 
@@ -93,3 +109,147 @@ works of the Licensed Work, subject to the following conditions:
 
 For the full text of the Business Source License 1.1, see
 https://mariadb.com/bsl11/.
+
+================================================================================
+  2. 简体中文（参考翻译，无法律效力）
+================================================================================
+
+商业源代码许可证 1.1（Business Source License 1.1）
+
+参数
+
+许可方：              JackLiKa
+授权作品：            Trading Workstation（A 股量化交易工作台）
+                      由许可方根据本许可证提供的软件、源代码及相关文档，
+                      识别为位于 https://github.com/JackLiKa/TradingWorkstation
+                      的仓库及许可方指定的任何后续仓库。
+附加使用授权：        你仅可将授权作品用于非生产环境目的，包括个人学习、
+                      教学、学术研究、评估和内部测试。在任何生产环境中使用
+                      授权作品，或以任何形式用于商业目的（包括但不限于内部
+                      业务运营、向第三方提供服务、将授权作品整合进商业产品
+                      或服务，或你或你的组织从中获取收入或其他商业利益的
+                      任何使用），均需向许可方单独购买商业授权或版权买断。
+变更日期：            2030-08-23
+变更许可证：          Apache License, Version 2.0（Apache 许可证 2.0 版）
+
+提示
+
+授权作品根据上述条款以商业源代码许可证 1.1（"BSL 1.1"）提供。上述
+变更日期与变更许可证在变更日期当日及之后自动生效，届时授权作品将
+根据变更许可证提供。在变更日期之前，BSL 1.1 的条款连同附加使用授权
+共同管辖对授权作品的所有使用。
+
+对于附加使用授权未允许的任何授权作品使用行为，你必须向许可方购买
+商业授权或版权买断。如需申请商业授权或版权买断，请通过
+jacklika.business@gmail.com 联系许可方。
+
+条款
+
+许可方据此授予你一项全球范围的、免版税的、非独占的、永久的许可，
+允许你使用、复制、修改、分发授权作品并制作其衍生作品，但须遵守
+以下条件：
+
+1. 遵守附加使用授权。任何不被附加使用授权所允许的授权作品使用
+   行为均构成本许可证的违约，并构成对许可方知识产权的侵权，除非
+   你已事先从许可方处获得授权此类使用的单独商业许可或版权买断。
+
+2. 变更日期。在变更日期当日及之后，授权作品应视为同时根据变更
+   许可证向你授权，你可在本许可证授予的权利之外，根据变更许可证
+   的条款使用授权作品。变更许可证不得减少或限制你在变更日期之前
+   根据本许可证获得的任何权利。
+
+3. 不授予商标权。本许可证不授予使用许可方商号、商标、服务标记或
+   产品名称的任何权利，但为合理且惯常地描述授权作品来源及复制
+   NOTICE 文件内容所必需的除外。
+
+4. 无担保。授权作品按"现状"提供，不附带任何明示或暗示的担保，
+   包括但不限于适销性、特定用途适用性及不侵权的担保。许可方在
+   任何情况下均不对因授权作品或使用授权作品而产生的任何索赔、
+   损害或其他责任承担责任，无论该责任是基于合同、侵权或其他
+   理论产生。
+
+5. 提示。你分发的所有授权作品副本中必须保留上述版权声明、本
+   许可证以及随附授权作品的 NOTICE 文件（如有）。
+
+6. 终止。如果你违反本许可证的任何条款，本许可证自动终止。终止
+   后，你必须停止使用授权作品并销毁你占有或控制的所有副本。终止
+   不影响许可方在终止之前已 accrued 的任何权利或义务。
+
+7. 完整协议。本许可证连同附加使用授权、变更日期和变更许可证，
+   构成许可方与你之间关于授权作品的完整协议。除非以书面形式并
+   经许可方签署，否则对本许可证任何条款的修订、修改或放弃均不
+   生效。
+
+BSL 1.1 完整文本请见 https://mariadb.com/bsl11/。
+
+================================================================================
+  3. 繁體中文（參考翻譯，無法律效力）
+================================================================================
+
+商業源代碼許可證 1.1（Business Source License 1.1）
+
+參數
+
+許可方：              JackLiKa
+授權作品：            Trading Workstation（A 股量化交易工作台）
+                      由許可方根據本許可證提供的軟件、源代碼及相關文檔，
+                      識別為位於 https://github.com/JackLiKa/TradingWorkstation
+                      的倉庫及許可方指定的任何後續倉庫。
+附加使用授權：        你僅可將授權作品用於非生產環境目的，包括個人學習、
+                      教學、學術研究、評估和內部測試。在任何生產環境中使用
+                      授權作品，或以任何形式用於商業目的（包括但不限於內部
+                      業務運營、向第三方提供服務、將授權作品整合進商業產品
+                      或服務，或你或你的組織從中獲取收入或其他商業利益的
+                      任何使用），均需向許可方單獨購買商業授權或版權買斷。
+變更日期：            2030-08-23
+變更許可證：          Apache License, Version 2.0（Apache 許可證 2.0 版）
+
+提示
+
+授權作品根據上述條款以商業源代碼許可證 1.1（"BSL 1.1"）提供。上述
+變更日期與變更許可證在變更日期當日及之後自動生效，屆時授權作品將
+根據變更許可證提供。在變更日期之前，BSL 1.1 的條款連同附加使用授權
+共同管轄對授權作品的所有使用。
+
+對於附加使用授權未允許的任何授權作品使用行為，你必須向許可方購買
+商業授權或版權買斷。如需申請商業授權或版權買斷，請通過
+jacklika.business@gmail.com 聯繫許可方。
+
+條款
+
+許可方據此授予你一項全球範圍的、免版稅的、非獨佔的、永久的許可，
+允許你使用、複製、修改、分發授權作品並製作其衍生作品，但須遵守
+以下條件：
+
+1. 遵守附加使用授權。任何不被附加使用授權所允許的授權作品使用
+   行為均構成本許可證的違約，並構成對許可方知識產權的侵權，除非
+   你已事先從許可方處獲得授權此類使用的單獨商業許可或版權買斷。
+
+2. 變更日期。在變更日期當日及之後，授權作品應視為同時根據變更
+   許可證向你授權，你可在本許可證授予的權利之外，根據變更許可證
+   的條款使用授權作品。變更許可證不得減少或限制你在變更日期之前
+   根據本許可證獲得的任何權利。
+
+3. 不授予商標權。本許可證不授予使用許可方商號、商標、服務標記或
+   產品名稱的任何權利，但為合理且慣常地描述授權作品來源及複製
+   NOTICE 文件內容所必需的除外。
+
+4. 無擔保。授權作品按"現狀"提供，不附帶任何明示或暗示的擔保，
+   包括但不限於適銷性、特定用途適用性及不侵權的擔保。許可方在
+   任何情況下均不對因授權作品或使用授權作品而產生的任何索賠、
+   損害或其他責任承擔責任，無論該責任是基於合同、侵權或其他
+   理論產生。
+
+5. 提示。你分發的所有授權作品副本中必須保留上述版權聲明、本
+   許可證以及隨附授權作品的 NOTICE 文件（如有）。
+
+6. 終止。如果你違反本許可證的任何條款，本許可證自動終止。終止
+   後，你必須停止使用授權作品並銷毀你佔有或控制的所有副本。終止
+   不影響許可方在終止之前已 accrued 的任何權利或義務。
+
+7. 完整協議。本許可證連同附加使用授權、變更日期和變更許可證，
+   構成許可方與你之間關於授權作品的完整協議。除非以書面形式並
+   經許可方簽署，否則對本許可證任何條款的修訂、修改或放棄均不
+   生效。
+
+BSL 1.1 完整文本請見 https://mariadb.com/bsl11/。

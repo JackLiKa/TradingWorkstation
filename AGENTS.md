@@ -5,12 +5,13 @@
 - `java/` — 后端：Java 21 + Spring Boot 3.3 + Spring Data JPA + Caffeine
   - 入口：`src/main/java/com/quantization/QuantizationApplication.java`
   - 配置：`src/main/resources/application.yml`（从 `.env` 读取）
-  - 模块：`com.quantization.module.{stock,industry,forecast,indicator,dashboard,screener,backtest,chart,sync,system,preference,aicalllog}`（**12 個模塊**，`stock` 已三分拆為 `stock`（行情）+ `industry`（景氣度）+ `forecast`（預測），`aicalllog` 為 AI 調用日誌）
+  - 模块：`com.quantization.module.{stock,industry,forecast,indicator,dashboard,screener,backtest,chart,sync,system,preference,aicalllog,news}`（**13 個模塊**，`stock` 已三分拆為 `stock`（行情）+ `industry`（景氣度）+ `forecast`（預測），`aicalllog` 為 AI 調用日誌，`news` 為財經新聞）
   - 行業分析：`module.industry` 含行業景氣度計算、異常預警；`module.forecast` 含輪動預測、Markov 模型、多模型預測（ARIMA/Holt-Winters/線性回歸）、AutoML 調參、季節性分析、回測驗證
   - 指標引擎：`module.indicator` 已改為 `IndicatorCalculator` 註冊表模式（`Map<String,IndicatorCalculator>`），新增指標只需實現接口 + `@Component`，無需改 `IndicatorEngine`
   - 通知服務：`module.system` 含 `NotificationService`（SMTP 郵件 + Webhook，異步推送，獨立 `notificationExecutor` 線程池）+ `ProsperityAlertScheduler`（P4-8：可配置定時調度，`ALERT_SCHEDULER_ENABLED=true` + cron，預設關閉）
   - 偏好存儲：`module.preference` 已從 JSON 文件改為 MySQL 入庫（`user_preference` 表），DB 異常時降級到文件存儲
   - 回測引擎：`module.backtest` 已加滑點(`slippageBps`)、漲跌停約束、夏普減無風險利率(`riskFreeRate`)、結果自動落庫
+  - 財經新聞：`module.news` 提供華爾街見聞新聞的查詢與管理（`financial_news` 表，URI 去重）；新聞抓取由 Agent 服務的 `wallstreetcn_client.py` + `news_store.py`（MySQL + Milvus 向量庫雙寫）負責，後端僅負責已入庫新聞的分頁查詢與過期清理
   - 緩存：已按域拆名（`STOCK_DAILY_CACHE`/`INDUSTRY_DAILY_CACHE`/`FORECAST_CACHE`/`ROTATION_CACHE`），各域獨立 TTL
   - 构建：`mvn -DskipTests compile`（需 JDK 21）
   - 运行：`mvn spring-boot:run`，默认 `http://localhost:8090`，**context-path 默認 `/TradingWorkstation`**，Swagger `/TradingWorkstation/swagger-ui.html`
@@ -25,6 +26,8 @@
   - 入口：`agent/app/main.py`
   - 配置：`agent/.env`（从 `agent/.env.example` 复制）
   - LLM 供應商：DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin（7 個供應商，按階段性價比路由）
+  - 財經新聞：`agent/app/services/wallstreetcn_client.py`（華爾街見聞公開 API 抓取，無需 API Key）+ `news_store.py`（MySQL `financial_news` 表 + Milvus 向量庫雙寫，30 天 TTL，URI 去重）；`market_news.py` 階段集成語義檢索 + 實時抓取，按強弱勢行業關鍵詞補充搜索；Agent 端點 `/api/agent/news/sync`、`/news/wallstreetcn/search`、`/news/wallstreetcn/latest`、向量語義檢索
+  - 優化循環改進：`optimizer.py` 防死循環（連續重複回退注入強變異 next_prompt）；`scoring.py` 新增超額收益(excessReturn) + 交易活躍度(totalTrades)評分維度，懲罰空倉「假穩健」；`strategy_generation.py` 重複策略警告 + 超短線交易鐵律
   - 測試：`cd agent && python -m pytest tests/`（15 個測試文件，覆蓋率門檻 40%）
   - 監控：`/api/agent/metrics`（Prometheus 指標端點）
   - 运行：`uvicorn app.main:app`，默认 `http://localhost:8100`，Swagger `/docs`

@@ -1,8 +1,8 @@
 # 模塊指南（Module Guide）
 
-> 逐模塊說明職責、REST 端點、分層結構、數據表、緩存與依賴關係。後端共 **12 個模塊**（Phase 5 已將 `stock` 三分拆為 `stock` + `industry` + `forecast`）。
+> 逐模塊說明職責、REST 端點、分層結構、數據表、緩存與依賴關係。後端共 **13 個模塊**（Phase 5 已將 `stock` 三分拆為 `stock` + `industry` + `forecast`；新增 `news` 財經新聞模塊）。
 > 路徑均省略前綴 `java/src/main/java/com/quantization/`。
-> 最後校準日期：2026-08-22（覆蓋 Phase 4 + Phase 5 全部變更）。
+> 最後校準日期：2026-08-23（覆蓋 Phase 4 + Phase 5 + news 模塊全部變更）。
 
 ---
 
@@ -22,6 +22,7 @@
 | system | /api/system | 4 | 無（僅校驗，不寫 .env） | 無 | stock(ping), industry(alerts) |
 | preference | /api/preference | 2 | user_preference（+文件降級） | 無 | — |
 | aicalllog | /api/aicalllog | 6 | ai_call_log | 無 | —（消費者是 agent） |
+| news | /api/news | 3 | financial_news | 無 | —（抓取由 agent 负责） |
 
 ---
 
@@ -543,7 +544,71 @@ iteration / stage_name / stage_display_name / provider / model_name / input_json
 
 ---
 
-## 14. 橫切層（common / config）
+## 14. 模塊：news（財經新聞）
+
+### 職責
+
+提供華爾街見聞等來源財經新聞的查詢與管理。**新聞抓取由 Agent 服務負責**（`wallstreetcn_client.py` 抓取 + `news_store.py` 寫入 MySQL + Milvus），後端 `news` 模塊僅負責已入庫新聞的分頁查詢、詳情查詢與過期清理。
+
+### 端點
+
+| 方法 | 路徑 | 參數 | 說明 |
+|------|------|------|------|
+| GET | /api/news | page=0, size=20, channel?, source? | 分頁查詢最新新聞（按 published_at 倒序） |
+| GET | /api/news/{id} | — | 新聞詳情 |
+| DELETE | /api/news/cleanup | daysBefore=30 | 清理 N 天前的新聞 |
+
+### 類清單
+
+| 類型 | 類 |
+|------|-----|
+| Controller | NewsController |
+| Service | NewsService |
+| Repository | FinancialNewsRepository |
+| Entity | FinancialNewsEntity |
+| DTO | FinancialNewsDto / NewsBatchUpsertRequest / NewsSyncResultDto |
+
+### Entity（financial_news，schema.sql `CREATE TABLE IF NOT EXISTS`）
+
+| 欄位 | 類型 | 約束 | 說明 |
+|------|------|------|------|
+| id | BIGINT | PK AUTO_INCREMENT | |
+| uri | VARCHAR(200) | NOT NULL, UNIQUE | 文章唯一標識（去重用） |
+| title | VARCHAR(500) | NOT NULL | 標題 |
+| summary | VARCHAR(2000) | | 摘要 |
+| content | TEXT | | 正文 |
+| source | VARCHAR(50) | NOT NULL | 來源（如「華爾街見聞」） |
+| author | VARCHAR(100) | | 作者 |
+| channel | VARCHAR(50) | | 頻道（a-stock/global/us-stock 等） |
+| published_at | DATETIME | | 發布時間 |
+| url | VARCHAR(500) | | 原文連結 |
+| image_url | VARCHAR(500) | | 配圖 |
+| created_at | DATETIME | NOT NULL | 入庫時間 |
+
+索引：`uk_financial_news_uri`（唯一）/ `idx_financial_news_channel` / `idx_financial_news_published`。
+
+寫入方：Agent 服務 `news_store.py` 抓取後批量 upsert（`NewsBatchUpsertRequest`）。
+
+### 與 Agent 服務的協作
+
+```
+Agent wallstreetcn_client.py（抓取）
+       ↓
+Agent news_store.py（清洗 + URI 去重）
+       ↓
+   ┌───┴───┐
+   ↓       ↓
+MySQL      Milvus 向量庫
+financial_news   financial_news_vectors
+   ↓
+後端 NewsController（查詢/清理）
+   ↓
+前端 /news 頁面（展示/搜索/語義檢索）
+```
+
+---
+
+## 15. 橫切層（common / config）
 
 ### common
 - `common.api`：`ApiResponse{success, code, message, data}`（NON_NULL）、`ErrorCode`（String 常量：OK/BAD_REQUEST/VALIDATION_ERROR/NOT_FOUND/DB_ERROR/SYNC_ERROR/INTERNAL_ERROR）、`PageResponse`
@@ -569,28 +634,28 @@ iteration / stage_name / stage_display_name / provider / model_name / input_json
 
 ---
 
-## 15. Phase 5 變更日誌
+## 16. Phase 5 變更日誌
 
 以下為 Phase 5 相對 Phase 4 的全部修改：
 
-### 15.1 模塊三分拆
+### 16.1 模塊三分拆
 - `stock` 模塊拆分為 `stock`（行情）+ `industry`（景氣度）+ `forecast`（預測）三個獨立模塊
 - `StockController` 統一路由，分發到 `StockService` / `IndustryService` / `ForecastService`
 - `StockService` 從 2,583 行瘦身至 505 行
 
-### 15.2 indicator 註冊表模式
+### 16.2 indicator 註冊表模式
 - 新增 `IndicatorCalculator` 接口（`IndicatorCalculator.java`）
 - `IndicatorEngine` 改為持有 `Map<String, IndicatorCalculator>` 註冊表（`IndicatorEngine.java:29`）
 - 新增 7 個計算器：MaCalculator / RsiCalculator / VolumeRatioCalculator / ReturnCalculator / KdjCalculator / MacdCalculator / BollCalculator
 - 新增 `IndicatorSnapshotBuilder`（可變構建器）
 - 新增指標只需實現接口 + `@Component`，無需修改 `IndicatorEngine`
 
-### 15.3 preference 入庫
+### 16.3 preference 入庫
 - 新增 `PreferenceEntity` + `PreferenceRepository`（`user_preference` 表）
 - `PreferenceService` 主存儲改為 MySQL，DB 異常時降級到文件存儲
 - 新增 `schema.sql` 冪等建表（啟動時自動執行）
 
-### 15.4 backtest 補強
+### 16.4 backtest 補強
 - 新增 `slippageBps`（滑點，默認 0，`BacktestConfigDto.java:31`）
 - 新增漲跌停約束（`LIMIT_THRESHOLD=9.9`，`BacktestService.java:60`）
 - 新增 `riskFreeRate`（無風險利率，默認 0.02，夏普減 rf，`BacktestService.java:379-380`）
@@ -598,38 +663,38 @@ iteration / stage_name / stage_display_name / provider / model_name / input_json
 - 新增 `GET /api/backtest/recent` 端點（最近回測記錄）
 - `BacktestStrategyRepository` 新增 `findRecentRuns()` 方法
 
-### 15.5 screener DTO 嵌套視圖
+### 16.5 screener DTO 嵌套視圖
 - `ScreenerCriteriaDto` 新增 9 個嵌套子記錄（PriceFilter / PctChangeFilter / TurnoverFilter / VolumeFilter / MomentumFilter / TechnicalFilter / MaFilter / CrossFilter / BollFilter）
 - 新增 9 個嵌套視圖訪問器（`ScreenerCriteriaDto.java:115-156`）
 - 保留 49 個扁平字段維持序列化格式不變
 
-### 15.6 緩存 4 域拆名
+### 16.6 緩存 4 域拆名
 - `CacheConfig` 從 7 緩存名單一 TTL 重構為 10 緩存名 4 域獨立 TTL
 - 新增 `STOCK_DAILY_CACHE` / `INDUSTRY_DAILY_CACHE` / `FORECAST_CACHE` / `ROTATION_CACHE` 四個域緩存名
 - `AppProperties.Cache` 新增 stockTtlSeconds / industryTtlSeconds / forecastTtlSeconds / rotationTtlSeconds
 - `application.yml` 新增對應配置項
 
-### 15.7 通知線程池分離
+### 16.7 通知線程池分離
 - `AsyncConfig` 新增 `notificationExecutor`（4 線程，notification-async）
 - `NotificationService.sendProsperityAlertNotification()` 改用 `@Async("notificationExecutor")`
 - 與 `asyncExecutor`（8 線程，dashboard-async）分離，避免相互阻塞
 
-### 15.8 Webhook HMAC-SHA256 簽名
+### 16.8 Webhook HMAC-SHA256 簽名
 - Webhook secret 從放入 payload body 改為 HMAC-SHA256 簽名頭 `X-Webhook-Signature`
 - `WebConfig` CORS 允許頭新增 `X-Webhook-Signature`
 
-### 15.9 配置啟動校驗
+### 16.9 配置啟動校驗
 - 新增 `ConfigValidationInitializer`（`@PostConstruct` 校驗 DB_PASSWORD/DB_USER/通知子配置，打 WARN 不阻止啟動）
 
-### 15.10 AI 調用日誌清理
+### 16.10 AI 調用日誌清理
 - 新增 `AiCallLogCleanupScheduler`（預設關閉，`AICALLLOG_CLEANUP_ENABLED=true` 啟用）
 - `AiCallLogRepository` 新增 `deleteByCreatedAtBefore()` 方法
 - `AiCallLogController` 新增 `GET /`（分頁查詢全部）端點
 
-### 15.11 ingestion 拆分
+### 16.11 ingestion 拆分
 - `baostock_ingest.py` 拆分為 `baostock_fetch.py`（API 調用層）+ `baostock_write.py`（DB 寫入層）+ `baostock_ingest.py`（入口/CLI/菜單）
 
-### 15.12 其他
+### 16.12 其他
 - `StockMathUtils` 從 StockService 抽出（復用於 industry/forecast）
 - `application.yml` 新增 `app.aicalllog.*` / `app.chart.batch-size` 配置項
 - `BacktestConfigDto` 新增 `effectiveRiskFreeRate()` / `effectiveSlippageBps()` 安全訪問器

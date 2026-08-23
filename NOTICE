@@ -1,3 +1,20 @@
+================================================================================
+  Trading Workstation — NOTICE
+================================================================================
+
+  This file contains the NOTICE text in three languages:
+
+    1. English (Authoritative / 具有法律效力的正本)
+    2. 简体中文 (Simplified Chinese — Reference Translation / 参考翻译)
+    3. 繁體中文 (Traditional Chinese — Reference Translation / 參考翻譯)
+
+  In the event of any conflict or inconsistency between the English version
+  and any translated version, the English version shall prevail and govern.
+
+================================================================================
+  1. ENGLISH (AUTHORITATIVE)
+================================================================================
+
 Trading Workstation
 Copyright (c) 2026 JackLiKa. All rights reserved.
 
@@ -42,3 +59,89 @@ permitted by the Additional Use Grant, contact:
   JackLiKa
   Email:  jacklika.business@gmail.com
   GitHub: https://github.com/JackLiKa
+
+================================================================================
+  2. 简体中文（参考翻译，无法律效力）
+================================================================================
+
+Trading Workstation
+版权所有 (c) 2026 JackLiKa。保留所有权利。
+
+本产品依据商业源代码许可证 1.1（"BSL 1.1"）授权。BSL 1.1 的副本包含
+在随本产品提供的 LICENSE 文件中，也可从 https://mariadb.com/bsl11/
+获取。
+
+在 LICENSE 文件中指定的变更日期之前，授权作品仅可用于非生产环境
+目的（个人学习、教学、学术研究、评估和内部测试）。任何生产环境
+使用或商业目的使用，均需向版权持有者单独购买商业授权或版权买断。
+
+在变更日期当日及之后，授权作品将额外依据 LICENSE 文件中指定的
+变更许可证提供。
+
+商标
+----
+
+"Trading Workstation"、Trading Workstation 名称和徽标，以及 JackLiKa
+名称和徽标，均为 JackLiKa 的商标或商号。本许可证不授予使用许可方
+商号、商标、服务标记或产品名称的许可，但为合理且惯常地描述本产品
+来源及复制本 NOTICE 文件内容所必需的除外。
+
+第三方组件
+----------
+
+本产品包含第三方开源组件。每个此类组件均依据其自身许可证文件中
+规定的条款授权，该许可证文件随组件提供。上述 BSL 1.1 条款仅适用于
+JackLiKa 创作的原创作品，不覆盖第三方组件的许可证。
+
+商业授权
+--------
+
+如需商业授权咨询、版权买断，或附加使用授权未允许的任何使用，
+请联系：
+
+  JackLiKa
+  邮箱：  jacklika.business@gmail.com
+  GitHub：https://github.com/JackLiKa
+
+================================================================================
+  3. 繁體中文（參考翻譯，無法律效力）
+================================================================================
+
+Trading Workstation
+版權所有 (c) 2026 JackLiKa。保留所有權利。
+
+本產品依據商業源代碼許可證 1.1（"BSL 1.1"）授權。BSL 1.1 的副本包含
+在隨本產品提供的 LICENSE 文件中，也可從 https://mariadb.com/bsl11/
+獲取。
+
+在 LICENSE 文件中指定的變更日期之前，授權作品僅可用於非生產環境
+目的（個人學習、教學、學術研究、評估和內部測試）。任何生產環境
+使用或商業目的使用，均需向版權持有者單獨購買商業授權或版權買斷。
+
+在變更日期當日及之後，授權作品將額外依據 LICENSE 文件中指定的
+變更許可證提供。
+
+商標
+----
+
+"Trading Workstation"、Trading Workstation 名稱和徽標，以及 JackLiKa
+名稱和徽標，均為 JackLiKa 的商標或商號。本許可證不授予使用許可方
+商號、商標、服務標記或產品名稱的許可，但為合理且慣常地描述本產品
+來源及複製本 NOTICE 文件內容所必需的除外。
+
+第三方組件
+----------
+
+本產品包含第三方開源組件。每個此類組件均依據其自身許可證文件中
+規定的條款授權，該許可證文件隨組件提供。上述 BSL 1.1 條款僅適用於
+JackLiKa 創作的原創作品，不覆蓋第三方組件的許可證。
+
+商業授權
+--------
+
+如需商業授權諮詢、版權買斷，或附加使用授權未允許的任何使用，
+請聯繫：
+
+  JackLiKa
+  郵箱：  jacklika.business@gmail.com
+  GitHub：https://github.com/JackLiKa
