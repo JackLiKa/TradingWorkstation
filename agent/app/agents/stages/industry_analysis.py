@@ -112,9 +112,12 @@ class IndustryAnalysisStage(BaseStage):
         """執行行業分析。
 
         kwargs:
-            market_news: str — 行情新聞分析結果
+            market_news: str — AI 0 的行情新聞分析結果（JSON 字符串）
         """
         market_news = kwargs.get("market_news", "")
+
+        # 從 AI 0 的 JSON 輸出中結構化提取利好/利空行業，而非截斷整個 JSON
+        market_news_summary = _extract_ai0_industry_signals(market_news)
 
         # === 從後端獲取最新交易日行業聚合 ===
         logger.info("[AI0.5] 獲取行業日聚合...")
@@ -157,7 +160,7 @@ class IndustryAnalysisStage(BaseStage):
             rotation_text = "數據不足，無法提供輪動預測"
 
         prompt = PROMPT_TEMPLATE.format(
-            market_news=market_news[:2000],  # 截斷避免 token 過多
+            market_news=market_news_summary,  # 結構化摘要而非截斷原文
             industry_daily=industry_daily_text,
             industry_list=json.dumps(industry_list[:50], ensure_ascii=False, indent=2),
             industry_stocks=json.dumps(industry_stocks, ensure_ascii=False, indent=2),
@@ -169,6 +172,59 @@ class IndustryAnalysisStage(BaseStage):
         response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
         logger.info(f"[AI0.5 行業分析] {response[:100]}...")
         return response
+
+
+def _extract_ai0_industry_signals(market_news: str) -> str:
+    """從 AI 0 的 JSON 輸出中結構化提取行業利好/利空信號。
+
+    只提取與行業分析相關的字段（bullish_factors / bearish_factors / stock_selection_advice），
+    而非截斷整個 JSON，減少 token 消耗並提高信號精度。
+    """
+    if not market_news or market_news == "無":
+        return "無（AI 0 未提供分析結果）"
+
+    try:
+        cleaned = market_news.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+        data = json.loads(cleaned)
+        lines = []
+
+        # 利好行業（含持續性判斷）
+        bullish = data.get("bullish_factors", [])
+        if bullish:
+            lines.append("AI 0 識別的利好行業:")
+            for b in bullish[:4]:
+                sector = b.get("sector", "")
+                continuity = b.get("continuity", "未知")
+                cum = b.get("cumulative_change", 0)
+                supported = b.get("supported_by_news", False)
+                news_flag = "✓有新聞支撐" if supported else "✗無新聞支撐"
+                lines.append(f"  {sector}: 累計{cum:+.1f}%, {continuity}, {news_flag}")
+
+        # 利空行業（含利空性質）
+        bearish = data.get("bearish_factors", [])
+        if bearish:
+            lines.append("AI 0 識別的利空行業:")
+            for b in bearish[:3]:
+                sector = b.get("sector", "")
+                nature = b.get("nature", "未知")
+                cum = b.get("cumulative_change", 0)
+                lines.append(f"  {sector}: 累計{cum:+.1f}%, {nature}")
+
+        # 選股建議
+        advice = data.get("stock_selection_advice", "")
+        if advice:
+            lines.append(f"AI 0 選股建議: {advice[:300]}")
+
+        return "\n".join(lines) if lines else "AI 0 分析結果中無行業信號"
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        logger.warning(f"[AI0.5] AI 0 JSON 解析失敗，降級為截斷原文: {e}")
+        return market_news[:1500] if market_news else "無"
 
 
 def _format_industry_daily(data: list[dict[str, Any]]) -> str:

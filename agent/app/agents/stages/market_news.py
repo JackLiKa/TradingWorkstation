@@ -81,14 +81,8 @@ PROMPT_TEMPLATE = """請分析最近10個交易日的市場數據，進行深度
 ## 多日板塊表現（最近10個交易日，每日各行業漲跌幅）
 {sector_text}
 
-## 財經新聞（最新市場要聞）
-{news_text}
-
-## 華爾街見聞新聞（語義檢索 + 實時抓取）
-{wscn_news_text}
-
-## 關鍵詞新聞（按利好/利空方向搜索的相關新聞）
-{keyword_news_text}
+## 財經新聞（已去重合併：華爾街見聞 + 東方財富 + 關鍵詞追蹤）
+{merged_news_text}
 
 ## 歷史優化記錄
 {history_text}
@@ -191,8 +185,13 @@ class MarketNewsStage(BaseStage):
         history = kwargs.get("history", [])
 
         # === 抓取實時市場數據（含多日形態 + 板塊表現 + 新聞）===
-        logger.info("[AI0] 抓取10日市場數據 + 板塊表現 + 新聞...")
-        market_data = await market_data_client.get_market_overview()
+        # 優化：若 optimizer 已傳入 market_data 則復用，避免重複調用後端 API
+        market_data = kwargs.get("market_data")
+        if market_data:
+            logger.info("[AI0] 復用 optimizer 傳入的市場數據")
+        else:
+            logger.info("[AI0] 抓取10日市場數據 + 板塊表現 + 新聞...")
+            market_data = await market_data_client.get_market_overview()
 
         # 格式化指數數據
         indices_text = ""
@@ -223,7 +222,6 @@ class MarketNewsStage(BaseStage):
 
         # 格式化新聞
         news = market_data.get("news", [])
-        news_text = _format_news(news)
 
         # === 華爾街見聞新聞（語義檢索 + 最新抓取）===
         # 1. 從向量庫檢索與當前市場環境相關的新聞
@@ -234,6 +232,10 @@ class MarketNewsStage(BaseStage):
         # 從板塊表現中識別漲幅最大和跌幅最大的行業，搜索相關新聞
         keyword_news = await _search_keyword_news(sector_perf)
         keyword_news_text = _format_keyword_news(keyword_news)
+
+        # === 新聞去重 + 優先級合併 ===
+        # 三個來源可能重複，按 wscn（已重排序）> news > keyword_news 優先級去重
+        merged_news_text = _merge_news_dedup(news, wscn_news_text, keyword_news_text)
 
         # 構建歷史摘要（最近 5 輪，冷啟動時由種子上下文補充）
         history_text = ""
@@ -249,9 +251,7 @@ class MarketNewsStage(BaseStage):
             breadth_text=breadth_text,
             rotation_text=rotation_text,
             sector_text=sector_text,
-            news_text=news_text,
-            wscn_news_text=wscn_news_text,
-            keyword_news_text=keyword_news_text,
+            merged_news_text=merged_news_text,
             history_text=history_text if history_text else "無（首輪）",
             few_shot=get_few_shot("market_news"),
         )
@@ -416,6 +416,86 @@ def _format_sector_performance(sector_perf: list[dict[str, Any]]) -> str:
                 lines.append(f"    {s.get('industry', '')}: 平均{avg_pct:+.2f}%")
 
     return "\n".join(lines)
+
+
+def _merge_news_dedup(
+    backend_news: list[dict[str, Any]],
+    wscn_news_text: str,
+    keyword_news_text: str,
+) -> str:
+    """合併三個新聞來源並去重，按優先級排序。
+
+    優先級：華爾街見聞（已重排序）> 東方財富（後端 news）> 關鍵詞新聞
+    去重規則：按標題相似度（完全包含或 >80% 相同）去重。
+    """
+    seen_titles: set[str] = set()
+    lines = []
+
+    def _normalize_title(title: str) -> str:
+        """歸一化標題用於去重比較。"""
+        return title.strip().replace(" ", "").replace("：", ":")[:50]
+
+    def _is_duplicate(title: str) -> bool:
+        """檢查標題是否已存在（完全匹配或高度相似）。"""
+        normalized = _normalize_title(title)
+        if not normalized:
+            return True
+        # 完全匹配
+        if normalized in seen_titles:
+            return True
+        # 子串匹配（一方包含另一方）
+        for seen in seen_titles:
+            if normalized in seen or seen in normalized:
+                return True
+        seen_titles.add(normalized)
+        return False
+
+    # 1. 華爾街見聞新聞（最高優先級，已經過 ox-alpha 重排序）
+    if wscn_news_text and "無華爾街見聞" not in wscn_news_text and "無" != wscn_news_text[:2]:
+        lines.append("=== 華爾街見聞（已重排序，含方向+持續性評分）===")
+        # wscn_news_text 已經是格式化文本，直接加入
+        lines.append(wscn_news_text)
+        # 從格式化文本中提取標題用於去重
+        for line in wscn_news_text.split("\n"):
+            # 格式如 "  [日期] 標題 (來源)" 或 "  ▸ [方向] 標題"
+            if "]" in line and line.strip():
+                # 提取標題部分
+                parts = line.split("]", 1)
+                if len(parts) > 1:
+                    title_part = parts[1].strip().split("(")[0].strip()
+                    if title_part:
+                        _is_duplicate(title_part)
+
+    # 2. 東方財富新聞（後端 news）
+    if backend_news:
+        added = 0
+        for n in backend_news[:15]:
+            title = n.get("title", "")
+            if _is_duplicate(title):
+                continue
+            source = n.get("source", "東方財富")
+            date = n.get("date", "")
+            if added == 0:
+                lines.append("\n=== 東方財富（最新市場要聞）===")
+            lines.append(f"  [{date}] {title} ({source})")
+            added += 1
+            if added >= 8:
+                break
+
+    # 3. 關鍵詞新聞（最低優先級）
+    if keyword_news_text and "無關鍵詞" not in keyword_news_text:
+        lines.append("\n=== 關鍵詞追蹤（按行業搜索的補充新聞）===")
+        for line in keyword_news_text.split("\n"):
+            # 對關鍵詞新聞也做去重
+            if "]" in line and line.strip() and not line.startswith("="):
+                parts = line.split("]", 1)
+                if len(parts) > 1:
+                    title_part = parts[1].strip().split("(")[0].strip()
+                    if _is_duplicate(title_part):
+                        continue
+            lines.append(line)
+
+    return "\n".join(lines) if lines else "無新聞數據（所有來源均不可用）"
 
 
 def _format_news(news: list[dict[str, Any]]) -> str:

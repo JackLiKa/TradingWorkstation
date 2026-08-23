@@ -192,6 +192,78 @@ def _build_window_config(base_config: dict[str, Any], days: int) -> dict[str, An
     return cfg
 
 
+def _validate_backtest_config(config: dict[str, Any]) -> dict[str, Any]:
+    """回測參數安全校驗 — 防止 AI 設置不合理的參數導致回測結果失真。
+
+    校驗規則（站在專業量化投資者角度）：
+    1. slippageBps ≥ 5：零滑點回測結果不可信，A 股真實交易至少 5bp 滑點
+    2. maxPositions ≥ 3：單倉位集中度風險極高，回撤不可控
+    3. commissionBps ≥ 2：低於 2bp 不現實（A 股最低佣金約 2.5bp）
+    4. stopLossPct ≤ 20：過寬止損等於不止損
+    5. 回測區間 ≥ 120 個交易日（約 6 個月）：樣本量不足時統計不顯著
+    """
+    cfg = dict(config)
+    warnings = []
+
+    # 1. 滑點下限
+    slip = cfg.get("slippageBps")
+    if slip is None or slip < 5:
+        old = slip
+        cfg["slippageBps"] = 5
+        warnings.append(f"slippageBps: {old} → 5（零滑點回測不可信）")
+
+    # 2. 持倉數下限
+    max_pos = cfg.get("maxPositions")
+    if max_pos is not None and max_pos < 3:
+        cfg["maxPositions"] = 3
+        warnings.append(f"maxPositions: {max_pos} → 3（單倉位集中度風險）")
+
+    # 3. 手續費下限
+    comm = cfg.get("commissionBps")
+    if comm is not None and comm < 2:
+        cfg["commissionBps"] = 2
+        warnings.append(f"commissionBps: {comm} → 2（低於真實佣金）")
+
+    # 4. 止損上限
+    sl = cfg.get("stopLossPct")
+    if sl is not None and sl > 20:
+        cfg["stopLossPct"] = 20
+        warnings.append(f"stopLossPct: {sl} → 20（過寬止損等於不止損）")
+
+    # 4b. 止損/止盈對稱性校驗：止盈/止損比應在 1.5-4 之間
+    # 比例 <1.5 = 頻繁止盈但一次止損吃掉多次盈利；>4 = 止損過寬
+    tp = cfg.get("takeProfitPct")
+    if sl is not None and tp is not None and sl > 0 and tp > 0:
+        ratio = tp / sl
+        if ratio < 1.5:
+            new_tp = round(sl * 2, 1)
+            cfg["takeProfitPct"] = new_tp
+            warnings.append(f"takeProfitPct: {tp} → {new_tp}（止盈/止損比 {ratio:.1f} 過低，應 ≥1.5）")
+        elif ratio > 4:
+            new_tp = round(sl * 3, 1)
+            cfg["takeProfitPct"] = new_tp
+            warnings.append(f"takeProfitPct: {tp} → {new_tp}（止盈/止損比 {ratio:.1f} 過高，止損過寬）")
+
+    # 5. 回測區間長度（日曆天數）
+    start = cfg.get("startDate", "")
+    end = cfg.get("endDate", "")
+    if start and end:
+        try:
+            from datetime import datetime
+            s = datetime.strptime(start, "%Y-%m-%d")
+            e = datetime.strptime(end, "%Y-%m-%d")
+            days = (e - s).days
+            if days < 120:
+                warnings.append(f"回測區間僅 {days} 天（<120天），統計不顯著，結果僅供參考")
+        except (ValueError, TypeError):
+            pass
+
+    if warnings:
+        logger.warning(f"[config校驗] 修正不合理參數: {'; '.join(warnings)}")
+
+    return cfg
+
+
 async def _run_multi_window_backtest(
     criteria: dict[str, Any],
     base_config: dict[str, Any],
@@ -406,9 +478,11 @@ async def run_optimization_loop():
             state.current_stage_results = list(_results)
 
         try:
-            # AI 0: 行情新聞
+            # AI 0: 行情新聞（共享 market_data 給 AI 1）
+            shared_market_data = await backend_client.get_market_overview()
             news_result = await _market_news_stage.run(
                 state=state, judge=_judge, max_attempts=2, history=state.iterations,
+                market_data=shared_market_data,
             )
             _add_warmup_result(news_result)
             market_news = sanitize_output(news_result.output)
@@ -419,12 +493,12 @@ async def run_optimization_loop():
             )
             _add_warmup_result(industry_result)
 
-            # AI 1: 行情分析
-            market_data = await backend_client.get_market_overview()
+            # AI 1: 行情分析（復用 market_data + 接收 AI 0 分析結果）
             market_result = await _market_stage.run(
                 state=state, judge=_judge, max_attempts=2,
-                market_data=market_data, history=state.iterations,
+                market_data=shared_market_data, history=state.iterations,
                 prev_reflection=state.current_reflection,
+                market_news=market_news,
             )
             _add_warmup_result(market_result)
             market_context = sanitize_output(market_result.output)
@@ -485,13 +559,16 @@ async def run_optimization_loop():
 
         try:
             # === AI 0: 行情新聞分析（+ 評委） ===
+            # 優化：提前獲取 market_data，AI 0 和 AI 1 共享，避免重複調用後端 API
             state.status_message = f"第 {iteration} 輪：AI 0 行情新聞分析中..."
             logger.info(f"第 {iteration} 輪：AI 0 行情新聞")
+            shared_market_data = await backend_client.get_market_overview()
             news_result: StageResult = await _market_news_stage.run(
                 state=state,
                 judge=_judge,
                 max_attempts=2,
                 history=state.iterations,
+                market_data=shared_market_data,  # ← 共享市場數據
             )
             _add_stage_result(news_result)
             market_news = sanitize_output(news_result.output)
@@ -517,16 +594,18 @@ async def run_optimization_loop():
                 filtered_codes = []
 
             # === AI 1: 行情分析（+ 評委） ===
+            # 優化：AI 1 接收 AI 0 的分析結果，避免重複分析市場形態
+            # 優化：復用 AI 0 已獲取的 market_data，避免重複調用後端 API
             state.status_message = f"第 {iteration} 輪：AI 1 行情分析中..."
             logger.info(f"第 {iteration} 輪：AI 1 行情分析")
-            market_data = await backend_client.get_market_overview()
             market_result: StageResult = await _market_stage.run(
                 state=state,
                 judge=_judge,
                 max_attempts=2,
-                market_data=market_data,
+                market_data=shared_market_data,  # ← 復用 AI 0 的市場數據
                 history=state.iterations,
                 prev_reflection=state.current_reflection,
+                market_news=market_news,  # ← 傳遞 AI 0 的分析結果
             )
             _add_stage_result(market_result)
             market_context = sanitize_output(market_result.output)
@@ -716,6 +795,9 @@ async def run_optimization_loop():
             # === 行業相關性後處理：避免高相關行業過度集中 ===
             new_criteria = await _dedup_high_corr_industries(new_criteria)
 
+            # === Config 安全校驗（防止 AI 設置不合理的回測參數）===
+            state.current_config = _validate_backtest_config(state.current_config)
+
             # === 回測（非 AI） ===
             state.status_message = f"第 {iteration} 輪：運行回測中..."
             state.current_stage = "backtest"
@@ -902,6 +984,23 @@ async def run_optimization_loop():
                         f"4. 調整 minTurn（當前值 ±2.0）或 minVolumeRatio（當前值 ±0.3）\n"
                         f"5. 移除或放寬最嚴格的過濾條件\n"
                         f"目標：打破重複，探索新的策略空間，即使可能暫時降低評分也要嘗試。\n\n"
+                        f"---\n⚠️ 免責聲明：本系統輸出僅供研究參考，不構成任何投資建議。"
+                    )
+                elif stagnant_count >= 3:
+                    # 策略不完全相同但連續 3+ 輪無實質進展（Δscore < 1）
+                    # 說明 AI 在做無效微調，需要更大方向的探索
+                    logger.warning(
+                        f"連續 {stagnant_count} 輪無實質進展（策略略有不同但評分停滯），注入探索性 next_prompt"
+                    )
+                    state.current_next_prompt = (
+                        f"⚠️ 注意：連續 {stagnant_count} 輪評分停滯在 {state.best_score} 附近，"
+                        f"微調已無效果。本輪需要嘗試**不同方向**的策略變革：\n"
+                        f"1. 嘗試完全不同的選股邏輯（如從趨勢跟蹤轉為均值回歸，或反之）\n"
+                        f"2. 大幅調整參數範圍（如 minClose 從 10-100 改為 5-50 或 20-200）\n"
+                        f"3. 嘗試不同的技術指標組合（如加入 KDJ 金叉或 MACD 信號）\n"
+                        f"4. 調整回測窗口或調倉頻率（如 rebalanceInterval 從 5 改為 3 或 10）\n"
+                        f"5. 擴展或替換行業（當前行業：{state.best_criteria.get('industries', [])}）\n"
+                        f"目標：跳出局部最優，探索全局更優的策略空間。\n\n"
                         f"---\n⚠️ 免責聲明：本系統輸出僅供研究參考，不構成任何投資建議。"
                     )
             state.current_iteration = iteration

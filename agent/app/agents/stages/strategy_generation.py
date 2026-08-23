@@ -348,6 +348,38 @@ class StrategyGenerationStage(BaseStage):
             few_shot=get_few_shot("strategy_generation"),
         )
 
+        # === Prompt 長度控制 — 避免推理模型因輸入過長導致推理 token 耗盡 ===
+        # 策略生成 prompt 含 15+ 數據區塊，全量注入可能超過 8000 token
+        # 推理模型（deepseek-reasoner）的推理 token 也計入 max_tokens，
+        # 輸入過長 → 推理過長 → 推理用完 token → 輸出為空
+        # 策略：按優先級精簡低價值區塊（保留核心，截斷輔助）
+        MAX_PROMPT_CHARS = 12000  # 約 4000 token，留足推理 + 輸出空間
+        if len(prompt) > MAX_PROMPT_CHARS:
+            logger.warning(
+                f"[AI2] prompt 過長（{len(prompt)} 字 > {MAX_PROMPT_CHARS}），精簡低優先級區塊"
+            )
+            # 按優先級從低到高截斷（這些是「有則更好」的輔助數據）
+            # 優先級：migration < rotation < correlation < prosperity < rag < error_lessons
+            # 核心（不可截斷）：market_context, regime_guidance, industry_text, prev_reflection,
+            #                  next_prompt, current_criteria, config, history_text, few_shot, JSON schema
+            truncation_targets = [
+                ("## 資金流向遷移分析", migration_text, "無（已精簡）"),
+                ("## 行業輪動預測", rotation_prediction_text, "無（已精簡）"),
+                ("## 行業相關性分析", correlation_text, "無（已精簡）"),
+                ("## 行業景氣度指標", prosperity_text, "無（已精簡）"),
+                ("## RAG 歷史經驗", rag_experiences, "無（已精簡）"),
+            ]
+            for section_header, original_text, replacement in truncation_targets:
+                if len(prompt) <= MAX_PROMPT_CHARS:
+                    break
+                if original_text and len(original_text) > 100:
+                    # 截斷該區塊到 200 字摘要
+                    truncated = original_text[:200] + "...（已精簡，完整數據省略）"
+                    prompt = prompt.replace(original_text, truncated)
+                    logger.info(f"[AI2] 精簡 {section_header}: {len(original_text)} → {len(truncated)} 字")
+
+        response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
+
         response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
         logger.info(f"[AI2 策略生成] {response[:100]}...")
         return response

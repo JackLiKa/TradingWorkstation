@@ -158,3 +158,32 @@ export async function apiDelete<T>(input: string): Promise<T> {
   }
   return body.data;
 }
+
+/**
+ * 發送 PATCH 請求並解析後端統一響應格式。
+ * @param input API 路徑
+ * @param payload 請求體（會被 JSON.stringify）
+ * @returns 後端響應中的 data 字段（類型 T）
+ * @throws ApiError 當 HTTP 狀態碼非 2xx 或 body.success 為 false 時拋出
+ */
+export async function apiPatch<T>(input: string, payload: unknown): Promise<T> {
+  const url = input.startsWith('http') ? input : `${API_BASE}/api${input}`;
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      message = body.message || message;
+    } catch {}
+    throw new ApiError(`HTTP_${res.status}`, message);
+  }
+  const body: ApiResponse<T> = await res.json();
+  if (!body.success) {
+    throw new ApiError(body.code, body.message);
+  }
+  return body.data;
+}

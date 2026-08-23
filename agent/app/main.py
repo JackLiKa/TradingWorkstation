@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.core.config import settings
 from app.core.logging import logger, setup_logging
+from app.services.ashare_mcp_manager import ashare_mcp_manager
 from app.services.model_checker import model_checker
 from app.services.news_sync_scheduler import news_sync_scheduler
 
@@ -29,6 +30,9 @@ async def lifespan(app: FastAPI):
     # 啟動新聞自動同步（啟動時補抓 + 每 6 分鐘定時同步）
     news_sync_scheduler.start()
 
+    # 啟動 a-share-mcp 子服務（A股歷史數據 MCP，端口 8101）
+    await ashare_mcp_manager.start()
+
     logger.info(f"Agent 服務已啟動，端口 {settings.agent_port}")
     yield
 
@@ -46,6 +50,14 @@ async def lifespan(app: FastAPI):
         logger.warning("news_sync_scheduler 停止超時（10s），強制繼續")
     except Exception as e:
         logger.warning(f"news_sync_scheduler 停止異常: {e}")
+
+    # 停止 a-share-mcp 子服務
+    try:
+        await asyncio.wait_for(ashare_mcp_manager.stop(), timeout=10.0)
+    except asyncio.TimeoutError:
+        logger.warning("ashare_mcp_manager 停止超時（10s），強制繼續")
+    except Exception as e:
+        logger.warning(f"ashare_mcp_manager 停止異常: {e}")
 
     # 關閉後端連接池
     from app.services.backend_client import backend_client

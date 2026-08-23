@@ -420,7 +420,9 @@ class LLMClient:
             "model": info.model_id,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 4096,
+            # 推理模型（deepseek-reasoner 等）的推理 token 也計入 max_tokens，
+            # 4096 不足以同時完成推理 + 生成 JSON 輸出，導致空輸出
+            "max_tokens": 8192 if "reasoning" in info.tags else 4096,
         }
         # JSON 結構化輸出模式
         if json_mode and info.supports_json_mode:
@@ -449,7 +451,36 @@ class LLMClient:
             choices = data.get("choices", [])
             if not choices:
                 raise RuntimeError(f"{info.display_name} 返回空 choices")
-            return choices[0]["message"]["content"].strip()
+
+            # 檢查 finish_reason 和 content
+            choice = choices[0]
+            finish_reason = choice.get("finish_reason", "")
+            content = choice.get("message", {}).get("content")
+
+            # content 為 None 時（某些 API 在 finish_reason=length 時返回 null）
+            if content is None:
+                raise RuntimeError(
+                    f"{info.display_name} 返回 content=null（finish_reason={finish_reason}），"
+                    f"可能因 max_tokens 不足或內容過濾"
+                )
+
+            text = content.strip()
+
+            # 空字符串檢測 — 避免空輸出被當作正常響應傳遞給下游
+            if not text:
+                raise RuntimeError(
+                    f"{info.display_name} 返回空字符串（finish_reason={finish_reason}），"
+                    f"可能因推理 token 耗盡或內容過濾"
+                )
+
+            # finish_reason=length 時記錄警告（不拋異常，因為可能有部分有效輸出）
+            if finish_reason == "length":
+                logger.warning(
+                    f"{info.display_name} finish_reason=length（輸出被截斷），"
+                    f"max_tokens={body['max_tokens']}，考慮增大或精簡 prompt"
+                )
+
+            return text
 
     async def _call_qoder(self, prompt: str, system_prompt: str, api_key: str) -> str:
         """調用 Qoder agent SDK。"""

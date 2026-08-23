@@ -704,3 +704,98 @@ async def rebuild_vector_store():
     success = news_store.rebuild_collection()
     return {"status": "SUCCESS" if success else "FAILED", "rebuilt": success}
 
+
+# ===== AI 聊天（悬浮卡片）=====
+
+
+class ChatStreamRequest(BaseModel):
+    """聊天流式請求 — 用戶發送消息並獲取 SSE 流式回復。"""
+
+    messages: list[dict[str, Any]]  # 對話歷史 [{role, content}, ...]
+    provider: str = ""  # 指定 LLM 供應商（空則自動選擇）
+
+
+@router.get("/chat/providers")
+async def get_chat_providers():
+    """獲取可用於聊天的 LLM 供應商列表。
+
+    包含所有供應商（不僅限 function calling），因為：
+    - 工具調用階段自動用 deepseek-flash
+    - 最終總結階段用用戶選擇的供應商（通過 llm_client 降級鏈）
+    """
+    from app.chat.engine import CHAT_PROVIDERS
+    from app.core.providers import PROVIDERS, get_api_key
+
+    providers = []
+    for pid in CHAT_PROVIDERS:
+        if pid in PROVIDERS:
+            info = PROVIDERS[pid]
+            providers.append({
+                "provider": pid,
+                "display_name": info.display_name,
+                "model_id": info.model_id,
+                "is_free": info.is_free,
+                "available": bool(get_api_key(pid)),
+                "description": info.description,
+            })
+    return {"providers": providers}
+
+
+@router.get("/chat/tools")
+async def get_chat_tools():
+    """獲取可用工具列表（供前端展示工具能力）。"""
+    from app.chat.registry import init_tools, registry
+
+    init_tools()
+    tools = []
+    for tool in registry.all_tools():
+        tools.append({
+            "name": tool.name,
+            "display_name": tool.display_name,
+            "description": tool.description,
+        })
+    return {"tools": tools}
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: ChatStreamRequest):
+    """SSE 流式聊天端點 — 返回 Server-Sent Events 流。
+
+    流式協議（每行一個 JSON 事件）：
+    - {"type":"tool_start","tool":"open_web_search","arguments":{...}}
+    - {"type":"tool_end","tool":"open_web_search","success":true,"citations":[...]}
+    - {"type":"content","text":"..."}  — 文本塊
+    - {"type":"done","provider":"...","model":"...","citations":[...],"tool_calls_log":[...]}
+    - {"type":"error","message":"..."}
+    """
+    import json
+
+    from fastapi.responses import StreamingResponse
+
+    from app.chat.engine import ChatMessage, chat_engine
+
+    # 構建聊天消息列表
+    messages = [
+        ChatMessage(role=m.get("role", "user"), content=m.get("content", ""))
+        for m in request.messages
+    ]
+
+    async def event_generator():
+        """SSE 事件生成器。"""
+        try:
+            async for chunk in chat_engine.chat_stream(messages, request.provider):
+                yield f"data: {chunk}\n\n"
+        except Exception as e:
+            error_msg = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)
+            yield f"data: {error_msg}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # 禁用 Nginx 緩衝
+        },
+    )
+

@@ -77,3 +77,38 @@ CREATE TABLE IF NOT EXISTS backtest_strategy (
     INDEX idx_backtest_strategy_source (source),
     INDEX idx_backtest_strategy_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- AI 聊天对话表：存储用户与 AI 的对话会话。
+-- 支持多对话管理、历史对话延续、记忆管理。
+CREATE TABLE IF NOT EXISTS chat_conversation (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    user_id         VARCHAR(64)  NOT NULL DEFAULT 'default',
+    title           VARCHAR(200) NOT NULL DEFAULT '新对话',
+    provider        VARCHAR(32),
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    INDEX idx_chat_conversation_user (user_id),
+    INDEX idx_chat_conversation_updated (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- AI 聊天消息表：存储对话中的每条消息（用户消息 + AI 回复）。
+-- citations_json 存储引用来源（新闻、行情数据、搜索结果的出处）。
+-- tool_calls_json 存储 AI 调用的工具链（工具名、参数、结果摘要）。
+CREATE TABLE IF NOT EXISTS chat_message (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    conversation_id BIGINT       NOT NULL,
+    role            VARCHAR(20)  NOT NULL,
+    content         MEDIUMTEXT,
+    provider        VARCHAR(32),
+    model_name      VARCHAR(64),
+    citations_json  TEXT,
+    tool_calls_json TEXT,
+    tokens_used     INT          DEFAULT 0,
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    INDEX idx_chat_message_conversation (conversation_id),
+    INDEX idx_chat_message_created (created_at),
+    CONSTRAINT fk_chat_message_conversation FOREIGN KEY (conversation_id)
+        REFERENCES chat_conversation(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -25,12 +25,18 @@ import java.util.List;
  * Spring Security 配置：API Key 認證。
  *
  * <p>通過 X-API-Key 請求頭驗證。啟用條件：app.security.enabled=true 且 app.security.api-key 非空。
- * 開發環境默認關閉（enabled=false），生產環境設置 API_KEY 環境變量啟用。</p>
+ * 開發環境默認關閉（enabled=false），此時全部端點 permitAll（無認證）。
+ * 生產環境設置 SECURITY_ENABLED=true + API_KEY 環境變量啟用。</p>
+ *
+ * <p>⚠️ 本類始終加載（不用 @ConditionalOnProperty），以覆蓋 Spring Boot 的默認安全自動配置
+ * （否則 security 依賴在 classpath 時會啟用 HTTP Basic + 隨機密碼）。</p>
  */
 @Configuration
 @EnableWebSecurity
-@ConditionalOnProperty(name = "app.security.enabled", havingValue = "true")
 public class SecurityConfig {
+
+    @Value("${app.security.enabled:false}")
+    private boolean securityEnabled;
 
     @Value("${app.security.api-key:}")
     private String apiKey;
@@ -39,11 +45,21 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/**").authenticated()
-                .anyRequest().permitAll())
-            .addFilterBefore(new ApiKeyFilter(apiKey), UsernamePasswordAuthenticationFilter.class);
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+
+        if (securityEnabled && apiKey != null && !apiKey.isBlank()) {
+            // 啟用 API Key 認證
+            http
+                .authorizeHttpRequests(auth -> auth
+                    .requestMatchers("/api/**").authenticated()
+                    .anyRequest().permitAll())
+                .addFilterBefore(new ApiKeyFilter(apiKey), UsernamePasswordAuthenticationFilter.class);
+        } else {
+            // 關閉認證：全部 permitAll（單機/開發環境）
+            http
+                .authorizeHttpRequests(auth -> auth
+                    .anyRequest().permitAll());
+        }
         return http.build();
     }
 

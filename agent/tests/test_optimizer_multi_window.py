@@ -136,22 +136,28 @@ class TestBuildWindowConfig:
 def _stats_for_score(target_score: float) -> dict:
     """構建能產生指定 composite_score 的回測統計。
 
-    compute_composite_score:
-        return_score*0.35 + drawdown_score*0.25 + sharpe_score*0.20 + excess_score*0.10 + trade_score*0.10
-    固定 maxDrawdown=0（drawdown_score=100→25 分）、sharpe=2（sharpe_score=100→20 分）、
-    totalTrades=10（trade_score=100→10 分）、excessReturn=totalReturn。
-    故 composite = return_score*0.35 + 55 + excess_score*0.10
-    當 totalReturn ≤ 33.33：return_score=totalReturn*2, excess_score=totalReturn*3
-    → composite = totalReturn*0.7 + 55 + totalReturn*0.3 = totalReturn + 55
-    故 totalReturn = target - 55
+    新公式: 收益(25%) + 回撤(20%) + 夏普(15%) + Calmar(15%) + 超額(10%) + 交易(10%) + 樣本(5%)
+
+    策略：用較大 maxDrawdown 避免 Calmar 封頂，同時調整 totalReturn 達到目標分。
+    固定 sharpe=2（sharpe_score=100→15 分）、totalTrades=30（trade_score=100→10 分, sample_score=100→5 分）、
+    excessReturn=totalReturn、annualReturn=totalReturn*2。
+
+    設 maxDrawdown=20（drawdown_score=60→12 分）：
+    Calmar = totalReturn*2/20 = totalReturn*0.1, calmar_score = min(totalReturn*0.1*33.3, 100)
+    當 totalReturn ≤ 30: calmar_score = totalReturn*3.33
+    composite = totalReturn*1.25*0.25 + 60*0.20 + 100*0.15 + totalReturn*3.33*0.15 + totalReturn*3*0.10 + 100*0.10 + 100*0.05
+             = totalReturn*0.3125 + 12 + 15 + totalReturn*0.4995 + totalReturn*0.3 + 10 + 5
+             = totalReturn*1.112 + 42
+    故 totalReturn = (target - 42) / 1.112
     """
-    total_return = target_score - 55
+    total_return = (target_score - 42) / 1.112
     return {
         "totalReturn": total_return,
-        "maxDrawdown": 0,
+        "maxDrawdown": 20,
         "sharpe": 2,
         "excessReturn": total_return,
-        "totalTrades": 10,
+        "totalTrades": 30,
+        "annualReturn": total_return * 2,
     }
 
 
@@ -177,8 +183,8 @@ class TestRunMultiWindowBacktest:
 
     def test_weighted_average_correct(self):
         """3 個窗口不同評分時，加權平均應正確（0.5/0.3/0.2）。"""
-        # 窗口順序 90/180/365 → 評分 80/70/60
-        window_scores = [80.0, 70.0, 60.0]
+        # 窗口順序 90/180/365 → 評分 60/50/40
+        window_scores = [60.0, 50.0, 40.0]
         idx = 0
 
         async def fake_run_backtest(criteria, config):
@@ -192,8 +198,8 @@ class TestRunMultiWindowBacktest:
             score, result = asyncio.run(
                 _run_multi_window_backtest({"asOfDate": "2026-01-01"}, {"endDate": "2026-08-20"})
             )
-        # 80*0.5 + 70*0.3 + 60*0.2 = 73
-        assert score == 73.0
+        # 60*0.5 + 50*0.3 + 40*0.2 = 30 + 15 + 8 = 53（容忍 _stats_for_score 浮點誤差）
+        assert score == pytest.approx(53.0, abs=1.0)
 
     def test_primary_result_is_longest_window(self):
         """主窗口（365 天，最後一個）的回測結果應被返回。"""
@@ -425,8 +431,8 @@ class TestMultiWindowFlagInLoop:
         monkeypatch.setattr(real_settings, "max_stagnant_iterations", 0)
         monkeypatch.setattr(real_settings, "optimization_interval", 0)
 
-        # 3 個窗口分別評分 80/70/60 → 加權 73
-        window_scores = [80.0, 70.0, 60.0]
+        # 3 個窗口分別評分 60/50/40 → 加權 53
+        window_scores = [60.0, 50.0, 40.0]
         idx = 0
 
         async def fake_run_backtest(criteria, config):
@@ -455,10 +461,10 @@ class TestMultiWindowFlagInLoop:
             for cm in ctx_list:
                 cm.__exit__(None, None, None)
 
-        # 第一輪迭代結果的評分應為加權平均 73（容忍 compute_composite_score 的浮點誤差）
+        # 第一輪迭代結果的評分應為加權平均 53（容忍 compute_composite_score 的浮點誤差）
         assert len(reset_state.iterations) >= 1
         recorded = reset_state.iterations[0].composite_score
-        assert recorded == pytest.approx(73.0, abs=0.5)
+        assert recorded == pytest.approx(53.0, abs=0.5)
 
 
 class TestStagnantTermination:

@@ -325,6 +325,15 @@ class BaseStage(ABC):
         response = await llm_client.analyze(prompt, system, preferred_provider=preferred, json_mode=json_mode)
         # 緩存到實例供 run() 讀取
         self._last_llm_response = response
+
+        # 防禦性檢查：空輸出直接拋異常，觸發 run() 中的重試/降級邏輯
+        # 避免空字符串被傳給 judge 導致整輪報廢
+        if not response.text or not response.text.strip():
+            raise RuntimeError(
+                f"[{self.stage_name}] LLM 返回空輸出（provider={response.provider}），"
+                f"可能因推理 token 耗盡或內容過濾"
+            )
+
         return response.text
 
     async def _log_to_backend(

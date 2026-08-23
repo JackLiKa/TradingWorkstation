@@ -9,6 +9,7 @@ import { Topbar } from '@/components/layout/Topbar';
 import { DbStatusBanner } from '@/components/layout/DbStatusBanner';
 import { LoadingOverlay } from '@/components/layout/LoadingOverlay';
 import { AppProviders } from '@/components/layout/AppProviders';
+import { FloatingChatCard } from '@/components/chat/FloatingChatCard';
 
 /** 頁面元數據（標題和描述） */
 export const metadata: Metadata = {
@@ -38,6 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </main>
             </div>
           </div>
+          <FloatingChatCard />
           <LoadingOverlay />
         </AppProviders>
       </body>

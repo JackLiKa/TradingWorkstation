@@ -41,6 +41,9 @@ SYSTEM_PROMPT = """你是一個專業的 A 股市場分析師，擅長分析市�
 
 PROMPT_TEMPLATE = """請分析當前 A 股市場環境，識別市場形態並推薦策略。
 
+## AI 0 行情新聞分析結果（已完成的新聞+板塊+情緒分析）
+{market_news_summary}
+
 ## 市場數據
 {market_data}
 
@@ -66,11 +69,12 @@ PROMPT_TEMPLATE = """請分析當前 A 股市場環境，識別市場形態並�
 {few_shot}
 
 ## 你的任務
-分析當前市場環境（2-3句話），必須包括：
+基於 AI 0 的分析結果和上方數據，進行**策略推導**（不要重複 AI 0 已完成的新聞分析和板塊強弱判斷）：
 1. **市場形態判斷**：基於上方「多日市場形態」區塊，判斷當前處於哪種形態（震盪/上漲中繼/下跌中繼/上漲趨勢/下跌趨勢），引用多日數據中的交替次數和累計漲跌幅
 2. 市場整體趨勢（上漲/下跌/震盪），引用上方「市場數據」中的具體數據（如上漲股票佔比、指數漲跌幅），必須包含「趨勢」一詞
 3. 波動率水平（高/中/低），引用上方「市場數據」或「多日市場形態」中的具體數值，必須包含「波動」一詞
 4. 適合的策略類型（趨勢跟蹤/均值回歸/防禦等），基於形態判斷和上方數據說明理由，必須包含「策略」一詞
+5. **結合 AI 0 的利好/利空行業判斷**，說明策略應關注或避開哪些行業
 
 【數據引用要求】
 |- 所有引用的數值必須來自上方「市場數據」或「多日市場形態」區塊
@@ -78,6 +82,7 @@ PROMPT_TEMPLATE = """請分析當前 A 股市場環境，識別市場形態並�
 |- 禁止引用訓練記憶中的 A 股歷史行情
 |- 如果某項數據缺失，不要假設它的值
 |- 形態判斷必須基於多日數據，不能只看單日
+|- 不要重複 AI 0 已完成的新聞分析，專注於策略推導
 
 直接輸出分析結果，不要 JSON 格式。控制在 100-200 字。"""
 
@@ -98,10 +103,15 @@ class MarketAnalysisStage(BaseStage):
             market_data: dict — dashboard summary 數據
             history: list[IterationResult] — 歷史迭代記錄
             prev_reflection: str — 上一輪反思結論
+            market_news: str — AI 0 的行情新聞分析結果（JSON 字符串）
         """
         market_data = kwargs.get("market_data", {})
         history = kwargs.get("history", [])
         prev_reflection = kwargs.get("prev_reflection", "")
+        market_news = kwargs.get("market_news", "")
+
+        # 從 AI 0 的 JSON 輸出中提取關鍵摘要（避免重複分析）
+        market_news_summary = _extract_market_news_summary(market_news)
 
         # 獲取多日市場形態
         regime = await market_data_client._compute_market_regime()
@@ -139,6 +149,7 @@ class MarketAnalysisStage(BaseStage):
             )
 
         prompt = PROMPT_TEMPLATE.format(
+            market_news_summary=market_news_summary,
             market_data=json.dumps(market_data, ensure_ascii=False, indent=2, default=str),
             regime_text=regime_text,
             regime_days=regime_days,
@@ -154,6 +165,61 @@ class MarketAnalysisStage(BaseStage):
         response = await self._call_llm(SYSTEM_PROMPT, prompt)
         logger.info(f"[AI1 行情分析] {response[:100]}...")
         return response
+
+
+def _extract_market_news_summary(market_news: str) -> str:
+    """從 AI 0 的 JSON 輸出中提取關鍵摘要，供 AI 1 使用。
+
+    避免重複分析市場形態和板塊強弱，AI 1 只需在此基礎上做策略推導。
+    """
+    if not market_news or market_news == "無":
+        return "無（AI 0 未提供分析結果）"
+
+    try:
+        # AI 0 輸出可能是 JSON 字符串，也可能帶有 markdown 代碼塊標記
+        cleaned = market_news.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+        data = json.loads(cleaned)
+
+        lines = []
+
+        # 市場形態
+        regime = data.get("market_regime", {})
+        if regime:
+            lines.append(f"市場形態: {regime.get('type', '未知')} — {regime.get('description', '')}")
+
+        # 市場情緒
+        sentiment = data.get("market_sentiment", {})
+        if sentiment:
+            lines.append(f"市場情緒: {sentiment.get('label', '未知')}（分數={sentiment.get('score', 50)}）")
+
+        # 利好行業
+        bullish = data.get("bullish_factors", [])
+        if bullish:
+            bull_sectors = [f"{b.get('sector', '')}({b.get('continuity', '未知')})" for b in bullish[:4]]
+            lines.append(f"利好行業: {', '.join(bull_sectors)}")
+
+        # 利空行業
+        bearish = data.get("bearish_factors", [])
+        if bearish:
+            bear_sectors = [f"{b.get('sector', '')}({b.get('nature', '未知')})" for b in bearish[:3]]
+            lines.append(f"利空行業: {', '.join(bear_sectors)}")
+
+        # 選股建議
+        advice = data.get("stock_selection_advice", "")
+        if advice:
+            lines.append(f"選股建議: {advice[:200]}")
+
+        return "\n".join(lines) if lines else "AI 0 分析結果解析失敗，無可用摘要"
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        # JSON 解析失敗，降級為截斷原文
+        logger.warning(f"[AI1] AI 0 JSON 解析失敗，降級為截斷原文: {e}")
+        return market_news[:1500] if market_news else "無"
 
 
 def _format_regime(regime: dict) -> str:

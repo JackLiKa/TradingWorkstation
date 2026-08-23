@@ -22,6 +22,9 @@ MAX_IN_MEMORY_ITERATIONS = 100
 
 # 預設選股條件（初始值）
 _now = datetime.now()
+# 回測起始日期至少回溯 1 年，確保樣本量充足（≥120 個交易日）
+# 若當前月份 < 8 月，起始日期回退到前一年，保證 ≥1 年回測區間
+_backtest_start_year = _now.year - 1 if _now.month < 8 else _now.year
 DEFAULT_CRITERIA: dict[str, Any] = {
     "asOfDate": f"{_now.year}-01-01",
     "adjustflag": 3,
@@ -32,13 +35,14 @@ DEFAULT_CRITERIA: dict[str, Any] = {
 
 # 預設回測配置（初始值）
 DEFAULT_BACKTEST_CONFIG: dict[str, Any] = {
-    "startDate": f"{_now.year}-01-01",
+    "startDate": f"{_backtest_start_year}-01-01",
     "endDate": _now.strftime("%Y-%m-%d"),
     "rebalanceInterval": 5,
     "holdingPeriod": 10,
     "maxPositions": 5,
     "initialCapital": 1_000_000,
     "commissionBps": 3,
+    "slippageBps": 5,  # 強制最小滑點 5bp，避免零滑點回測幻覺
     "stopLossPct": None,
     "takeProfitPct": None,
 }
@@ -64,16 +68,22 @@ def build_default_criteria(latest_trade_date: str | None = None) -> dict[str, An
 def build_default_backtest_config(latest_trade_date: str | None = None) -> dict[str, Any]:
     """構建預設回測配置，日期校準到數據庫最新交易日。
 
+    回測區間至少 1 年，確保統計顯著性（≥120 個交易日）。
+    若最新交易日在 8 月之前，起始日期回退到前一年。
+
     Args:
         latest_trade_date: 數據庫最新交易日（YYYY-MM-DD）。None 時用今天。
 
     Returns:
-        dict: 預設回測配置，startDate=年初, endDate=最新交易日
+        dict: 預設回測配置，startDate≥1年前, endDate=最新交易日
     """
     config = dict(DEFAULT_BACKTEST_CONFIG)
     if latest_trade_date:
-        year = latest_trade_date[:4]
-        config["startDate"] = f"{year}-01-01"
+        year = int(latest_trade_date[:4])
+        month = int(latest_trade_date[5:7]) if len(latest_trade_date) >= 7 else 12
+        # 若最新交易日在 8 月前，起始日期回退到前一年（確保 ≥1 年回測區間）
+        start_year = year - 1 if month < 8 else year
+        config["startDate"] = f"{start_year}-01-01"
         config["endDate"] = latest_trade_date
     return config
 
