@@ -1,6 +1,6 @@
 # Trading Workstation — A 股量化交易工作台
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-blue.svg)](https://mariadb.com/bsl11/)
 [![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.4-green.svg)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-15.1.9-black.svg)](https://nextjs.org/)
@@ -201,6 +201,43 @@ Docker 一鍵啟動：
 docker-compose up -d    # mysql + java + next + agent + prometheus + grafana
 ```
 
-## License
+## License & 商業授權
 
-本项目基於 [MIT License](LICENSE) 開源，僅供學習和個人使用。
+### 雙重授權模式（Dual Licensing）
+
+Trading Workstation 採用 **[Business Source License 1.1 (BSL 1.1)](LICENSE)** 授權，並輔以商業授權雙軌並行。源碼完全公開可見，但在 Change Date（`2030-08-23`）之前，使用權利依使用場景劃分：
+
+| 使用場景 | 是否免費 | 說明 |
+|----------|----------|------|
+| 個人學習、教學、學術研究、評估、內部測試 | ✅ 免費 | 即「非生產環境使用」，無需申請 |
+| 生產環境部署、內部業務運營 | ❌ 需商業授權 | 需向版權方購買商業 License |
+| 對外提供服務、整合進商業產品、SaaS、轉售 | ❌ 需商業授權 | 需向版權方購買商業 License 或買斷版權 |
+| 任何從中獲取營收或商業利益的用途 | ❌ 需商業授權 | 需向版權方購買商業 License 或買斷版權 |
+
+> 簡單說：**自己學習、研究、玩——免費且歡迎；用來賺錢或上生產——請先取得授權。**
+
+### Change Date 與 Change License
+
+- **Change Date**：`2030-08-23`
+- **Change License**：`Apache License, Version 2.0`
+
+自 Change Date 起，本項目將自動額外以 Apache 2.0 協議開源，屆時可自由用於生產與商業場景。在 Change Date 之前，BSL 1.1 的 Additional Use Grant 條款適用於所有使用行為。
+
+### 取得商業授權
+
+如需商業授權、版權買斷，或對授權範圍有任何疑問，請聯繫版權方：
+
+- **Email**：[jacklika.business@gmail.com](mailto:jacklika.business@gmail.com)
+- **GitHub**：[https://github.com/JackLiKa](https://github.com/JackLiKa)
+
+我們會在收到您的來信後儘快回覆，並根據您的使用場景（團隊規模、部署方式、是否轉售等）提供合適的授權方案。
+
+### 貢獻者須知
+
+向本項目提交貢獻（Pull Request、Issue 中的代碼片段等）即視為您同意簽署 [Contributor License Agreement (CLA)](CLA)。CLA 授權版權方以雙重授權模式（BSL 1.1 + 商業授權）使用您的貢獻，詳見 [CLA](CLA) 文件。
+
+### 商標
+
+"Trading Workstation" 名稱與 Logo、JackLiKa 名稱與 Logo 為版權方的商標或商業名稱。本授權不授予使用上述商標的權利，除非為描述本項目來源而進行的合理且慣常的使用。
+
+完整法律條款請參閱 [LICENSE](LICENSE) 與 [NOTICE](NOTICE) 文件。

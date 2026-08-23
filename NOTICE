@@ -1,0 +1,44 @@
+Trading Workstation
+Copyright (c) 2026 JackLiKa. All rights reserved.
+
+This product is licensed under the Business Source License 1.1 ("BSL 1.1").
+A copy of the BSL 1.1 is included in the LICENSE file accompanying this
+product, and is also available at https://mariadb.com/bsl11/.
+
+Until the Change Date specified in the LICENSE file, the Licensed Work may
+be used only for non-production purposes (personal study, teaching, academic
+research, evaluation, and internal testing). Any production use, or any use
+for commercial purposes, requires a separate commercial license or copyright
+buyout from the copyright holder.
+
+On and after the Change Date, the Licensed Work will additionally become
+available under the Change License specified in the LICENSE file.
+
+Trademarks
+----------
+
+"Trading Workstation", the Trading Workstation name and logo, and the
+JackLiKa name and logo are trademarks or trade names of JackLiKa. This
+License does not grant permission to use the trade names, trademarks,
+service marks, or product names of the Licensor, except as required for
+reasonable and customary use in describing the origin of this product and
+reproducing the content of this NOTICE file.
+
+Third-Party Components
+----------------------
+
+This product includes third-party open source components. Each such
+component is licensed under the terms set forth in its own license file,
+which accompanies the component. The BSL 1.1 terms above apply only to the
+original work of authorship created by JackLiKa and do not override the
+licenses of the third-party components.
+
+Commercial Licensing
+--------------------
+
+For commercial license inquiries, copyright buyout, or any use not
+permitted by the Additional Use Grant, contact:
+
+  JackLiKa
+  Email:  jacklika.business@gmail.com
+  GitHub: https://github.com/JackLiKa
