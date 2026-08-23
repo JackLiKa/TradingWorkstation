@@ -150,6 +150,7 @@ class OptimizerState:
     current_market_context: str = ""  # 當前市場環境分析結果
     current_reflection: str = ""  # 上一輪回測反思結論
     current_next_prompt: str = ""  # 下一輪提示詞指引
+    current_regime_type: str = "unknown"  # 當前市場形態類型（trending_up/trending_down/oscillation/...）
     # 新增：行情新聞和行業分析結果
     current_market_news: str = ""  # 當前行情新聞分析結果
     current_favorable_industries: list = field(default_factory=list)  # 當前利好行業列表

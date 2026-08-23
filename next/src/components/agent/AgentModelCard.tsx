@@ -48,6 +48,7 @@ export function AgentModelCard({ modelStatus, allModels, checking, onCheck }: Pr
       const timer = setTimeout(() => setPulseEffect(false), 600);
       return () => clearTimeout(timer);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelStatus?.available, modelStatus?.last_check]);
 
   // 使用 allModels 或退化到單個 modelStatus

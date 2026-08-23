@@ -8,6 +8,8 @@ import com.quantization.module.backtest.dto.BacktestResultDto.BacktestStatistics
 import com.quantization.module.backtest.dto.BacktestResultDto.EquityPoint;
 import com.quantization.module.backtest.dto.BacktestResultDto.RebalanceEvent;
 import com.quantization.module.backtest.dto.SavedStrategySummaryDto;
+import com.quantization.module.backtest.dto.WalkForwardConfigDto;
+import com.quantization.module.backtest.dto.WalkForwardResultDto;
 import com.quantization.module.screener.ScreenerCore;
 import com.quantization.module.screener.ScreenerService;
 import com.quantization.module.screener.dto.ScreenedStockDto;
@@ -53,11 +55,13 @@ public class BacktestService {
     private final BacktestStrategyRepository strategyRepository;
     private final ObjectMapper objectMapper;
 
-    /** 基準指數：上證綜指 */
-    private static final String BENCHMARK_CODE = "sh.000001";
+    /** 默认基准指数：上证综指（可通过 BacktestConfigDto.benchmarkCode 覆盖）。 */
+    private static final String DEFAULT_BENCHMARK_CODE = "sh.000001";
 
-    /** 涨跌停阈值：|pctChg| >= 9.9 视为涨跌停（涨停买不进、跌停卖不出）。 */
-    private static final double LIMIT_THRESHOLD = 9.9;
+    /** 涨跌停阈值：主板 9.9%，科创板/创业板 19.9%，ST 4.9%。 */
+    private static final double LIMIT_THRESHOLD_MAIN = 9.9;
+    private static final double LIMIT_THRESHOLD_STAR_CHINEXT = 19.9;
+    private static final double LIMIT_THRESHOLD_ST = 4.9;
 
     public BacktestService(StockService stockService, ScreenerCore screenerCore,
                            BacktestStrategyRepository strategyRepository, ObjectMapper objectMapper) {
@@ -67,9 +71,27 @@ public class BacktestService {
         this.objectMapper = objectMapper;
     }
 
+    /** 根据股票代码推断板块并返回对应的涨跌停阈值。 */
+    private double limitThreshold(String code) {
+        if (code == null) return LIMIT_THRESHOLD_MAIN;
+        // 科创板: sh.688xxx
+        if (code.startsWith("sh.688")) return LIMIT_THRESHOLD_STAR_CHINEXT;
+        // 创业板: sz.300xxx
+        if (code.startsWith("sz.300")) return LIMIT_THRESHOLD_STAR_CHINEXT;
+        // ST 股：通过 isSt 字段判断，但此处只能用代码前缀做保守估计
+        // 精确判断需要 StockDailyEntity.isSt，在调用处传入
+        return LIMIT_THRESHOLD_MAIN;
+    }
+
+    /** 根据股票代码和 isSt 标志返回对应的涨跌停阈值。 */
+    private double limitThreshold(String code, int isSt) {
+        if (isSt == 1) return LIMIT_THRESHOLD_ST;
+        return limitThreshold(code);
+    }
+
     /**
      * 执行回测：按选股条件在调仓日选股，等权持有，持有期内不调仓；
-     * 基准为上证综指（sh.000001），以初始资金为起点按指数涨幅累计。
+     * 基准可配置（默认上证综指 sh.000001），以初始资金为起点按指数涨幅累计。
      * 回测结果会自动落库（source=auto，best-effort，失败不影响结果返回）。
      *
      * @param request 回测请求（含选股条件和回测配置）
@@ -81,15 +103,18 @@ public class BacktestService {
         BacktestConfigDto config = request.config();
         LocalDate start = config.startDate();
         LocalDate end = config.endDate();
-        int rebalanceInterval = Math.max(1, config.rebalanceInterval());
-        int holdingPeriod = Math.max(1, config.holdingPeriod());
-        int maxPositions = Math.max(1, config.maxPositions());
+        int rebalanceInterval = Math.max(1, config.effectiveRebalanceInterval());
+        int holdingPeriod = Math.max(1, config.effectiveHoldingPeriod());
+        int maxPositions = Math.max(1, config.effectiveMaxPositions());
         double initialCapital = config.initialCapital();
-        double commissionRate = config.commissionBps() / 10000.0;
+        double commissionRate = config.effectiveCommissionBps() / 10000.0;
         double slippageRate = config.effectiveSlippageBps() / 10000.0;
         double riskFreeRate = config.effectiveRiskFreeRate();
-        Double stopLoss = config.stopLossPct();
+        Double stopLoss = config.effectiveStopLossPct();
         Double takeProfit = config.takeProfitPct();
+        int executionDelay = config.effectiveExecutionDelay();
+        String benchmarkCode = config.effectiveBenchmarkCode();
+        Double maxVolumePct = config.effectiveMaxVolumePct();
 
         // 拉取行情數據：為減少內存壓力，按調倉日分批載入。
         // 策略：只載入每個調倉日前後 LOOKBACK 天的數據（指標最多需 120 天），
@@ -149,9 +174,9 @@ public class BacktestService {
 
         Map<String, String> industryMap = buildIndustryMap(criteria.industries(), grouped.histories().keySet());
 
-        // 拉取基準指數（上證綜指）數據
+        // 拉取基準指數數據（可配置，默認上證綜指）
         List<IndexDailyEntity> indexData = stockService
-                .findIndexDailyBetween(BENCHMARK_CODE, start, end);
+                .findIndexDailyBetween(benchmarkCode, start, end);
         Map<LocalDate, Double> indexCloseMap = new HashMap<>();
         Double firstIndexClose = null;
         for (IndexDailyEntity idx : indexData) {
@@ -185,7 +210,7 @@ public class BacktestService {
                 if (stopLoss != null && price <= p.entryPrice * (1 - stopLoss / 100.0)) {
                     // 跌停延后：当日跌停则不卖出，留待下一交易日再判断
                     Double pctChg = pctChangeLookup.getOrDefault(e.getKey(), Map.of()).get(date);
-                    if (pctChg != null && pctChg <= -LIMIT_THRESHOLD) {
+                    if (pctChg != null && pctChg <= -limitThreshold(e.getKey())) {
                         continue; // 延后到下一交易日
                     }
                     toExit.add(e.getKey());
@@ -229,29 +254,37 @@ public class BacktestService {
                 // 选股：多取一些候选以备涨跌停过滤后仍有足够标的
                 int candidateLimit = Math.max(maxPositions * 3, maxPositions + 10);
                 List<ScreenedStockDto> candidates = screenerCore.screenAt(grouped, date, criteria, candidateLimit, industryMap);
-                // 涨跌停过滤：跳过当日 |pctChg| >= 9.9 的股票（涨停买不进、跌停不选）
+                // 涨跌停过滤：按板块动态阈值跳过涨停/跌停股票
                 List<ScreenedStockDto> tradable = new ArrayList<>();
                 for (ScreenedStockDto c : candidates) {
                     Double pctChg = c.pctChange();
-                    if (pctChg != null && Math.abs(pctChg) >= LIMIT_THRESHOLD) {
+                    if (pctChg != null && Math.abs(pctChg) >= limitThreshold(c.code())) {
                         continue;
                     }
                     tradable.add(c);
                 }
                 int slots = maxPositions - positions.size();
                 List<String> bought = new ArrayList<>();
+                // T+1 执行延迟：买入实际在 executionDelay 天后执行
+                int execDateIdx = Math.min(dateIdx + executionDelay, tradeDates.size() - 1);
+                LocalDate execDate = tradeDates.get(execDateIdx);
                 for (int i = 0; i < Math.min(slots, tradable.size()); i++) {
                     String code = tradable.get(i).code();
                     if (positions.containsKey(code)) continue;
-                    Double price = priceLookup.getOrDefault(code, Map.of()).get(date);
+                    // T+1: 用执行日的价格成交（若 executionDelay=0 则同日收盘价）
+                    Double price = priceLookup.getOrDefault(code, Map.of()).get(execDate);
                     if (price == null || price <= 0) continue;
                     // 买入成交价：上浮滑点
                     double fillPrice = price * (1 + slippageRate);
                     double allocation = strategyEquity / Math.max(1, maxPositions);
                     double shares = allocation / fillPrice;
                     if (shares <= 0) continue;
+                    // 流动性约束：单笔买入不超过当日成交量的 maxVolumePct%
+                    if (maxVolumePct != null && maxVolumePct > 0) {
+                        // TODO: 需要 volumeLookup，暂时跳过流动性检查（maxVolumePct 默认 null）
+                    }
                     strategyEquity -= shares * fillPrice * (1 + commissionRate);
-                    positions.put(code, new Position(date, fillPrice, shares, dateIdx));
+                    positions.put(code, new Position(execDate, fillPrice, shares, execDateIdx));
                     bought.add(code);
                     totalTrades++;
                 }
@@ -266,7 +299,7 @@ public class BacktestService {
             }
             double strategyValue = strategyEquity + holdingsValue;
 
-            // 基準：上證綜指（sh.000001），以初始資金為起點按指數漲幅累計
+            // 基準：以初始資金為起點按指數漲幅累計（基準可配置，默認上證綜指）
             Double indexClose = indexCloseMap.get(date);
             if (indexClose != null && benchmarkBase > 0) {
                 benchmarkEquity = initialCapital * indexClose / benchmarkBase;
@@ -283,6 +316,57 @@ public class BacktestService {
         List<String> logs = buildLogs(config, tradeDates.size(), rebalances.size(), totalTrades, stats);
         BacktestResultDto result = new BacktestResultDto(config, strategyCurve, benchmarkCurve, excessCurve, rebalances, stats, logs);
         return saveAndReturn(result, request);
+    }
+
+    /**
+     * Walk-forward 回測：在 train 段運行回測，在 test 段用相同參數驗證樣本外表現。
+     *
+     * <p>用於評估策略過擬合程度。train 段的 Sharpe 與 test 段的 Sharpe 比值
+     * 大於 2 通常表示嚴重過擬合。</p>
+     *
+     * @param wfConfig walk-forward 配置
+     * @return walk-forward 結果（含 train 和 test 段回測結果）
+     */
+    @Transactional
+    public WalkForwardResultDto runWalkForward(WalkForwardConfigDto wfConfig) {
+        // 訓練段回測
+        BacktestConfigDto trainConfig = new BacktestConfigDto(
+                wfConfig.trainStart(), wfConfig.trainEnd(),
+                wfConfig.config().rebalanceInterval(), wfConfig.config().holdingPeriod(),
+                wfConfig.config().maxPositions(), wfConfig.config().initialCapital(),
+                wfConfig.config().commissionBps(), wfConfig.config().stopLossPct(),
+                wfConfig.config().takeProfitPct(), wfConfig.config().riskFreeRate(),
+                wfConfig.config().slippageBps(), wfConfig.config().executionDelay(),
+                wfConfig.config().benchmarkCode(), wfConfig.config().maxVolumePct());
+        BacktestRequestDto trainRequest = new BacktestRequestDto(wfConfig.criteria(), trainConfig);
+        BacktestResultDto trainResult = runBacktest(trainRequest);
+
+        // 測試段回測（用相同參數，只改日期）
+        BacktestConfigDto testConfig = new BacktestConfigDto(
+                wfConfig.testStart(), wfConfig.testEnd(),
+                wfConfig.config().rebalanceInterval(), wfConfig.config().holdingPeriod(),
+                wfConfig.config().maxPositions(), wfConfig.config().initialCapital(),
+                wfConfig.config().commissionBps(), wfConfig.config().stopLossPct(),
+                wfConfig.config().takeProfitPct(), wfConfig.config().riskFreeRate(),
+                wfConfig.config().slippageBps(), wfConfig.config().executionDelay(),
+                wfConfig.config().benchmarkCode(), wfConfig.config().maxVolumePct());
+        BacktestRequestDto testRequest = new BacktestRequestDto(wfConfig.criteria(), testConfig);
+        BacktestResultDto testResult = runBacktest(testRequest);
+
+        // 過擬合評分：train Sharpe / test Sharpe
+        double trainSharpe = trainResult.statistics().sharpe();
+        double testSharpe = testResult.statistics().sharpe();
+        double overfitScore = Math.abs(testSharpe) < 0.01 ? 999 : trainSharpe / testSharpe;
+
+        String summary = String.format(
+                "Train: Sharpe=%.2f, Return=%.2f%% | Test: Sharpe=%.2f, Return=%.2f%% | Overfit Score=%.2f%s",
+                trainSharpe, trainResult.statistics().totalReturn(),
+                testSharpe, testResult.statistics().totalReturn(),
+                overfitScore,
+                overfitScore > 2 ? " (⚠️ 可能過擬合)" : " (✓ 樣本外表現合理)");
+
+        log.info("Walk-forward 完成: {}", summary);
+        return new WalkForwardResultDto(trainResult, testResult, round(overfitScore), summary);
     }
 
     /**
@@ -364,24 +448,76 @@ public class BacktestService {
             double dd = (peak - p.value()) / peak * 100;
             maxDrawdown = Math.max(maxDrawdown, dd);
         }
-        // 夏普比率：(日均收益 - rf/252) / 日std × √252 年化
-        // dailyReturns 已是小數形式（如 0.01 = 1%），無需再乘 100
+        // 策略日收益率序列
         List<Double> dailyReturns = new ArrayList<>();
         for (int i = 1; i < strategy.size(); i++) {
             double prev = strategy.get(i - 1).value();
             double cur = strategy.get(i).value();
             if (prev > 0) dailyReturns.add(cur / prev - 1);
         }
-        double sharpe = 0;
-        if (dailyReturns.size() > 1) {
-            double mean = dailyReturns.stream().mapToDouble(Double::doubleValue).average().orElse(0);
-            double std = Math.sqrt(dailyReturns.stream().mapToDouble(r -> Math.pow(r - mean, 2)).sum() / dailyReturns.size());
-            double dailyRiskFree = riskFreeRate / 252.0;
-            sharpe = std == 0 ? 0 : (mean - dailyRiskFree) / std * Math.sqrt(252);
+        // 基準日收益率序列
+        List<Double> benchmarkReturns = new ArrayList<>();
+        for (int i = 1; i < benchmark.size(); i++) {
+            double prev = benchmark.get(i - 1).value();
+            double cur = benchmark.get(i).value();
+            if (prev > 0) benchmarkReturns.add(cur / prev - 1);
         }
+        double mean = dailyReturns.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+        double std = Math.sqrt(dailyReturns.stream().mapToDouble(r -> Math.pow(r - mean, 2)).sum() / Math.max(1, dailyReturns.size()));
+        double dailyRiskFree = riskFreeRate / 252.0;
+        // 夏普比率
+        double sharpe = std == 0 ? 0 : (mean - dailyRiskFree) / std * Math.sqrt(252);
+        // Sortino Ratio（只懲罰下行波動）
+        double downsideStd = Math.sqrt(
+            dailyReturns.stream().filter(r -> r < 0)
+                .mapToDouble(r -> Math.pow(r - mean, 2)).sum() / Math.max(1, dailyReturns.size()));
+        double sortino = downsideStd == 0 ? 0 : (mean - dailyRiskFree) / downsideStd * Math.sqrt(252);
+        // Calmar Ratio（年化收益/最大回撤）
+        double calmar = maxDrawdown == 0 ? 0 : annualReturn / maxDrawdown;
+        // 超額收益序列
+        List<Double> excessReturns = new ArrayList<>();
+        int minLen = Math.min(dailyReturns.size(), benchmarkReturns.size());
+        for (int i = 0; i < minLen; i++) {
+            excessReturns.add(dailyReturns.get(i) - benchmarkReturns.get(i));
+        }
+        double excessMean = excessReturns.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+        double trackingError = Math.sqrt(
+            excessReturns.stream().mapToDouble(r -> Math.pow(r - excessMean, 2)).sum() / Math.max(1, excessReturns.size()));
+        // Information Ratio
+        double informationRatio = trackingError == 0 ? 0 : (excessMean / trackingError) * Math.sqrt(252);
+        // Beta = cov(strategy, benchmark) / var(benchmark)
+        double benchmarkMean = benchmarkReturns.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+        double cov = 0, varB = 0;
+        for (int i = 0; i < minLen; i++) {
+            cov += (dailyReturns.get(i) - mean) * (benchmarkReturns.get(i) - benchmarkMean);
+            varB += Math.pow(benchmarkReturns.get(i) - benchmarkMean, 2);
+        }
+        cov /= Math.max(1, minLen);
+        varB /= Math.max(1, minLen);
+        double beta = varB == 0 ? 0 : cov / varB;
+        // Alpha = 年化策略收益 - beta * 年化基準收益 - 無風險利率
+        double annualBenchmarkReturn = years > 0 ? (Math.pow(finalBenchmark / initialCapital, 1 / years) - 1) * 100 : 0;
+        double alpha = annualReturn - beta * (annualBenchmarkReturn - riskFreeRate * 100) - riskFreeRate * 100;
+        // 勝率（盈利交易日佔比）
+        long winDays = dailyReturns.stream().filter(r -> r > 0).count();
+        double winRate = dailyReturns.isEmpty() ? 0 : (double) winDays / dailyReturns.size() * 100;
+        // 盈虧比（平均盈利/平均虧損）
+        double avgWin = dailyReturns.stream().filter(r -> r > 0).mapToDouble(Double::doubleValue).average().orElse(0);
+        double avgLoss = dailyReturns.stream().filter(r -> r < 0).mapToDouble(Double::doubleValue).average().orElse(0);
+        double profitLossRatio = avgLoss == 0 ? 0 : Math.abs(avgWin / avgLoss);
+        // 年化換手率（總交易筆數 / 年數）
+        double annualTurnover = years > 0 ? totalTrades / years : 0;
+        // Deflated Sharpe（簡化版：假設單次試驗，DSR = Sharpe）
+        // 完整版本需要全局試驗計數，此處先用單次試驗近似
+        double deflatedSharpe = sharpe;
+        int nTrials = 1;
+        double pbo = 0;
         return new BacktestStatistics(
                 round(totalReturn), round(annualReturn), round(benchmarkReturn), round(excessReturn),
-                round(maxDrawdown), round(sharpe), rebalanceCount, totalTrades);
+                round(maxDrawdown), round(sharpe), rebalanceCount, totalTrades,
+                round(sortino), round(calmar), round(informationRatio), round(beta), round(alpha),
+                round(winRate), round(profitLossRatio), round(annualTurnover),
+                round(deflatedSharpe), nTrials, round(pbo));
     }
 
     private double round(double v) {
@@ -391,12 +527,14 @@ public class BacktestService {
     private List<String> buildLogs(BacktestConfigDto config, int tradeDays, int rebalances, int trades, BacktestStatistics stats) {
         return List.of(
                 "回测区间：" + config.startDate() + " ~ " + config.endDate() + "，交易日数：" + tradeDays,
-                "调仓间隔：" + config.rebalanceInterval() + " 个交易日，持有期：" + config.holdingPeriod() + " 个交易日，最大持仓：" + config.maxPositions(),
-                "初始资金：" + config.initialCapital() + "，手续费：" + config.commissionBps() + " bp，滑点：" + config.effectiveSlippageBps() + " bp，无风险利率：" + config.effectiveRiskFreeRate(),
+                "调仓间隔：" + config.effectiveRebalanceInterval() + " 个交易日，持有期：" + config.effectiveHoldingPeriod() + " 个交易日，最大持仓：" + config.effectiveMaxPositions(),
+                "初始资金：" + config.initialCapital() + "，手续费：" + config.effectiveCommissionBps() + " bp，滑点：" + config.effectiveSlippageBps() + " bp，无风险利率：" + config.effectiveRiskFreeRate(),
                 "调仓次数：" + rebalances + "，总交易笔数：" + trades,
                 "策略总收益：" + stats.totalReturn() + "%，年化：" + stats.annualReturn() + "%",
                 "基准收益：" + stats.benchmarkReturn() + "%，超额收益：" + stats.excessReturn() + "%",
-                "最大回撤：" + stats.maxDrawdown() + "%，夏普比率：" + stats.sharpe()
+                "最大回撤：" + stats.maxDrawdown() + "%，夏普比率：" + stats.sharpe() + "，Sortino：" + stats.sortino() + "，Calmar：" + stats.calmar(),
+                "信息比率：" + stats.informationRatio() + "，Beta：" + stats.beta() + "，Alpha：" + stats.alpha(),
+                "胜率：" + stats.winRate() + "%，盈亏比：" + stats.profitLossRatio() + "，年化换手率：" + stats.annualTurnover()
         );
     }
 

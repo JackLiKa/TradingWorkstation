@@ -30,6 +30,8 @@
 
 import json
 import logging
+import os
+import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -72,13 +74,25 @@ def _ensure_loaded():
 
 
 def _persist():
-    """將內存緩存持久化到文件。"""
+    """將內存緩存持久化到文件（原子寫入：先寫臨時文件，再 rename）。"""
+    tmp_path = None
     try:
         _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_STORE_FILE, "w", encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode='w', dir=_DATA_DIR, suffix='.tmp',
+            delete=False, encoding='utf-8'
+        ) as f:
             json.dump({"errors": _cache}, f, ensure_ascii=False, indent=2)
+            tmp_path = f.name
+        os.replace(tmp_path, _STORE_FILE)  # 原子操作
     except Exception as e:
         logger.warning(f"持久化錯誤經驗失敗（忽略）: {e}")
+        # 清理臨時文件
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def record_error(

@@ -1,5 +1,6 @@
 """Agent 服務入口 — FastAPI 應用。"""
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,6 +10,7 @@ from app.api.routes import router
 from app.core.config import settings
 from app.core.logging import logger, setup_logging
 from app.services.model_checker import model_checker
+from app.services.news_sync_scheduler import news_sync_scheduler
 
 
 @asynccontextmanager
@@ -24,11 +26,27 @@ async def lifespan(app: FastAPI):
     # 啟動模型檢查定時任務
     model_checker.start()
 
+    # 啟動新聞自動同步（啟動時補抓 + 每 6 分鐘定時同步）
+    news_sync_scheduler.start()
+
     logger.info(f"Agent 服務已啟動，端口 {settings.agent_port}")
     yield
 
-    # 關閉清理
-    await model_checker.stop()
+    # 關閉清理（每個組件最多等待 10 秒，避免卡死）
+    try:
+        await asyncio.wait_for(model_checker.stop(), timeout=10.0)
+    except asyncio.TimeoutError:
+        logger.warning("model_checker 停止超時（10s），強制繼續")
+    except Exception as e:
+        logger.warning(f"model_checker 停止異常: {e}")
+
+    try:
+        await asyncio.wait_for(news_sync_scheduler.stop(), timeout=10.0)
+    except asyncio.TimeoutError:
+        logger.warning("news_sync_scheduler 停止超時（10s），強制繼續")
+    except Exception as e:
+        logger.warning(f"news_sync_scheduler 停止異常: {e}")
+
     # 關閉後端連接池
     from app.services.backend_client import backend_client
 
@@ -51,6 +69,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# API Key 認證中間件（api_key 為空時自動跳過）
+from app.core.auth import ApiKeyMiddleware
+app.add_middleware(ApiKeyMiddleware)
 
 # 路由 — 所有接口統一掛載在 /api/agent 前綴下
 app.include_router(router, prefix="/api/agent", tags=["agent"])

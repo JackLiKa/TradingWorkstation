@@ -125,6 +125,20 @@ PROVIDERS: dict[str, ModelInfo] = {
         tags=["free", "agent-session", "high-latency"],
         description="免費 agent session，延遲較高（~72s），備用",
     ),
+    # --- OpenRouter / ox-alpha（推理模型，支持 reasoning）---
+    "ox-alpha": ModelInfo(
+        provider="ox-alpha",
+        display_name="OX-Alpha（OpenRouter 推理）",
+        model_id="stealth/ox-alpha",
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        is_free=False,
+        input_price=0.0,  # 價格未知，按需更新
+        output_price=0.0,
+        supports_json_mode=True,
+        tags=["reasoning", "chinese", "openrouter"],
+        description="OpenRouter 推理模型，支持 reasoning_details 鏈式推理，適合深度分析",
+    ),
 }
 
 
@@ -139,6 +153,7 @@ STAGE_DEFAULT_PROVIDERS: dict[str, str] = {
     "prompt_generation": "glm-flash",  # AI 4: 免費，短文本足夠
     "judge": "glm-flash",  # Judge: 免費 + 快速 + 一致
     "monitor": "glm-flash",  # Monitor: 免費
+    "news_reranker": "ox-alpha",  # 新聞重排序: 推理模型判斷持續性
 }
 
 

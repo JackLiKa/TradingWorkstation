@@ -56,6 +56,9 @@ app:
     rotation-ttl-seconds: ${CACHE_ROTATION_TTL_SECONDS:120}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3010}
+  security:
+    enabled: ${SECURITY_ENABLED:false}
+    api-key: ${API_KEY:}
   notification:
     enabled: ${NOTIFICATION_ENABLED:false}
     mail:
@@ -79,6 +82,8 @@ app:
     ingestion-script: ${SYNC_INGESTION_SCRIPT:ingestion/baostock_ingest.py}
     batch-size: ${SYNC_BATCH_SIZE:1000}
     default-start-date: ${SYNC_DEFAULT_START_DATE:2021-01-01}
+    quarterly-full-refresh-enabled: ${SYNC_QUARTERLY_REFRESH:true}
+    quarterly-refresh-cron: ${SYNC_QUARTERLY_CRON:0 0 2 1 */3 ?}
   preference:
     path: ${PREFERENCE_PATH:preference.json}
   aicalllog:

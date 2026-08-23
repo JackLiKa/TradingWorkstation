@@ -65,6 +65,10 @@ public class AppProperties {
         private String ingestionScript = "ingestion/baostock_ingest.py";
         private int batchSize = 1000;
         private String defaultStartDate = "2021-01-01";
+        /** 季度自動全刷前復權數據（adjustflag=2），消除陳舊化問題。 */
+        private boolean quarterlyFullRefreshEnabled = true;
+        /** 季度全刷 cron 表達式（默認每季度首月 1 號凌晨 2 點）。 */
+        private String quarterlyRefreshCron = "0 0 2 1 */3 ?";
     }
 
     /** 用户偏好配置（JSON 文件路径，支持相对/绝对路径） */

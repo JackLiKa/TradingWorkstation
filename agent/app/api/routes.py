@@ -505,14 +505,15 @@ async def search_news(keyword: str, page_size: int = 10):
 
 
 @router.post("/news/sync")
-async def sync_wallstreetcn_news(channel: str = "a-stock", limit: int = 20):
-    """觸發華爾街見聞新聞同步 — 抓取最新新聞並存入向量庫。
+async def sync_wallstreetcn_news(channel: str = "a-stock", limit: int = 50):
+    """觸發華爾街見聞新聞同步 — 抓取最新新聞並存入向量庫 + MySQL。
 
     Args:
-        channel: 頻道（global/a-stock/us-stock/hk-stock/forex/commodity）
-        limit: 抓取條數（默認 20，最大 50）
+        channel: 頻道（global/a-stock/us-stock/hk-stock/forex/commodity/all）
+                 all = 全量同步所有頻道 + 頭條 + 熱文 + 快訊
+        limit: 抓取條數（默認 50，最大 200；channel=all 時忽略）
     """
-    limit = max(1, min(limit, 50))
+    limit = max(1, min(limit, 200))
     from app.services import news_store
 
     result = await news_store.sync_news_to_vector_store(channel=channel, limit=limit)
@@ -539,13 +540,18 @@ async def search_wallstreetcn(keyword: str, limit: int = 10):
 
 
 @router.get("/news/wallstreetcn/latest")
-async def get_wallstreetcn_latest(channel: str = "a-stock", limit: int = 20):
-    """從華爾街見聞抓取最新新聞（實時抓取，不入庫）。"""
-    limit = max(1, min(limit, 50))
+async def get_wallstreetcn_latest(channel: str = "a-stock", limit: int = 50):
+    """從華爾街見聞抓取最新新聞（實時抓取，不入庫）。
+
+    Args:
+        channel: 頻道（global/a-stock/us-stock/hk-stock/forex/commodity/all）
+        limit: 返回條數上限（最大 200）
+    """
+    limit = max(1, min(limit, 200))
     from app.services import wallstreetcn_client
 
     if channel == "all":
-        news = await wallstreetcn_client.fetch_all_channels(limit_per_channel=limit // 6)
+        news = await wallstreetcn_client.fetch_all_channels(limit_per_channel=max(limit // 6, 30))
     elif channel == "a-stock":
         news = await wallstreetcn_client.fetch_a_stock_focused(limit=limit)
     else:
@@ -572,12 +578,101 @@ async def vector_search_news(
     return {"query": query, "news": news, "count": len(news)}
 
 
+@router.get("/news/vector/search_rerank")
+async def vector_search_news_with_rerank(
+    query: str,
+    top_k: int = 10,
+    channel: str | None = None,
+    days_back: int = 7,
+    candidate_multiplier: int = 3,
+    preferred_provider: str = "",
+):
+    """向量搜索 TopK 初篩 + LLM 重排序。
+
+    解決純向量搜索對「利好/利空」等情感方向詞區分能力弱的問題：
+    1. 向量搜索取 top_k * candidate_multiplier 條候選
+    2. LLM 根據查詢意圖（含情感方向）對候選逐條打分
+    3. 按分數排序返回 top_k 條
+
+    Args:
+        query: 查詢文本（如「半導體行業利好」「A股市場利空」）
+        top_k: 最終返回條數
+        channel: 頻道過濾
+        days_back: 時間過濾
+        candidate_multiplier: 初篩倍數（候選數 = top_k * multiplier）
+        preferred_provider: 首選 LLM 供應商（如 glm-flash/deepseek-flash）
+    """
+    from app.services import news_store
+    from app.services.news_reranker import search_with_rerank
+
+    if not news_store.is_available():
+        raise HTTPException(status_code=503, detail="新聞向量庫不可用（Milvus 或 embedding 未初始化）")
+
+    news = await search_with_rerank(
+        query=query,
+        top_k=top_k,
+        channel=channel,
+        days_back=days_back,
+        candidate_multiplier=candidate_multiplier,
+        preferred_provider=preferred_provider,
+    )
+    return {
+        "query": query,
+        "news": news,
+        "count": len(news),
+        "reranked": True,
+    }
+
+
 @router.get("/news/vector/status")
 async def get_news_vector_status():
     """獲取新聞向量庫狀態。"""
     from app.services import news_store
 
     return news_store.get_status()
+
+
+@router.get("/news/throttle/status")
+async def get_news_throttle_status():
+    """獲取華爾街見聞 API 請求節流狀態。
+
+    返回上次請求時間、最小間隔、下次可請求時間、緩存條目數。
+    """
+    from app.services.wallstreetcn_client import _throttle
+
+    return _throttle.get_status()
+
+
+@router.get("/news/sync/status")
+async def get_news_sync_status():
+    """獲取新聞自動同步狀態。
+
+    返回同步排程器狀態：是否啟用、同步間隔、補抓狀態、最近同步結果。
+    """
+    from app.core.config import settings
+    from app.services.news_sync_scheduler import news_sync_scheduler
+
+    return {
+        "enabled": settings.news_sync_enabled,
+        "interval_seconds": settings.news_sync_interval,
+        "catchup_days": settings.news_sync_catchup_days,
+        "channels": settings.news_sync_channels,
+        "catchup_done": news_sync_scheduler.catchup_done,
+        "last_catchup_result": news_sync_scheduler.last_catchup_result,
+        "last_sync_result": news_sync_scheduler.last_sync_result,
+    }
+
+
+@router.post("/news/sync/catchup")
+async def trigger_news_catchup(days: int = 7):
+    """手動觸發新聞補抓（追回指定天數的歷史新聞）。"""
+    from app.services import news_store
+
+    result = await news_store.catchup_news(
+        channels=None,  # 全頻道
+        catchup_days=days,
+    )
+    return {"status": "SUCCESS", "result": result}
 
 
 @router.post("/news/cleanup")

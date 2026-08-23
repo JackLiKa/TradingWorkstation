@@ -6,6 +6,8 @@ import com.quantization.module.backtest.dto.BacktestResultDto;
 import com.quantization.module.backtest.dto.SaveStrategyDto;
 import com.quantization.module.backtest.dto.SavedStrategyDetailDto;
 import com.quantization.module.backtest.dto.SavedStrategySummaryDto;
+import com.quantization.module.backtest.dto.WalkForwardConfigDto;
+import com.quantization.module.backtest.dto.WalkForwardResultDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -63,6 +65,18 @@ public class BacktestController {
     public ApiResponse<BacktestResultDto> runAndSave(@Valid @RequestBody BacktestRequestDto request) {
         // runBacktest 已内置自动落库（source=auto），此处直接复用
         return ApiResponse.ok(backtestService.runBacktest(request));
+    }
+
+    /**
+     * Walk-forward 回測：樣本外驗證，評估策略過擬合程度。
+     *
+     * @param config walk-forward 配置（含 train/test 日期分段）
+     * @return walk-forward 結果（含 train 和 test 段回測結果 + 過擬合評分）
+     */
+    @Operation(summary = "Walk-forward 回測（樣本外驗證）")
+    @PostMapping("/walk-forward")
+    public ApiResponse<WalkForwardResultDto> walkForward(@RequestBody WalkForwardConfigDto config) {
+        return ApiResponse.ok(backtestService.runWalkForward(config));
     }
 
     /**

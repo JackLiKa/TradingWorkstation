@@ -15,7 +15,7 @@ class TestProviderRegistry:
     """測試供應商註冊表。"""
 
     def test_all_providers_defined(self):
-        """應該有 7 個供應商。"""
+        """應該有 8 個供應商（含 OpenRouter ox-alpha）。"""
         expected = {
             "deepseek-pro",
             "deepseek-flash",
@@ -24,6 +24,7 @@ class TestProviderRegistry:
             "qwen",
             "qoder",
             "devin",
+            "ox-alpha",
         }
         assert set(PROVIDERS.keys()) == expected
 
@@ -36,6 +37,15 @@ class TestProviderRegistry:
             assert info.api_key_env
             assert info.tags
             assert info.description
+
+    def test_ox_alpha_provider(self):
+        """OX-Alpha 供應商應該正確配置（OpenRouter 推理模型）。"""
+        info = PROVIDERS["ox-alpha"]
+        assert info.model_id == "stealth/ox-alpha"
+        assert info.base_url == "https://openrouter.ai/api/v1"
+        assert info.api_key_env == "OPENROUTER_API_KEY"
+        assert "reasoning" in info.tags
+        assert is_openai_compatible("ox-alpha") is True
 
     def test_free_providers(self):
         """免費供應商應該標記 is_free=True。"""
@@ -79,8 +89,9 @@ class TestProviderRegistry:
 
     def test_get_all_provider_ids(self):
         ids = get_all_provider_ids()
-        assert len(ids) == 7
+        assert len(ids) == 8
         assert "deepseek-pro" in ids
+        assert "ox-alpha" in ids
 
 
 class TestStageRouting:
@@ -97,6 +108,7 @@ class TestStageRouting:
             "prompt_generation",
             "judge",
             "monitor",
+            "news_reranker",
         ]
         for stage in required:
             assert stage in STAGE_DEFAULT_PROVIDERS, f"{stage} 缺少默認供應商"
@@ -104,6 +116,10 @@ class TestStageRouting:
     def test_strategy_generation_uses_deepseek_pro(self):
         """AI 2 策略生成應該用 DeepSeek V4-Pro（推理最強）。"""
         assert STAGE_DEFAULT_PROVIDERS["strategy_generation"] == "deepseek-pro"
+
+    def test_news_reranker_uses_ox_alpha(self):
+        """新聞重排序應該用 OX-Alpha（推理模型判斷持續性）。"""
+        assert STAGE_DEFAULT_PROVIDERS["news_reranker"] == "ox-alpha"
 
     def test_judge_uses_free_provider(self):
         """Judge 應該用免費供應商。"""

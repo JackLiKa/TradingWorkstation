@@ -518,6 +518,7 @@ async def _fetch_wallstreetcn_news(
     """
     try:
         from app.services import news_store, wallstreetcn_client
+        from app.services.news_reranker import search_with_rerank, format_reranked_news_for_prompt
 
         # 1. 構建市場環境查詢文本（用於語義檢索）
         query_parts = []
@@ -527,29 +528,30 @@ async def _fetch_wallstreetcn_news(
             change = idx.get("change_pct", 0)
             query_parts.append(f"{name}{'上漲' if change > 0 else '下跌'}{abs(change):.2f}%")
         # 加入強勢/弱勢行業
-        if sector_perf:
-            sorted_sectors = sorted(
-                sector_perf, key=lambda x: x.get("avgPctChange", 0) or 0, reverse=True
-            )
-            top_sectors = [s.get("industry", "") for s in sorted_sectors[:3] if s.get("industry")]
-            if top_sectors:
-                query_parts.append(f"強勢行業: {', '.join(top_sectors)}")
-            bottom_sectors = [
-                s.get("industry", "") for s in sorted_sectors[-3:] if s.get("industry")
-            ]
-            if bottom_sectors:
-                query_parts.append(f"弱勢行業: {', '.join(bottom_sectors)}")
+        sorted_sectors = sorted(
+            sector_perf, key=lambda x: x.get("avgPctChange", 0) or 0, reverse=True
+        ) if sector_perf else []
+        top_sectors = [s.get("industry", "") for s in sorted_sectors[:3] if s.get("industry")]
+        if top_sectors:
+            query_parts.append(f"強勢行業: {', '.join(top_sectors)}")
+        bottom_sectors = [
+            s.get("industry", "") for s in sorted_sectors[-3:] if s.get("industry")
+        ]
+        if bottom_sectors:
+            query_parts.append(f"弱勢行業: {', '.join(bottom_sectors)}")
 
         query = "A股市場 " + " ".join(query_parts) if query_parts else "A股市場最新動態"
 
-        # 2. 語義檢索向量庫
+        # 2. 語義檢索向量庫 + LLM 重排序
+        #    重排序能區分利好/利空方向，避免強勢行業查詢返回利空新聞
         wscn_news = []
         if news_store.is_available():
-            wscn_news = news_store.search_relevant_news(
+            wscn_news = await search_with_rerank(
                 query=query,
                 top_k=10,
                 channel="a-stock",
                 days_back=3,
+                candidate_multiplier=3,
             )
 
         # 3. 若向量庫無數據，直接抓取最新
@@ -569,10 +571,14 @@ async def _fetch_wallstreetcn_news(
                 if a.get("title")
             ]
 
-        # 4. 格式化為 prompt 文本
+        # 4. 格式化為 prompt 文本（使用雙維度重排序格式，含持續性標籤）
         if not wscn_news:
             return "無華爾街見聞新聞（API 不可用或無數據）"
 
+        # 若新聞含 rerank 元數據（direction/sustainability），用重排序格式
+        has_rerank = any("direction" in n for n in wscn_news)
+        if has_rerank:
+            return format_reranked_news_for_prompt(wscn_news, max_items=10)
         return news_store.format_news_for_prompt(wscn_news, max_items=10)
     except Exception as e:
         logger.warning(f"[AI0] 華爾街見聞新聞抓取失敗: {e}")

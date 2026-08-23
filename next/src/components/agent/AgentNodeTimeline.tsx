@@ -129,8 +129,8 @@ export function AgentNodeTimeline() {
     { refreshInterval: 5000, revalidateOnFocus: false }
   );
 
-  const iterations = timeline?.iterations ?? [];
-  const nodeDefs = timeline?.node_definitions ?? [];
+  const iterations = useMemo(() => timeline?.iterations ?? [], [timeline?.iterations]);
+  const nodeDefs = useMemo(() => timeline?.node_definitions ?? [], [timeline?.node_definitions]);
 
   // ECharts 耗時對比圖數據
   const durationChartOption = useMemo(() => {

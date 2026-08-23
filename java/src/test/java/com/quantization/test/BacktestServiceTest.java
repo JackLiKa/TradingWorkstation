@@ -248,7 +248,7 @@ class BacktestServiceTest {
         BacktestConfigDto config = new BacktestConfigDto(
                 LocalDate.of(2026, 3, 1), LocalDate.of(2026, 6, 20),
                 5, 5, 2, 1_000_000.0, 0.0, null, null,
-                0.02, 50);
+                0.02, 50, 0, null, null);
 
         BacktestResultDto result = backtestService.runBacktest(new BacktestRequestDto(criteria, config));
 
@@ -279,22 +279,22 @@ class BacktestServiceTest {
 
         BacktestResultDto rf0 = newService(stockService).runBacktest(new BacktestRequestDto(criteria,
                 new BacktestConfigDto(LocalDate.of(2026, 3, 1), LocalDate.of(2026, 6, 20),
-                        5, 5, 2, 1_000_000.0, 0.0, null, null, 0.0, 0)));
+                        5, 5, 2, 1_000_000.0, 0.0, null, null, 0.0, 0, 0, null, null)));
         BacktestResultDto rfHigh = newService(stockService).runBacktest(new BacktestRequestDto(criteria,
                 new BacktestConfigDto(LocalDate.of(2026, 3, 1), LocalDate.of(2026, 6, 20),
-                        5, 5, 2, 1_000_000.0, 0.0, null, null, 0.5, 0)));
+                        5, 5, 2, 1_000_000.0, 0.0, null, null, 0.5, 0, 0, null, null)));
 
         // 高无风险利率下夏普应不高于零利率夏普
         assertThat(rfHigh.statistics().sharpe()).isLessThanOrEqualTo(rf0.statistics().sharpe());
     }
 
-    /** 构建默认配置（riskFreeRate=0.02, slippageBps=0）。 */
+    /** 构建默认配置（riskFreeRate=0.02, slippageBps=0, executionDelay=0 for backward compat）。 */
     private BacktestConfigDto defaultConfig(LocalDate start, LocalDate end,
                                             int rebalanceInterval, int holdingPeriod, int maxPositions,
                                             double initialCapital, double commissionBps,
                                             Double stopLossPct, Double takeProfitPct) {
         return new BacktestConfigDto(start, end, rebalanceInterval, holdingPeriod, maxPositions,
-                initialCapital, commissionBps, stopLossPct, takeProfitPct, 0.02, 0);
+                initialCapital, commissionBps, stopLossPct, takeProfitPct, 0.02, 0, 0, null, null);
     }
 
     private static double round(double value, int scale) {

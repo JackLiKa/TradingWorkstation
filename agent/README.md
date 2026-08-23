@@ -167,6 +167,11 @@ curl http://localhost:8100/api/agent/metrics     # Prometheus 指標
 | 優化 | `MULTI_WINDOW_BACKTEST` | false | true=啟用多窗口評分 |
 | 限流 | `RATE_LIMIT_BACKTEST_*`/`RATE_LIMIT_SCREENER_*`/`RATE_LIMIT_READ_*` | — | 令牌桶限流 |
 | RAG | `RAG_ENABLED`/`EMBEDDING_MODEL` | true/BAAI/bge-small-zh | Milvus Lite + sentence-transformers |
+| 新聞同步 | `NEWS_SYNC_ENABLED` | true | 啟用新聞自動同步 |
+| 新聞同步 | `NEWS_SYNC_INTERVAL` | 360 | 同步間隔秒數（6 分鐘） |
+| 新聞同步 | `NEWS_SYNC_CATCHUP_DAYS` | 7 | 啟動時補抓天數 |
+| 新聞同步 | `NEWS_SYNC_CHANNELS` | all | 同步頻道（all/a-stock/單頻道） |
+| 新聞同步 | `NEWS_SYNC_CATCHUP_ON_STARTUP` | true | 啟動時是否補抓 |
 | 監控 | `ENABLE_METRICS`/`LOG_LEVEL`/`ENVIRONMENT` | true/INFO/development | |
 
 ## API 端點

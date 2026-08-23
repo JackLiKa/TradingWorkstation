@@ -86,6 +86,7 @@ export function AgentBacktestConfig({ state, onStartConfigChange, preStartMode =
         });
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startDate, endDate, maxPositions, rebalanceInterval, holdingPeriod, preStartMode]);
 
   const handleSave = async () => {

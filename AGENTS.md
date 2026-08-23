@@ -10,7 +10,9 @@
   - 指標引擎：`module.indicator` 已改為 `IndicatorCalculator` 註冊表模式（`Map<String,IndicatorCalculator>`），新增指標只需實現接口 + `@Component`，無需改 `IndicatorEngine`
   - 通知服務：`module.system` 含 `NotificationService`（SMTP 郵件 + Webhook，異步推送，獨立 `notificationExecutor` 線程池）+ `ProsperityAlertScheduler`（P4-8：可配置定時調度，`ALERT_SCHEDULER_ENABLED=true` + cron，預設關閉）
   - 偏好存儲：`module.preference` 已從 JSON 文件改為 MySQL 入庫（`user_preference` 表），DB 異常時降級到文件存儲
-  - 回測引擎：`module.backtest` 已加滑點(`slippageBps`)、漲跌停約束、夏普減無風險利率(`riskFreeRate`)、結果自動落庫
+  - 回測引擎：`module.backtest` 已加滑點(`slippageBps` 默認 5bp)、手續費(`commissionBps` 默認 3bp)、板塊動態漲跌停（主板 9.9%/科創板創業板 19.9%/ST 4.9%）、T+1 執行延遲、可配置基準指數、止損默認 10%、風控指標（Sortino/Calmar/IR/Beta/Alpha/勝率/盈虧比/換手率）、Walk-forward 樣本外驗證、結果自動落庫
+  - API 安全：`SecurityConfig` + `ApiKeyFilter`（`SECURITY_ENABLED=true` + `API_KEY` 環境變量啟用，開發環境默認關閉）；Agent 端 `ApiKeyMiddleware`（`API_KEY` 非空時啟用）
+  - 數據同步：`module.sync` 含 `QuarterlyRefreshScheduler`（每季度自動全刷 adjustflag=2 前復權數據，消除陳舊化，`SYNC_QUARTERLY_REFRESH=true`）
   - 財經新聞：`module.news` 提供華爾街見聞新聞的查詢與管理（`financial_news` 表，URI 去重）；新聞抓取由 Agent 服務的 `wallstreetcn_client.py` + `news_store.py`（MySQL + Milvus 向量庫雙寫）負責，後端僅負責已入庫新聞的分頁查詢與過期清理
   - 緩存：已按域拆名（`STOCK_DAILY_CACHE`/`INDUSTRY_DAILY_CACHE`/`FORECAST_CACHE`/`ROTATION_CACHE`），各域獨立 TTL
   - 构建：`mvn -DskipTests compile`（需 JDK 21）
@@ -25,10 +27,10 @@
 - `agent/` — AI 优化 Agent 服务：FastAPI + LangGraph 风格优化循环 + 多模型 LLM 路由
   - 入口：`agent/app/main.py`
   - 配置：`agent/.env`（从 `agent/.env.example` 复制）
-  - LLM 供應商：DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin（7 個供應商，按階段性價比路由）
+  - LLM 供應商：DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin、ox-alpha（8 個供應商，按階段性價比路由）+ 熔斷器（CircuitBreaker，連續失敗 3 次暫停 5 分鐘）
   - 財經新聞：`agent/app/services/wallstreetcn_client.py`（華爾街見聞公開 API 抓取，無需 API Key）+ `news_store.py`（MySQL `financial_news` 表 + Milvus 向量庫雙寫，30 天 TTL，URI 去重）；`market_news.py` 階段集成語義檢索 + 實時抓取，按強弱勢行業關鍵詞補充搜索；Agent 端點 `/api/agent/news/sync`、`/news/wallstreetcn/search`、`/news/wallstreetcn/latest`、向量語義檢索
   - 優化循環改進：`optimizer.py` 防死循環（連續重複回退注入強變異 next_prompt）；`scoring.py` 新增超額收益(excessReturn) + 交易活躍度(totalTrades)評分維度，懲罰空倉「假穩健」；`strategy_generation.py` 重複策略警告 + 超短線交易鐵律
-  - 測試：`cd agent && python -m pytest tests/`（15 個測試文件，覆蓋率門檻 40%）
+  - 測試：`cd agent && python -m pytest tests/`（22 個測試文件，324 個測試，覆蓋率門檻 40%）
   - 監控：`/api/agent/metrics`（Prometheus 指標端點）
   - 运行：`uvicorn app.main:app`，默认 `http://localhost:8100`，Swagger `/docs`
 - `ingestion/` — Python Baostock 数据采集（由后端 sync 模块编排；已拆分為 `baostock_fetch.py`（API 調用層）+ `baostock_write.py`（DB 寫入層）+ `baostock_ingest.py`（入口/CLI/菜單）；寫入 stock_daily / index_daily / index_metadata / stock_industry / **industry_daily 聚合**；⚠️ 前復權(adjustflag=2)增量陳舊化風險，每季度需跑 `--full-refresh-adjustflag2`；支持 `--progress-json` JSON 進度協議）

@@ -43,10 +43,18 @@ export interface WallstreetcnNewsItem {
 // 通過 next rewrites 反代：/TradingWorkstation/agent-api/* → agent:8100/api/agent/*
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/TradingWorkstation';
 const AGENT_PROXY = `${API_BASE}/agent-api`;
+const AGENT_API_KEY = process.env.NEXT_PUBLIC_AGENT_API_KEY || '';
+
+/** 構建帶 API Key 的請求頭。 */
+function agentHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (AGENT_API_KEY) headers['X-API-Key'] = AGENT_API_KEY;
+  return headers;
+}
 
 async function agentFetch<T>(path: string): Promise<T> {
   const res = await fetch(`${AGENT_PROXY}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: agentHeaders(),
   });
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
@@ -62,7 +70,7 @@ async function agentFetch<T>(path: string): Promise<T> {
 async function agentPost<T>(path: string, payload?: unknown): Promise<T> {
   const res = await fetch(`${AGENT_PROXY}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: agentHeaders(),
     body: payload ? JSON.stringify(payload) : undefined,
   });
   if (!res.ok) {

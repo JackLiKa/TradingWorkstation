@@ -141,6 +141,45 @@ def _upsert_industry_batch(cursor, rows: list[tuple]) -> None:
     cursor.executemany(sql, rows)
 
 
+def _infer_board(code: str, is_st: int) -> str:
+    """根據股票代碼前綴和 ST 標誌推斷板塊。
+
+    Args:
+        code: 股票代碼（如 sh.688001、sz.300001、sz.000001）
+        is_st: 是否為 ST 股（1=ST, 0=非 ST）
+
+    Returns:
+        str: 板塊標識（main/star/chinext/st）
+    """
+    if is_st == 1:
+        return "st"
+    if code.startswith("sh.688"):
+        return "star"  # 科創板
+    if code.startswith("sz.300"):
+        return "chinext"  # 創業板
+    return "main"  # 主板
+
+
+def _upsert_stock_listing_batch(cursor, rows: list[tuple]) -> None:
+    """批量 upsert 股票上市狀態。
+
+    rows = [(code, code_name, board, listing_date, delisting_date), ...]
+    用於消除倖存者偏差：回測時按日期過濾在市股票。
+    """
+    if not rows:
+        return
+    sql = (
+        "INSERT INTO stock_listing "
+        "(code, code_name, board, listing_date, delisting_date, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP) "
+        "ON DUPLICATE KEY UPDATE "
+        "code_name=VALUES(code_name), board=VALUES(board), "
+        "listing_date=VALUES(listing_date), delisting_date=VALUES(delisting_date), "
+        "updated_at=CURRENT_TIMESTAMP"
+    )
+    cursor.executemany(sql, rows)
+
+
 def _get_industry_last_update_date(conn):
     """獲取 stock_industry 表中最新的 update_date。"""
     with conn.cursor() as cursor:

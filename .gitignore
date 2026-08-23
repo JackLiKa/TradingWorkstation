@@ -36,6 +36,8 @@ agent/**/__pycache__/
 agent/.venv/
 agent/**/*.pyc
 agent/.pytest_cache/
+agent/.coverage
+agent/htmlcov/
 
 # ===== Agent 運行時數據（不入庫）=====
 agent/data/

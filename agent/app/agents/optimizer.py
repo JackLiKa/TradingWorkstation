@@ -532,6 +532,32 @@ async def run_optimization_loop():
             market_context = sanitize_output(market_result.output)
             state.current_market_context = market_context
 
+            # === 市場形態自適應：根據 regime 調整回測配置 ===
+            # 牛市→多倉位放寬止損，熊市→減倉位嚴止損，震盪市→中等倉位嚴止盈
+            try:
+                from app.services.market_data_client import market_data_client
+                from app.services.regime_strategy import apply_regime_to_config
+
+                regime = await market_data_client._compute_market_regime()
+                regime_type = regime.get("regime_type", "unknown")
+                state.current_regime_type = regime_type
+
+                # 根據形態調整 config（用戶手動設置的字段不被覆蓋）
+                state.current_config = apply_regime_to_config(
+                    config=state.current_config,
+                    regime_type=regime_type,
+                    user_overrides=user_config_overrides,
+                )
+                logger.info(
+                    f"第 {iteration} 輪: 市場形態={regime_type}, "
+                    f"config 已調整: maxPositions={state.current_config.get('maxPositions')}, "
+                    f"stopLossPct={state.current_config.get('stopLossPct')}, "
+                    f"rebalanceInterval={state.current_config.get('rebalanceInterval')}"
+                )
+            except Exception as e:
+                logger.warning(f"市場形態 config 調整失敗（不影響優化）: {e}")
+                state.current_regime_type = "unknown"
+
             # === AI 2: 策略生成（+ 評委 + RAG 歷史經驗） ===
             state.status_message = f"第 {iteration} 輪：AI 2 策略生成中..."
             logger.info(f"第 {iteration} 輪：AI 2 策略生成")
@@ -566,6 +592,7 @@ async def run_optimization_loop():
                 prev_reflection=state.current_reflection,
                 next_prompt=state.current_next_prompt,
                 rag_experiences=rag_experiences_text,
+                regime_type=getattr(state, "current_regime_type", "unknown"),
             )
             _add_stage_result(strategy_result)
             # JSON 輸出做安全檢查（不替換文本，由 Judge 判定）
@@ -637,6 +664,7 @@ async def run_optimization_loop():
                                 prev_reflection=state.current_reflection,
                                 next_prompt=state.current_next_prompt,
                                 rag_experiences=rag_experiences_text,
+                                regime_type=getattr(state, "current_regime_type", "unknown"),
                             )
                             _add_stage_result(retry_result)
                             check_json_output(retry_result.output)

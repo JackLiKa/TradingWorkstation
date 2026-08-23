@@ -22,6 +22,7 @@ const STAGES = [
   { name: 'strategy_generation', label: 'AI 2 · 策略生成 ★' },
   { name: 'backtest_reflection', label: 'AI 3 · 回測反思' },
   { name: 'prompt_generation', label: 'AI 4 · 提示詞生成' },
+  { name: 'news_reranker', label: '新聞重排序 · 推理' },
   { name: 'judge', label: 'Judge · 評委' },
   { name: 'monitor', label: 'Monitor · 監控' },
 ];
@@ -35,6 +36,7 @@ const PROVIDER_CONFIG: Record<string, { label: string; color: string }> = {
   'qwen':            { label: 'Qwen3.6',            color: 'orange' },
   'qoder':           { label: 'Qoder Lite (免費)',  color: 'gray' },
   'devin':           { label: 'Devin GLM-5.2',      color: 'gray' },
+  'ox-alpha':        { label: 'OX-Alpha (推理)',    color: 'indigo' },
   '':                { label: '自動選擇',           color: 'default' },
 };
 

@@ -341,6 +341,43 @@ def store_news_batch(articles: list[dict[str, Any]]) -> dict[str, int]:
     return {"stored": stored, "duplicated": duplicated, "failed": failed}
 
 
+# 利好/利空方向關鍵詞（用於方向敏感的查詢擴展）
+_BULLISH_KEYWORDS = {"利好", "利多", "上漲", "反彈", "突破", "超預期", "增長", "景氣", "復甦", "政策支持", "資金流入", "訂單", "量產", "拐點"}
+_BEARISH_KEYWORDS = {"利空", "利淡", "下跌", "暴跌", "暴雷", "虧損", "下滑", "收緊", "打壓", "風險", "違約", "退市", "制裁", "資金流出", "減持"}
+
+
+def _enrich_query_directional(query: str) -> str:
+    """方向敏感的查詢擴展 — 利好/利空用不同上下文，避免向量趨同。
+
+    問題：原本「利好」「利空」都被擴展為「財經新聞 A股市場 行業動態」，
+    導致兩個方向相反的查詢向量幾乎相同，返回結果也幾乎相同。
+
+    解決：根據查詢中的方向關鍵詞，注入方向特定的上下文：
+    - 利好類 → 注入「政策落地 業績超預期 技術突破 資金流入 訂單增長」
+    - 利空類 → 注入「業績下滑 政策收緊 風險事件 資金流出 減持違約」
+    - 中性   → 注入通用財經上下文
+    """
+    if len(query) >= 30:
+        return query  # 長查詢已有足夠上下文，不擴展
+
+    query_lower = query.lower()
+    has_bullish = any(kw in query for kw in _BULLISH_KEYWORDS)
+    has_bearish = any(kw in query for kw in _BEARISH_KEYWORDS)
+
+    if has_bullish and not has_bearish:
+        # 利好方向：注入利好特徵詞
+        return f"{query} 政策落地 業績超預期 技術突破量產 資金持續流入 訂單增長 行業景氣改善"
+    elif has_bearish and not has_bullish:
+        # 利空方向：注入利空特徵詞
+        return f"{query} 業績下滑虧損 政策收緊打壓 風險事件 資金流出減持 違約退市 制裁"
+    elif has_bullish and has_bearish:
+        # 同時含利好利空：不擴展方向，只加通用上下文
+        return f"{query} 財經新聞 A股市場 行業動態"
+    else:
+        # 中性查詢：通用擴展
+        return f"{query} 財經新聞 A股市場 行業動態"
+
+
 def search_relevant_news(
     query: str,
     top_k: int = 10,
@@ -366,11 +403,8 @@ def search_relevant_news(
     if not _ensure_collection():
         return []
 
-    # 向量化查詢（自動豐富短查詢，提升語義匹配率）
-    enriched_query = query
-    if len(query) < 20:
-        # 短查詢自動補充上下文，提升語義匹配
-        enriched_query = f"{query} 財經新聞 A股市場 行業動態"
+    # 向量化查詢（方向敏感擴展：利好/利空用不同上下文，避免向量趨同）
+    enriched_query = _enrich_query_directional(query)
     try:
         query_vec = _embedding_model.encode(enriched_query, normalize_embeddings=True).tolist()
     except Exception as e:
@@ -564,21 +598,26 @@ def get_status() -> dict[str, Any]:
 
 async def sync_news_to_vector_store(
     channel: str = "a-stock",
-    limit: int = 20,
+    limit: int = 50,
 ) -> dict[str, int]:
     """抓取新聞並存入向量庫 + MySQL（用於定時同步任務）。
 
     Args:
-        channel: 頻道
-        limit: 抓取條數
+        channel: 頻道（a-stock/global/all）
+        limit: 抓取條數上限（channel=all 時忽略，抓取全量）
 
     Returns:
         dict: {"fetched": N, "stored": N, "duplicated": N, "failed": N}
     """
     # 抓取新聞
-    if channel == "a-stock":
+    if channel == "all":
+        # 全量同步：所有頻道 + 頭條 + 熱文 + 快訊
+        articles = await wallstreetcn_client.fetch_all_channels(limit_per_channel=50)
+    elif channel == "a-stock":
+        # A 股聚焦：A 股 + 全球 + 快訊 + 熱文
         articles = await wallstreetcn_client.fetch_a_stock_focused(limit=limit)
     else:
+        # 單頻道
         articles = await wallstreetcn_client.fetch_latest_articles(channel, limit=limit)
 
     # 1. 存入向量庫
@@ -594,6 +633,101 @@ async def sync_news_to_vector_store(
         "failed": result["failed"],
         "mysql_stored": mysql_result.get("stored", 0),
         "mysql_duplicated": mysql_result.get("duplicated", 0),
+    }
+
+
+async def catchup_news(
+    channels: list[str] | None = None,
+    catchup_days: int = 7,
+    max_pages_per_channel: int = 20,
+) -> dict[str, Any]:
+    """啟動時補抓漏掉的新聞（cursor 分頁追回歷史數據）。
+
+    用於系統啟動時追回停機期間漏掉的新聞。
+    從最新開始往回翻頁，遇到已存在的 URI 或超過 cutoff_date 時停止。
+
+    Args:
+        channels: 要補抓的頻道列表（None = 全頻道）
+        catchup_days: 補抓天數（往前追 N 天的新聞）
+        max_pages_per_channel: 每個頻道最多翻頁數
+
+    Returns:
+        {"channels": N, "fetched": N, "stored": N, "duplicated": N, "failed": N,
+         "mysql_stored": N, "mysql_duplicated": N, "duration_seconds": N}
+    """
+    import time as _time
+    from datetime import datetime, timedelta, timezone
+
+    start = _time.time()
+
+    if channels is None:
+        channels = ["a-stock", "global", "us-stock", "hk-stock", "forex", "commodity"]
+
+    # 計算截止日期
+    cutoff_dt = datetime.now(tz=timezone.utc) - timedelta(days=catchup_days)
+    cutoff_date = cutoff_dt.strftime("%Y-%m-%d")
+    logger.info(f"[news_store] 補抓新聞: {channels}, 截止日期={cutoff_date}, 每頻道最多 {max_pages_per_channel} 頁")
+
+    # 獲取已存在的 URI 集合（從向量庫 URI cache）
+    _try_init()
+    _load_uri_cache()
+    existing_set = set(_uri_cache)
+    logger.info(f"[news_store] 已有 {len(existing_set)} 個 URI 用於去重")
+
+    all_articles: list[dict[str, Any]] = []
+    seen_uris: set[str] = set()
+
+    for channel in channels:
+        try:
+            articles = await wallstreetcn_client.fetch_articles_catchup(
+                channel=channel,
+                max_pages=max_pages_per_channel,
+                existing_uris=existing_set,
+                cutoff_date=cutoff_date,
+            )
+            for a in articles:
+                uri = a.get("uri", "")
+                if uri and uri not in seen_uris:
+                    seen_uris.add(uri)
+                    all_articles.append(a)
+        except Exception as e:
+            logger.warning(f"[news_store] 補抓頻道 {channel} 失敗: {e}")
+
+    if not all_articles:
+        logger.info("[news_store] 補抓完成: 無新新聞")
+        return {
+            "channels": len(channels),
+            "fetched": 0,
+            "stored": 0,
+            "duplicated": 0,
+            "failed": 0,
+            "mysql_stored": 0,
+            "mysql_duplicated": 0,
+            "duration_seconds": round(_time.time() - start, 1),
+        }
+
+    # 存入向量庫
+    result = store_news_batch(all_articles)
+
+    # 寫入 MySQL
+    mysql_result = await _upsert_to_mysql(all_articles)
+
+    duration = round(_time.time() - start, 1)
+    logger.info(
+        f"[news_store] 補抓完成: {len(all_articles)} 條新新聞, "
+        f"向量庫 stored={result['stored']}, MySQL stored={mysql_result.get('stored', 0)}, "
+        f"耗時 {duration}s"
+    )
+
+    return {
+        "channels": len(channels),
+        "fetched": len(all_articles),
+        "stored": result["stored"],
+        "duplicated": result["duplicated"],
+        "failed": result["failed"],
+        "mysql_stored": mysql_result.get("stored", 0),
+        "mysql_duplicated": mysql_result.get("duplicated", 0),
+        "duration_seconds": duration,
     }
 
 
@@ -651,6 +785,169 @@ async def _upsert_to_mysql(articles: list[dict[str, Any]]) -> dict[str, int]:
     except Exception as e:
         logger.warning(f"[news_store] MySQL 寫入失敗（不影響向量庫同步）: {e}")
         return {"stored": 0, "duplicated": 0, "failed": len(articles)}
+
+
+# ===== 新聞情感評分持久化（利好/利空池）=====
+
+
+async def save_sentiment_scores(
+    scores: list[dict[str, Any]],
+    query_context: str = "",
+) -> dict[str, int]:
+    """將 reranker 評分結果批量寫入 MySQL（news_sentiment_score 表）。
+
+    用於建立「利好池」「利空池」，策略生成時只從利好池選股。
+    自我成長機制：每次評分都持久化，歷史評分可復用。
+
+    Args:
+        scores: 評分列表，每項含 uri/title/direction/sustainability/composite_score/news_label
+        query_context: 評分時的查詢上下文
+
+    Returns:
+        {"stored": N, "duplicated": N, "failed": N}
+    """
+    if not scores:
+        return {"stored": 0, "duplicated": 0, "failed": 0}
+    try:
+        import os
+
+        import httpx
+
+        backend_url = os.environ.get(
+            "BACKEND_API_URL", "http://localhost:8090/TradingWorkstation"
+        )
+        items = [
+            {
+                "uri": s.get("uri", ""),
+                "title": s.get("title", ""),
+                "direction": s.get("direction", 0),
+                "sustainability": s.get("sustainability", 0),
+                "compositeScore": s.get("composite_score", 0),
+                "newsLabel": s.get("news_label", "中性"),
+                "queryContext": query_context[:500],
+            }
+            for s in scores
+            if s.get("uri") and s.get("title")
+        ]
+        if not items:
+            return {"stored": 0, "duplicated": 0, "failed": 0}
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{backend_url}/api/news/sentiment/batch",
+                json={"items": items},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            result_data = data.get("data", {})
+            logger.info(
+                f"[news_store] 情感評分寫入: stored={result_data.get('stored', 0)}, "
+                f"duplicated={result_data.get('duplicated', 0)}"
+            )
+            return {
+                "stored": result_data.get("stored", 0),
+                "duplicated": result_data.get("duplicated", 0),
+                "failed": result_data.get("failed", 0),
+            }
+    except Exception as e:
+        logger.warning(f"[news_store] 情感評分寫入失敗（不影響 reranker）: {e}")
+        return {"stored": 0, "duplicated": 0, "failed": len(scores)}
+
+
+async def get_bullish_pool(
+    days_back: int = 7,
+    min_direction: int = 5,
+    min_sustainability: int = 6,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """獲取利好池 — 持續性利好新聞（direction >= 5 且 sustainability >= 6）。
+
+    策略生成時從此池選股，確保只選有持續性利好支撐的標的。
+
+    Args:
+        days_back: 只檢索最近 N 天的評分
+        min_direction: 最低方向分（默認 5 = 中度利好以上）
+        min_sustainability: 最低持續性分（默認 6 = 中度持續以上）
+        limit: 返回條數
+
+    Returns:
+        利好新聞列表，每項含 uri/title/direction/sustainability/news_label/scored_at
+    """
+    try:
+        import os
+
+        import httpx
+
+        backend_url = os.environ.get(
+            "BACKEND_API_URL", "http://localhost:8090/TradingWorkstation"
+        )
+        params = {
+            "daysBack": days_back,
+            "minDirection": min_direction,
+            "minSustainability": min_sustainability,
+            "limit": limit,
+        }
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{backend_url}/api/news/sentiment/bullish",
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("data", {}).get("items", [])
+            logger.info(f"[news_store] 利好池查詢: {len(items)} 條持續性利好")
+            return items
+    except Exception as e:
+        logger.warning(f"[news_store] 利好池查詢失敗: {e}")
+        return []
+
+
+async def get_bearish_pool(
+    days_back: int = 7,
+    min_abs_direction: int = 5,
+    min_sustainability: int = 6,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """獲取利空池 — 持續性利空新聞（direction <= -5 且 sustainability >= 6）。
+
+    策略生成時用此池排除利空行業/個股。
+
+    Args:
+        days_back: 只檢索最近 N 天的評分
+        min_abs_direction: 最低絕對方向分（默認 5）
+        min_sustainability: 最低持續性分（默認 6）
+        limit: 返回條數
+
+    Returns:
+        利空新聞列表
+    """
+    try:
+        import os
+
+        import httpx
+
+        backend_url = os.environ.get(
+            "BACKEND_API_URL", "http://localhost:8090/TradingWorkstation"
+        )
+        params = {
+            "daysBack": days_back,
+            "minAbsDirection": min_abs_direction,
+            "minSustainability": min_sustainability,
+            "limit": limit,
+        }
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{backend_url}/api/news/sentiment/bearish",
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("data", {}).get("items", [])
+            logger.info(f"[news_store] 利空池查詢: {len(items)} 條持續性利空")
+            return items
+    except Exception as e:
+        logger.warning(f"[news_store] 利空池查詢失敗: {e}")
+        return []
 
 
 def format_news_for_prompt(news_list: list[dict[str, Any]], max_items: int = 10) -> str:

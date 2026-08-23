@@ -176,6 +176,19 @@ def record_llm_call(provider: str, model: str, duration_s: float, fallback: bool
         inc_counter("agent_llm_fallback_total", {"provider": provider})
 
 
+def record_llm_tokens(provider: str, prompt_tokens: int, completion_tokens: int):
+    """記錄 LLM token 使用量（用於成本追蹤）。"""
+    if prompt_tokens > 0:
+        inc_counter("agent_llm_tokens_total", {"provider": provider, "type": "prompt"}, prompt_tokens)
+    if completion_tokens > 0:
+        inc_counter("agent_llm_tokens_total", {"provider": provider, "type": "completion"}, completion_tokens)
+
+
+def record_llm_error(provider: str, error_type: str = "call"):
+    """記錄 LLM 調用錯誤。"""
+    inc_counter("agent_llm_errors_total", {"provider": provider, "type": error_type})
+
+
 def record_rag_operation(op: str, duration_s: float = 0, success: bool = True):
     """記錄 RAG 操作。"""
     labels = {"operation": op, "status": "success" if success else "failed"}

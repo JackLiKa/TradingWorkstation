@@ -19,7 +19,7 @@
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import httpx
@@ -32,6 +32,45 @@ from app.core.providers import (
 )
 
 logger = logging.getLogger("agent.llm")
+
+
+class CircuitBreaker:
+    """供應商熔斷器：連續失敗達閾值後暫停調用，恢復時間後自動重試。
+
+    避免對已故障的供應商反覆重試，節省時間和 API 配額。
+    """
+
+    def __init__(self, threshold: int = 3, recovery_seconds: int = 300):
+        self._threshold = threshold
+        self._recovery_seconds = recovery_seconds
+        self._failures: dict[str, int] = {}
+        self._open_until: dict[str, float] = {}
+
+    def is_open(self, provider: str) -> bool:
+        """檢查供應商是否處於熔斷狀態。"""
+        if provider in self._open_until:
+            if time.time() < self._open_until[provider]:
+                return True
+            else:
+                # 恢復時間已過，清除熔斷狀態
+                del self._open_until[provider]
+                self._failures[provider] = 0
+        return False
+
+    def record_failure(self, provider: str):
+        """記錄供應商調用失敗。"""
+        self._failures[provider] = self._failures.get(provider, 0) + 1
+        if self._failures[provider] >= self._threshold:
+            self._open_until[provider] = time.time() + self._recovery_seconds
+            logger.warning(
+                f"供應商 {provider} 熔斷（連續失敗 {self._failures[provider]} 次），"
+                f"暫停 {self._recovery_seconds}s"
+            )
+
+    def record_success(self, provider: str):
+        """記錄供應商調用成功，重置失敗計數。"""
+        self._failures[provider] = 0
+        self._open_until.pop(provider, None)
 
 
 @dataclass
@@ -72,6 +111,7 @@ class LLMClient:
         self._model_status = ModelStatus()
         self._provider_status: dict[str, bool] = {}  # provider_id -> available
         self._devin_org_id: str | None = None
+        self._circuit_breaker = CircuitBreaker(threshold=3, recovery_seconds=300)
 
     @property
     def model_status(self) -> ModelStatus:
@@ -290,6 +330,10 @@ class LLMClient:
         last_error = None
 
         for i, provider_id in enumerate(chain):
+            # 熔斷檢查：跳過已熔斷的供應商
+            if self._circuit_breaker.is_open(provider_id):
+                logger.debug(f"供應商 {provider_id} 處於熔斷狀態，跳過")
+                continue
             info = PROVIDERS[provider_id]
             try:
                 text = await self._call_provider(provider_id, prompt, system_prompt, json_mode)
@@ -304,6 +348,8 @@ class LLMClient:
                     duration_s=duration_s,
                     fallback=bool(fallback_from),
                 )
+                # 記錄成功，重置熔斷計數
+                self._circuit_breaker.record_success(provider_id)
 
                 return LLMResponse(
                     text=text,
@@ -314,6 +360,7 @@ class LLMClient:
                 )
             except Exception as e:
                 last_error = e
+                self._circuit_breaker.record_failure(provider_id)
                 logger.warning(f"供應商 {info.display_name} 調用失敗: {e}")
                 if i < len(chain) - 1:
                     logger.info(f"降級到: {PROVIDERS[chain[i + 1]].display_name}")
@@ -379,13 +426,26 @@ class LLMClient:
         if json_mode and info.supports_json_mode:
             body["response_format"] = {"type": "json_object"}
 
+        # OpenRouter ox-alpha 支持 reasoning 鏈式推理
+        if "reasoning" in info.tags:
+            body["reasoning"] = {"enabled": True}
+
         url = f"{info.base_url}/chat/completions"
-        timeout = 120 if "pro" in info.provider else 60
+        timeout = 180 if "reasoning" in info.tags else (120 if "pro" in info.provider else 60)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, headers=headers, json=body)
             resp.raise_for_status()
             data = resp.json()
+            # 記錄 token 使用量（若 API 返回 usage 字段）
+            usage = data.get("usage")
+            if usage:
+                from app.core.metrics import record_llm_tokens
+                record_llm_tokens(
+                    info.provider,
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                )
             choices = data.get("choices", [])
             if not choices:
                 raise RuntimeError(f"{info.display_name} 返回空 choices")

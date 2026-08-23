@@ -29,6 +29,15 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 ## 市場分析
 {market_context}
 
+## 市場形態策略指引（必須遵循）
+{regime_guidance}
+
+## 持續性利好新聞池（選股應優先從此池相關行業/個股中選擇）
+{bullish_pool_text}
+
+## 持續性利空新聞池（選股應避開此池相關行業/個股）
+{bearish_pool_text}
+
 ## 最新交易日行業強弱
 {industry_text}
 
@@ -66,9 +75,10 @@ PROMPT_TEMPLATE = """你是一個量化策略設計師。請根據市場分析�
 ## 你的任務
 1. **【強制】必須遵循上方「下一輪提示詞指引」中的改進方向**——若 next_prompt 指出要擴展行業/加止損/降低調倉，你必須在 criteria 中體現這些改動，不可忽略
 2. **【強制】不可原樣輸出當前選股條件**——若上方有「⚠️重複警告」，你必須改變至少 1 個與重複輪不同的參數，打破死循環
-3. 根據上方「市場分析」「最新交易日行業強弱」和「上一輪反思結論」，調整選股條件
-4. 若領漲行業動能強勁，可適當提高 minPctChange / minReturn20 / minTurn 等動量條件，捕捉強勢股
-5. 若市場由弱勢行業主導或防禦信號明顯，則偏向低波動、低換手或高紅利風格
+3. **【利好池選股】**若上方「持續性利好新聞池」非空，優先在 criteria 的 industries 中選擇利好新聞涉及的行業；若「持續性利空新聞池」非空，避開利空新聞涉及的行業
+4. 根據上方「市場分析」「最新交易日行業強弱」和「上一輪反思結論」，調整選股條件
+5. 若領漲行業動能強勁，可適當提高 minPctChange / minReturn20 / minTurn 等動量條件，捕捉強勢股
+6. 若市場由弱勢行業主導或防禦信號明顯，則偏向低波動、低換手或高紅利風格
 6. **行業聚焦**：若某些行業連續多日領漲且資金集中，可在 criteria 中加入 "industries": ["行業名稱1", "行業名稱2"] 限制選股範圍至這些強勢行業（最多 3 個）；若無明確行業偏好則不要填寫 industries 字段。**重要**：若上方「行業相關性分析」指出某些行業對高度相關（相關係數 ≥ 0.7），應避免在 industries 中同時選擇這些高相關行業，以保持組合分散度。**優先參考**：上方「行業景氣度指標」中景氣度 ≥ 65 的「繁榮」或「景氣」等級行業是更可靠的聚焦目標，避免選擇「低迷」或「衰退」等級行業
 7. 參考上方「歷史優化記錄」和 RAG 經驗（如有），避免重複歷史上效果差的策略
 8. 如有「歷史錯誤教訓」，確保不重複同類錯誤（特別是 JSON 格式錯誤）
@@ -172,6 +182,7 @@ class StrategyGenerationStage(BaseStage):
             prev_reflection: str — 上一輪反思
             next_prompt: str — 下一輪提示詞指引
             rag_experiences: str — RAG 檢索的歷史經驗文本（可選）
+            regime_type: str — 當前市場形態類型（trending_up/trending_down/oscillation/...）
         """
         market_context = kwargs.get("market_context", "")
         current_criteria = kwargs.get("current_criteria", {})
@@ -180,6 +191,7 @@ class StrategyGenerationStage(BaseStage):
         prev_reflection = kwargs.get("prev_reflection", "")
         next_prompt = kwargs.get("next_prompt", "")
         rag_experiences = kwargs.get("rag_experiences", "")
+        regime_type = kwargs.get("regime_type", "unknown")
 
         # 構建歷史摘要（含重複檢測）
         history_text = ""
@@ -281,8 +293,43 @@ class StrategyGenerationStage(BaseStage):
 
         error_lessons = error_store.format_errors_for_prompt("strategy_generation", limit=3)
 
+        # 構建市場形態策略指引
+        from app.services.regime_strategy import get_regime_strategy_guidance
+
+        regime_guidance = get_regime_strategy_guidance(regime_type)
+
+        # 獲取利好池/利空池（持續性利好/利空新聞，用於選股方向引導）
+        bullish_pool_text = "無（尚無持續性利好新聞評分）"
+        bearish_pool_text = "無（尚無持續性利空新聞評分）"
+        try:
+            from app.services import news_store
+
+            bullish = await news_store.get_bullish_pool(days_back=7, limit=10)
+            bearish = await news_store.get_bearish_pool(days_back=7, limit=10)
+            if bullish:
+                bullish_lines = []
+                for item in bullish[:10]:
+                    bullish_lines.append(
+                        f"- [{item.get('news_label', '')}] {item.get('title', '')} "
+                        f"(方向={item.get('direction')}, 持續性={item.get('sustainability')})"
+                    )
+                bullish_pool_text = "\n".join(bullish_lines)
+            if bearish:
+                bearish_lines = []
+                for item in bearish[:10]:
+                    bearish_lines.append(
+                        f"- [{item.get('news_label', '')}] {item.get('title', '')} "
+                        f"(方向={item.get('direction')}, 持續性={item.get('sustainability')})"
+                    )
+                bearish_pool_text = "\n".join(bearish_lines)
+        except Exception as e:
+            logger.warning(f"[AI2] 利好/利空池獲取失敗: {e}")
+
         prompt = PROMPT_TEMPLATE.format(
             market_context=market_context,
+            regime_guidance=regime_guidance,
+            bullish_pool_text=bullish_pool_text,
+            bearish_pool_text=bearish_pool_text,
             industry_text=industry_text,
             prev_reflection=prev_reflection if prev_reflection else "無",
             next_prompt=next_prompt if next_prompt else "無（按你的判斷生成）",

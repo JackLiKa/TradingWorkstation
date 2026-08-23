@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     backend_timeout: int = 600  # 後端調用超時（秒）
     backend_max_retries: int = 3  # 後端調用最大重試次數
 
+    # ===== API 安全 =====
+    api_key: str = ""  # API Key 認證（空則跳過認證，生產環境建議設置）
+
     # ===== Agent Service =====
     agent_port: int = 8100
     optimization_interval: int = 5  # 優化循環間隔（秒）
@@ -49,6 +52,13 @@ class Settings(BaseSettings):
     model_check_interval: int = 300  # 模型檢查間隔（秒）
     max_stagnant_iterations: int = 0  # 連續無進展自動停止閾值，0=不限制（保持兼容）
     multi_window_backtest: bool = False  # 多窗口回測評分：用 3 個時間窗口加權平均
+
+    # ===== 新聞自動同步 =====
+    news_sync_enabled: bool = True  # 是否啟用新聞自動同步
+    news_sync_interval: int = 360  # 同步間隔（秒，默認 6 分鐘）
+    news_sync_catchup_days: int = 7  # 啟動時補抓天數
+    news_sync_channels: str = "all"  # 同步頻道（all/a-stock/單頻道）
+    news_sync_catchup_on_startup: bool = True  # 啟動時是否執行補抓
 
     # ===== Per-stage provider =====
     stage_providers: dict[str, str] = {}  # 每階段供應商偏好

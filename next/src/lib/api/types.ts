@@ -472,8 +472,14 @@ export interface BacktestConfigDto {
   takeProfitPct?: number | null;
   /** 無風險年化利率（默認 0.02），用於夏普比率計算 */
   riskFreeRate?: number | null;
-  /** 滑點（基點，默認 0），買入價上浮、賣出價下浮 */
+  /** 滑點（基點，默認 5），買入價上浮、賣出價下浮 */
   slippageBps?: number | null;
+  /** 執行延遲天數（默認 1=T+1，0=T+0） */
+  executionDelay?: number | null;
+  /** 基準指數代碼（默認 sh.000001 上證綜指） */
+  benchmarkCode?: string | null;
+  /** 單筆買入不超過當日成交量的百分比（null 表示不限制） */
+  maxVolumePct?: number | null;
 }
 
 /** 回測請求（選股條件 + 回測配置） */
@@ -506,6 +512,28 @@ export interface BacktestStatistics {
   sharpe: number;
   rebalanceCount: number;
   totalTrades: number;
+  /** Sortino Ratio（只懲罰下行波動） */
+  sortino?: number;
+  /** Calmar Ratio（年化收益/最大回撤） */
+  calmar?: number;
+  /** Information Ratio（超額收益/跟蹤誤差） */
+  informationRatio?: number;
+  /** Beta（策略 vs 基準系統性風險） */
+  beta?: number;
+  /** Alpha（Jensen's Alpha） */
+  alpha?: number;
+  /** 勝率（盈利交易日佔比，%） */
+  winRate?: number;
+  /** 盈虧比（平均盈利/平均虧損） */
+  profitLossRatio?: number;
+  /** 年化換手率 */
+  annualTurnover?: number;
+  /** Deflated Sharpe Ratio（多重檢驗修正） */
+  deflatedSharpe?: number;
+  /** 試驗次數（用於 Deflated Sharpe 計算） */
+  nTrials?: number;
+  /** Probability of Backtest Overfitting */
+  pbo?: number;
 }
 
 /** 回測結果（配置 + 策略/基準/超額淨值曲線 + 調倉記錄 + 統計 + 日誌） */

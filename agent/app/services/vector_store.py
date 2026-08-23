@@ -30,21 +30,30 @@ _embedding_model = None
 _init_attempted = False
 _init_error = ""
 _init_fail_count = 0
+_last_init_attempt_time = 0.0
 _MAX_INIT_RETRIES = 3  # 最多重試 3 次，避免永久放棄
+_INIT_RECOVERY_SECONDS = 300  # 熔斷恢復時間：5 分鐘後允許重試
 
 
 def _try_init():
     """延遲初始化 Milvus 和 embedding 模型（首次使用時）。
 
     若初始化失敗，允許重試最多 _MAX_INIT_RETRIES 次，
-    避免因冷啟動時依賴未就緒而永久不可用。
+    達上限後進入熔斷狀態，_INIT_RECOVERY_SECONDS 後自動允許重試。
     """
-    global _milvus, _embedding_model, _init_attempted, _init_error, _init_fail_count
+    global _milvus, _embedding_model, _init_attempted, _init_error, _init_fail_count, _last_init_attempt_time
+    import time as _time
+    # 熔斷恢復檢查：超過恢復時間則重置計數，允許重試
     if _init_attempted and _init_fail_count >= _MAX_INIT_RETRIES:
-        return  # 已重試達上限，不再嘗試
+        if _time.time() - _last_init_attempt_time < _INIT_RECOVERY_SECONDS:
+            return  # 仍在熔斷期
+        # 恢復時間已過，重置計數允許重試
+        _init_fail_count = 0
+        logger.info(f"RAG: 熔斷恢復，重置初始化計數，允許重試")
     if _init_attempted and _milvus is not None and _embedding_model is not None:
         return  # 已成功初始化
     _init_attempted = True
+    _last_init_attempt_time = _time.time()
 
     try:
         from pymilvus import MilvusClient
@@ -234,18 +243,30 @@ def _enforce_retention():
         # 需要刪除的數量
         to_delete = count - _MAX_EXPERIENCES
         logger.info(f"RAG: 經驗數 {count} 超過上限 {_MAX_EXPERIENCES}，清理 {to_delete} 條低分舊經驗")
-        # 查詢最低分的記錄（按 composite_score 升序）
+        # 先嘗試清理負分經驗（明顯失敗的），不足時清理最低分正分經驗
         results = _milvus.query(
             collection_name=COLLECTION_NAME,
-            filter="composite_score < 0",  # 只清理負分（明顯失敗的）經驗
+            filter="composite_score < 0",  # 優先清理負分
             output_fields=["id"],
             limit=to_delete,
         )
-        if results:
-            ids_to_delete = [r["id"] for r in results if "id" in r]
-            if ids_to_delete:
-                _milvus.delete(collection_name=COLLECTION_NAME, ids=ids_to_delete)
-                logger.info(f"RAG: 已清理 {len(ids_to_delete)} 條低分經驗")
+        ids_to_delete = [r["id"] for r in results if "id" in r] if results else []
+        # 若負分經驗不足，補充清理最低分正分經驗
+        remaining = to_delete - len(ids_to_delete)
+        if remaining > 0:
+            positive_results = _milvus.query(
+                collection_name=COLLECTION_NAME,
+                filter="composite_score >= 0",  # 正分經驗中最低分
+                output_fields=["id", "composite_score"],
+                limit=remaining,
+            )
+            if positive_results:
+                # 按 composite_score 升序排序，取最低分
+                positive_results.sort(key=lambda r: r.get("composite_score", 0))
+                ids_to_delete.extend(r["id"] for r in positive_results if "id" in r)
+        if ids_to_delete:
+            _milvus.delete(collection_name=COLLECTION_NAME, ids=ids_to_delete)
+            logger.info(f"RAG: 已清理 {len(ids_to_delete)} 條低分經驗")
     except Exception as e:
         logger.debug(f"RAG 保留策略執行失敗（忽略）: {e}")
 

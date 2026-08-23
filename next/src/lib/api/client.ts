@@ -30,6 +30,16 @@ export class ApiError extends Error {
 // 經 next.config.js rewrites 代理到後端 http://localhost:8090/TradingWorkstation/api/...
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/TradingWorkstation';
 
+/** API Key（從環境變量讀取，若後端啟用認證則需設置 NEXT_PUBLIC_API_KEY） */
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
+
+/** 構建帶 API Key 的請求頭。 */
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
+  if (API_KEY) headers['X-API-Key'] = API_KEY;
+  return headers;
+}
+
 /**
  * 發送 GET 請求並解析後端統一響應格式。
  * @param input API 路徑（相對路徑如 `/dashboard/summary`，或完整 URL）
@@ -38,7 +48,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/TradingWorkstation';
  */
 export async function apiFetch<T>(input: string): Promise<T> {
   const url = input.startsWith('http') ? input : `${API_BASE}/api${input}`;
-  const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
+  const res = await fetch(url, { headers: authHeaders() });
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     try {
@@ -69,7 +79,7 @@ export async function apiPost<T>(input: string, payload: unknown, timeoutMs = 30
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
@@ -107,7 +117,7 @@ export async function apiPut<T>(input: string, payload: unknown): Promise<T> {
   const url = input.startsWith('http') ? input : `${API_BASE}/api${input}`;
   const res = await fetch(url, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
@@ -133,7 +143,7 @@ export async function apiPut<T>(input: string, payload: unknown): Promise<T> {
  */
 export async function apiDelete<T>(input: string): Promise<T> {
   const url = input.startsWith('http') ? input : `${API_BASE}/api${input}`;
-  const res = await fetch(url, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+  const res = await fetch(url, { method: 'DELETE', headers: authHeaders() });
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     try {

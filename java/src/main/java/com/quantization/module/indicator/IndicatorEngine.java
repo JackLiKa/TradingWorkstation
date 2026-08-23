@@ -67,15 +67,30 @@ public class IndicatorEngine {
      * 返回 null 表示数据不足或不可交易。
      */
     public IndicatorSnapshot buildSnapshot(String code, List<StockDaily> history, IndicatorConfig config) {
-        if (history == null || history.size() < 30) return null;
+        if (history == null || history.size() < 30) {
+            log.debug("指標計算跳過：歷史數據不足 {} < 30, code={}", history == null ? 0 : history.size(), code);
+            return null;
+        }
         StockDaily latest = history.get(history.size() - 1);
-        if (latest.closePrice() == null || latest.closePrice() <= 0) return null;
-        if (latest.tradeStatus() != null && latest.tradeStatus() != 1) return null;
-        if (latest.volume() == null || latest.amount() == null) return null;
+        if (latest.closePrice() == null || latest.closePrice() <= 0) {
+            log.debug("指標計算跳過：收盤價無效 {}, code={}", latest.closePrice(), code);
+            return null;
+        }
+        if (latest.tradeStatus() != null && latest.tradeStatus() != 1) {
+            log.debug("指標計算跳過：非正常交易狀態 {}, code={}", latest.tradeStatus(), code);
+            return null;
+        }
+        if (latest.volume() == null || latest.amount() == null) {
+            log.debug("指標計算跳過：成交量/成交額為 null, code={}", code);
+            return null;
+        }
 
         List<Double> closes = new ArrayList<>();
         for (StockDaily r : history) if (r.closePrice() != null) closes.add(r.closePrice());
-        if (closes.size() < 30) return null;
+        if (closes.size() < 30) {
+            log.debug("指標計算跳過：有效收盤價不足 {} < 30, code={}", closes.size(), code);
+            return null;
+        }
 
         // 基础字段 + 预计算上下文由引擎设置
         double amplitude = IndicatorMath.amplitude(latest);
