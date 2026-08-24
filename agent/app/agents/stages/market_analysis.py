@@ -162,6 +162,23 @@ class MarketAnalysisStage(BaseStage):
             few_shot=get_few_shot("market_analysis"),
         )
 
+        # === 工具調用：用 local_market_data 補充市場概覽數據（記錄引用出處）===
+        try:
+            tool_result = await self._call_tool(
+                "local_market_data",
+                action="market_overview",
+            )
+            if tool_result.success and tool_result.content:
+                prompt += f"\n\n### 工具補充市場概覽（local_market_data）\n{tool_result.content[:500]}"
+                logger.info(f"[AI1] 工具補充市場概覽: {len(tool_result.citations)} 條引用")
+        except Exception as e:
+            logger.debug(f"[AI1] 工具調用 local_market_data 失敗（非致命）: {e}")
+
+        # 注入工具調用引用來源（確保數據真實性可追溯）
+        citations_summary = self._get_tool_citations_summary()
+        if citations_summary:
+            prompt += f"\n\n{citations_summary}"
+
         response = await self._call_llm(SYSTEM_PROMPT, prompt)
         logger.info(f"[AI1 行情分析] {response[:100]}...")
         return response

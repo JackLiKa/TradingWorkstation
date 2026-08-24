@@ -26,6 +26,7 @@ from app.agents.charter import get_charter, get_recall_with_memory
 from app.agents.monitor import node_monitor
 from app.agents.seed_context import get_seed_context
 from app.agents.state import StageResult
+from app.agents.stages.tool_caller import StageToolCaller
 from app.core.llm_client import LLMResponse, llm_client
 
 logger = logging.getLogger("agent.stage")
@@ -39,6 +40,7 @@ class BaseStage(ABC):
         self.display_name = display_name
         self._current_iteration = 1  # 當前迭代輪次（供 _call_llm 注入憲章）
         self._last_llm_response = None  # LLM 響應緩存
+        self._tool_caller = StageToolCaller()  # 工具調用器（記錄引用出處）
 
     @abstractmethod
     async def execute(self, **kwargs) -> str:
@@ -272,6 +274,7 @@ class BaseStage(ABC):
             "attempts": attempts,
             "judge_score": judge_score,
             "judge_passed": judge_passed,
+            "tool_calls": self._tool_caller.to_dict() if self._tool_caller.tool_calls_log else None,
         }
         try:
             last_output_json = json.dumps(standard_output, ensure_ascii=False, default=str)
@@ -287,6 +290,8 @@ class BaseStage(ABC):
             attempts=attempts,
             duration_ms=duration_ms,
             error=last_error,
+            citations=self._tool_caller.citations.copy() if self._tool_caller.citations else [],
+            tool_calls_log=[r.__dict__ for r in self._tool_caller.tool_calls_log] if self._tool_caller.tool_calls_log else [],
         )
 
         # === 寫入 ai_call_log（後端數據庫）===
@@ -335,6 +340,29 @@ class BaseStage(ABC):
             )
 
         return response.text
+
+    async def _call_tool(self, tool_name: str, **kwargs):
+        """調用聊天工具（共用聊天引擎的工具註冊表）並記錄引用出處。
+
+        用於 AI 優化各階段主動調用工具獲取真實數據，調用結果和引用來源
+        會自動記錄到 StageResult.citations 和 ai_call_log。
+
+        Args:
+            tool_name: 工具名稱（如 "local_market_data", "open_web_search"）
+            **kwargs: 工具參數
+
+        Returns:
+            ToolResult: 工具調用結果（含 content + citations）
+        """
+        return await self._tool_caller.call(tool_name, **kwargs)
+
+    def _get_tool_citations_summary(self) -> str:
+        """獲取工具調用引用來源摘要 — 用於注入到 LLM prompt 中。"""
+        return self._tool_caller.get_citations_summary()
+
+    def _get_tool_calls_summary(self) -> str:
+        """獲取工具調用記錄摘要 — 用於注入到 LLM prompt 中。"""
+        return self._tool_caller.get_tool_calls_summary()
 
     async def _log_to_backend(
         self,

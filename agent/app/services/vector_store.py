@@ -118,13 +118,21 @@ EMBEDDING_DIM = 512  # bge-small-zh-v1.5 輸出維度
 
 
 def _ensure_collection():
-    """確保 Milvus collection 存在。"""
+    """確保 Milvus collection 存在且已載入（可搜索狀態）。"""
     if not _milvus:
         return False
     try:
         from pymilvus import DataType
 
         if _milvus.has_collection(COLLECTION_NAME):
+            # collection 已存在，確保它處於 loaded 狀態（可搜索）
+            # Milvus Lite 在長時間空閒或進程重啟後可能將 collection 釋放為 released 狀態，
+            # 導致 search/query 拋出 "Collection is in state 'released'; call load() before search/get/query"
+            try:
+                _milvus.load_collection(COLLECTION_NAME)
+            except Exception as load_err:
+                # 已 loaded 的 collection 重複 load 會拋異常，忽略即可
+                logger.debug(f"Milvus load_collection（已 loaded，忽略）: {load_err}")
             return True
         # 創建 collection schema
         schema = _milvus.create_schema(auto_id=False, enable_dynamic_field=True)
@@ -145,10 +153,12 @@ def _ensure_collection():
             schema=schema,
             index_params=index_params,
         )
-        logger.info(f"Milvus collection 創建: {COLLECTION_NAME}")
+        # 新建後立即 load，確保可搜索
+        _milvus.load_collection(COLLECTION_NAME)
+        logger.info(f"Milvus collection 創建並載入: {COLLECTION_NAME}")
         return True
     except Exception as e:
-        logger.warning(f"Milvus collection 創建失敗: {e}")
+        logger.warning(f"Milvus collection 創建/載入失敗: {e}")
         return False
 
 

@@ -282,6 +282,7 @@ agent_json_failure_total{recovered="true",stage="strategy_generation"} 1
 - 存儲：**Milvus Lite 嵌入式**（`data/milvus_lite.db`，無需獨立服務）
 - 檢索：COSINE，top_k=3，min_similarity=0.3，且只召回達標的**成功經驗**
 - 去重：內容哈希精確去重 + 相似度 ≥0.98 近似去重；上限 1000 條
+- **Collection 自動載入**：`_ensure_collection()` 在 collection 已存在時自動調用 `load_collection()`，解決長時間空閒後 collection 被 release 導致 search 失敗的問題
 
 ### 7.3 其他
 - `error_store.py`：`data/error_experiences.json`（200 條上限）
@@ -623,3 +624,32 @@ flowchart TD
 - `GET /api/agent/data-quality/rules` — 獲取規則列表
 - `POST /api/agent/data-quality/run` — 執行檢查
 - `POST /api/agent/data-quality/run-with-ai-summary` — 執行檢查 + AI 總結
+
+### 13.8 AI 優化階段工具調用（StageToolCaller）
+
+`agent/app/agents/stages/tool_caller.py` 提供 `StageToolCaller`，讓 AI 優化各階段能調用聊天工具 + MCP + 記錄引用出處。
+
+**設計目標**：
+1. 讓 AI 優化各階段（market_news / industry_analysis / market_analysis / strategy_generation）能像聊天引擎一樣調用工具
+2. 每次工具調用都記錄引用來源（citations），確保數據真實性可追溯
+3. 工具調用結果注入到階段的 prompt 中，讓 LLM 基於真實數據生成分析
+
+**與聊天引擎的區別**：
+- 聊天引擎：LLM 自主決定調用哪些工具（function calling 循環）
+- 階段工具調用器：階段代碼主動調用特定工具（確定性調用，不依賴 LLM 決策）
+
+**各階段工具調用**：
+
+| 階段 | 調用工具 | 用途 |
+|------|----------|------|
+| AI 0 market_news | `open_web_search` | 補充實時新聞（識別漲幅最大行業做搜索） |
+| AI 0.5 industry_analysis | `local_market_data` (action=industry_prosperity) | 補充行業景氣度數據 |
+| AI 1 market_analysis | `local_market_data` (action=market_overview) | 補充市場概覽數據 |
+| AI 2 strategy_generation | `local_market_data` (action=screener) | 補充選股數據 |
+
+**引用記錄流程**：
+1. 階段調用 `_call_tool(tool_name, **kwargs)` → `StageToolCaller.call()`
+2. 工具返回 `ToolResult`（含 content + citations）
+3. citations 自動收集到 `_tool_caller.citations`
+4. 引用摘要注入到 LLM prompt（`_get_tool_citations_summary()`）
+5. 階段結束時 citations 寫入 `StageResult.citations` 和 `ai_call_log.output_json.tool_calls`

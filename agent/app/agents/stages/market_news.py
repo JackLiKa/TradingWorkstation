@@ -233,9 +233,29 @@ class MarketNewsStage(BaseStage):
         keyword_news = await _search_keyword_news(sector_perf)
         keyword_news_text = _format_keyword_news(keyword_news)
 
+        # === 工具調用：用 open_web_search 補充實時新聞（記錄引用出處）===
+        tool_news_text = ""
+        try:
+            # 識別漲幅最大行業做為搜索關鍵詞
+            top_sectors = sorted(sector_perf, key=lambda s: s.get("change_pct", 0), reverse=True)[:2]
+            if top_sectors:
+                top_industry = top_sectors[0].get("industry", "A股")
+                tool_result = await self._call_tool(
+                    "open_web_search",
+                    query=f"{top_industry} A股 利好 2026",
+                    max_results=5,
+                )
+                if tool_result.success and tool_result.content:
+                    tool_news_text = f"\n### 工具補充新聞（open_web_search）\n{tool_result.content[:800]}\n"
+                    logger.info(f"[AI0] 工具補充新聞: {len(tool_result.citations)} 條引用")
+        except Exception as e:
+            logger.debug(f"[AI0] 工具調用 open_web_search 失敗（非致命）: {e}")
+
         # === 新聞去重 + 優先級合併 ===
-        # 三個來源可能重複，按 wscn（已重排序）> news > keyword_news 優先級去重
+        # 四個來源可能重複，按 wscn（已重排序）> news > keyword_news > tool_news 優先級去重
         merged_news_text = _merge_news_dedup(news, wscn_news_text, keyword_news_text)
+        if tool_news_text:
+            merged_news_text += tool_news_text
 
         # 構建歷史摘要（最近 5 輪，冷啟動時由種子上下文補充）
         history_text = ""
@@ -255,6 +275,11 @@ class MarketNewsStage(BaseStage):
             history_text=history_text if history_text else "無（首輪）",
             few_shot=get_few_shot("market_news"),
         )
+
+        # 注入工具調用引用來源（確保數據真實性可追溯）
+        citations_summary = self._get_tool_citations_summary()
+        if citations_summary:
+            prompt += f"\n\n{citations_summary}"
 
         response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
         logger.info(f"[AI0 行情新聞] {response[:100]}...")

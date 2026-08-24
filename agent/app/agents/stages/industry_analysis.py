@@ -159,6 +159,19 @@ class IndustryAnalysisStage(BaseStage):
             logger.warning(f"[AI0.5] 輪動預測獲取失敗: {e}")
             rotation_text = "數據不足，無法提供輪動預測"
 
+        # === 工具調用：用 local_market_data 補充行業景氣度數據（記錄引用出處）===
+        try:
+            tool_result = await self._call_tool(
+                "local_market_data",
+                action="industry_prosperity",
+            )
+            if tool_result.success and tool_result.content:
+                # 將工具返回的景氣度數據追加到 prompt 中
+                prosperity_text += f"\n\n### 工具補充景氣度（local_market_data）\n{tool_result.content[:500]}"
+                logger.info(f"[AI0.5] 工具補充景氣度: {len(tool_result.citations)} 條引用")
+        except Exception as e:
+            logger.debug(f"[AI0.5] 工具調用 local_market_data 失敗（非致命）: {e}")
+
         prompt = PROMPT_TEMPLATE.format(
             market_news=market_news_summary,  # 結構化摘要而非截斷原文
             industry_daily=industry_daily_text,
@@ -168,6 +181,11 @@ class IndustryAnalysisStage(BaseStage):
             rotation_data=rotation_text,
             few_shot=get_few_shot("industry_analysis"),
         )
+
+        # 注入工具調用引用來源（確保數據真實性可追溯）
+        citations_summary = self._get_tool_citations_summary()
+        if citations_summary:
+            prompt += f"\n\n{citations_summary}"
 
         response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
         logger.info(f"[AI0.5 行業分析] {response[:100]}...")

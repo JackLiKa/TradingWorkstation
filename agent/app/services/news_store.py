@@ -918,7 +918,9 @@ async def get_bullish_pool(
             )
             resp.raise_for_status()
             data = resp.json()
-            items = data.get("data", {}).get("items", [])
+            # 後端返回 ApiResponse<List<...>>，data 字段直接是列表
+            raw = data.get("data", [])
+            items = raw if isinstance(raw, list) else raw.get("items", [])
             logger.info(f"[news_store] 利好池查詢: {len(items)} 條持續性利好")
             return items
     except Exception as e:
@@ -966,7 +968,9 @@ async def get_bearish_pool(
             )
             resp.raise_for_status()
             data = resp.json()
-            items = data.get("data", {}).get("items", [])
+            # 後端返回 ApiResponse<List<...>>，data 字段直接是列表
+            raw = data.get("data", [])
+            items = raw if isinstance(raw, list) else raw.get("items", [])
             logger.info(f"[news_store] 利空池查詢: {len(items)} 條持續性利空")
             return items
     except Exception as e:

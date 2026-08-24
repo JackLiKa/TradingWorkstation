@@ -378,7 +378,24 @@ class StrategyGenerationStage(BaseStage):
                     prompt = prompt.replace(original_text, truncated)
                     logger.info(f"[AI2] 精簡 {section_header}: {len(original_text)} → {len(truncated)} 字")
 
-        response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
+        # === 工具調用：用 local_market_data 補充選股數據（記錄引用出處）===
+        try:
+            tool_result = await self._call_tool(
+                "local_market_data",
+                action="screener",
+                conditions={},
+                limit=10,
+            )
+            if tool_result.success and tool_result.content:
+                prompt += f"\n\n### 工具補充選股數據（local_market_data）\n{tool_result.content[:500]}"
+                logger.info(f"[AI2] 工具補充選股: {len(tool_result.citations)} 條引用")
+        except Exception as e:
+            logger.debug(f"[AI2] 工具調用 local_market_data 失敗（非致命）: {e}")
+
+        # 注入工具調用引用來源（確保數據真實性可追溯）
+        citations_summary = self._get_tool_citations_summary()
+        if citations_summary:
+            prompt += f"\n\n{citations_summary}"
 
         response = await self._call_llm(SYSTEM_PROMPT, prompt, json_mode=True)
         logger.info(f"[AI2 策略生成] {response[:100]}...")

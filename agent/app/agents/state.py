@@ -119,6 +119,8 @@ class StageResult:
     attempts: int = 1  # 嘗試次數（含重試）
     duration_ms: int = 0  # 執行耗時（毫秒）
     error: str | None = None  # 異常信息，無異常時為 None
+    citations: list[dict[str, Any]] = field(default_factory=list)  # 工具調用引用來源
+    tool_calls_log: list[dict[str, Any]] = field(default_factory=list)  # 工具調用記錄
 
     def to_dict(self) -> dict:
         """將結果序列化為字典，用於 API 返回和 JSON 存儲。"""
