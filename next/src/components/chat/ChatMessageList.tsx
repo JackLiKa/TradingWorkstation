@@ -3,9 +3,10 @@
 /**
  * @file ChatMessageList — 消息列表组件，渲染用户和 AI 消息。
  * AI 消息支持 Markdown 渲染和引用来源展示。
+ * 流式輸出時顯示思考動畫 + 工具調用實時狀態。
  */
 
-import { Bot, User, Wrench, Loader2, CheckCircle2, XCircle, ExternalLink } from 'lucide-react';
+import { Bot, User, Wrench, Loader2, CheckCircle2, XCircle, ExternalLink, Brain, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ChatMessage as ChatMessageType, Citation } from '@/lib/api/chat';
 
@@ -13,6 +14,7 @@ interface ChatMessageListProps {
   messages: ChatMessageType[];
   streamingContent: string;
   activeToolCalls: { tool: string; status: 'running' | 'done' | 'error' }[];
+  thinkingMessage?: string;
 }
 
 /** 解析 citations JSON */
@@ -55,28 +57,66 @@ function CitationsDisplay({ citations }: { citations: Citation[] }) {
   );
 }
 
+/** 工具名稱中文映射 */
+const TOOL_NAME_MAP: Record<string, string> = {
+  open_web_search: '全網資訊檢索',
+  exa_search: '深度語義搜索',
+  baidu_search: '百度中文搜索',
+  grep_app_search: '開源代碼搜索',
+  context7_search: '文檔搜索',
+  local_market_data: '本地市場數據',
+  ftshare_mcp: 'FTShare 金融數據',
+  a_share_mcp: 'A股歷史數據',
+};
+
+/** 渲染思考中動畫 */
+function ThinkingIndicator({ message }: { message: string }) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-accent/80 px-2 py-1.5 rounded bg-accent/5 mb-2">
+      <div className="relative flex items-center justify-center w-4 h-4">
+        <Brain className="w-4 h-4 animate-pulse" />
+        <Sparkles className="absolute w-2 h-2 text-accent animate-ping" style={{ top: -2, right: -2 }} />
+      </div>
+      <span className="animate-pulse">{message}</span>
+      <div className="flex gap-0.5 ml-auto">
+        <span className="w-1 h-1 rounded-full bg-accent/60 animate-bounce" style={{ animationDelay: '0ms' }} />
+        <span className="w-1 h-1 rounded-full bg-accent/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+        <span className="w-1 h-1 rounded-full bg-accent/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+      </div>
+    </div>
+  );
+}
+
 /** 渲染工具调用状态 */
 function ToolCallStatus({ toolCalls }: { toolCalls: { tool: string; status: 'running' | 'done' | 'error' }[] }) {
   if (toolCalls.length === 0) return null;
   return (
     <div className="mb-2 space-y-1">
-      {toolCalls.map((tc, i) => (
-        <div
-          key={i}
-          className={cn(
-            'flex items-center gap-1.5 text-xs px-2 py-1 rounded',
-            tc.status === 'running' && 'bg-blue-500/10 text-blue-400',
-            tc.status === 'done' && 'bg-green-500/10 text-green-400',
-            tc.status === 'error' && 'bg-red-500/10 text-red-400'
-          )}
-        >
-          <Wrench className="w-3 h-3" />
-          <span>{tc.tool}</span>
-          {tc.status === 'running' && <Loader2 className="w-3 h-3 animate-spin ml-auto" />}
-          {tc.status === 'done' && <CheckCircle2 className="w-3 h-3 ml-auto" />}
-          {tc.status === 'error' && <XCircle className="w-3 h-3 ml-auto" />}
-        </div>
-      ))}
+      {toolCalls.map((tc, i) => {
+        const displayName = TOOL_NAME_MAP[tc.tool] || tc.tool;
+        return (
+          <div
+            key={i}
+            className={cn(
+              'flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-colors',
+              tc.status === 'running' && 'bg-blue-500/10 text-blue-400',
+              tc.status === 'done' && 'bg-green-500/10 text-green-400',
+              tc.status === 'error' && 'bg-red-500/10 text-red-400'
+            )}
+          >
+            <Wrench className="w-3 h-3 flex-shrink-0" />
+            <span className="truncate">{displayName}</span>
+            {tc.status === 'running' && (
+              <span className="flex items-center gap-1 ml-auto text-blue-400/70">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span className="text-[10px]">查詢中</span>
+              </span>
+            )}
+            {tc.status === 'done' && <CheckCircle2 className="w-3 h-3 ml-auto flex-shrink-0" />}
+            {tc.status === 'error' && <XCircle className="w-3 h-3 ml-auto flex-shrink-0" />}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -264,7 +304,7 @@ function renderInline(text: string): React.ReactNode {
   return parts;
 }
 
-export function ChatMessageList({ messages, streamingContent, activeToolCalls }: ChatMessageListProps) {
+export function ChatMessageList({ messages, streamingContent, activeToolCalls, thinkingMessage }: ChatMessageListProps) {
   return (
     <>
       {messages.map(msg => {
@@ -299,12 +339,15 @@ export function ChatMessageList({ messages, streamingContent, activeToolCalls }:
       })}
 
       {/* 流式输出中的 AI 回复 */}
-      {(streamingContent || activeToolCalls.length > 0) && (
+      {(streamingContent || activeToolCalls.length > 0 || thinkingMessage) && (
         <div className="flex gap-2 flex-row">
           <div className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-accent/20">
             <Bot className="w-4 h-4 text-accent" />
           </div>
           <div className="flex-1 max-w-[85%] bg-bg-hover rounded-lg p-2">
+            {thinkingMessage && !streamingContent && (
+              <ThinkingIndicator message={thinkingMessage} />
+            )}
             <ToolCallStatus toolCalls={activeToolCalls} />
             {streamingContent && (
               <div className="prose prose-sm prose-invert max-w-none">

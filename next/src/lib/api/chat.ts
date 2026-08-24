@@ -79,6 +79,12 @@ export interface SSEContent {
   text: string;
 }
 
+export interface SSEThinking {
+  type: 'thinking';
+  round: number;
+  message: string;
+}
+
 export interface SSEDone {
   type: 'done';
   provider: string;
@@ -93,7 +99,7 @@ export interface SSEError {
   message: string;
 }
 
-export type SSEEvent = SSEToolStart | SSEToolEnd | SSEContent | SSEDone | SSEError;
+export type SSEEvent = SSEToolStart | SSEToolEnd | SSEContent | SSEThinking | SSEDone | SSEError;
 
 // ===== Java 後端 API（對�?CRUD�?====
 

@@ -5,7 +5,7 @@
 - `java/` — 后端：Java 21 + Spring Boot 3.3 + Spring Data JPA + Caffeine
   - 入口：`src/main/java/com/quantization/QuantizationApplication.java`
   - 配置：`src/main/resources/application.yml`（从 `.env` 读取）
-  - 模块：`com.quantization.module.{stock,industry,forecast,indicator,dashboard,screener,backtest,chart,sync,system,preference,aicalllog,news,chat}`（**14 個模塊**，`stock` 已三分拆為 `stock`（行情）+ `industry`（景氣度）+ `forecast`（預測），`aicalllog` 為 AI 調用日誌，`news` 為財經新聞，`chat` 為 AI 聊天對話持久化）
+  - 模块：`com.quantization.module.{stock,industry,forecast,indicator,dashboard,screener,backtest,chart,sync,system,preference,aicalllog,news,chat,agentstate,dailydigest,snapshot}`（**17 個模塊**，`stock` 已三分拆為 `stock`（行情）+ `industry`（景氣度）+ `forecast`（預測），`aicalllog` 為 AI 調用日誌，`news` 為財經新聞，`chat` 為 AI 聊天對話持久化，`agentstate` 為 Agent 三層狀態持久化，`dailydigest` 為當日市場摘要持久化，`snapshot` 為行情預計算快照查詢）
   - 行業分析：`module.industry` 含行業景氣度計算、異常預警；`module.forecast` 含輪動預測、Markov 模型、多模型預測（ARIMA/Holt-Winters/線性回歸）、AutoML 調參、季節性分析、回測驗證
   - 指標引擎：`module.indicator` 已改為 `IndicatorCalculator` 註冊表模式（`Map<String,IndicatorCalculator>`），新增指標只需實現接口 + `@Component`，無需改 `IndicatorEngine`
   - 通知服務：`module.system` 含 `NotificationService`（SMTP 郵件 + Webhook，異步推送，獨立 `notificationExecutor` 線程池）+ `ProsperityAlertScheduler`（P4-8：可配置定時調度，`ALERT_SCHEDULER_ENABLED=true` + cron，預設關閉）
@@ -14,7 +14,10 @@
   - API 安全：`SecurityConfig` + `ApiKeyFilter`（`SECURITY_ENABLED=true` + `API_KEY` 環境變量啟用，開發環境默認關閉）；Agent 端 `ApiKeyMiddleware`（`API_KEY` 非空時啟用）
   - 數據同步：`module.sync` 含 `QuarterlyRefreshScheduler`（每季度自動全刷 adjustflag=2 前復權數據，消除陳舊化，`SYNC_QUARTERLY_REFRESH=true`）
   - 財經新聞：`module.news` 提供華爾街見聞新聞的查詢與管理（`financial_news` 表，URI 去重）；新聞抓取由 Agent 服務的 `wallstreetcn_client.py` + `news_store.py`（MySQL + Milvus 向量庫雙寫）負責，後端僅負責已入庫新聞的分頁查詢與過期清理
-  - AI 聊天：`module.chat` 提供 AI 投研聊天的對話持久化（`chat_conversation` + `chat_message` 表，單用戶模式 user_id='default'）；前端懸浮卡片發送消息 → Java 保存用戶消息 → Agent SSE 流式回復（ToolCalling + 7 工具）→ Java 保存 AI 回復（含引用來源 JSON）；支持歷史對話切換、模型選擇、引用追溯
+  - AI 聊天：`module.chat` 提供 AI 投研聊天的對話持久化（`chat_conversation` + `chat_message` 表，單用戶模式 user_id='default'）；前端懸浮卡片發送消息 → Java 保存用戶消息 → Agent SSE 流式回復（ToolCalling + 8 工具 + thinking 事件思考動畫）→ Java 保存 AI 回復（含引用來源 JSON）；支持歷史對話切換、模型選擇、引用追溯
+  - 行情預計算快照：`module.snapshot` 提供預計算的行情分析快照查詢（`market_analysis_snapshot` 表）；快照由 `ingestion/precompute_market_snapshot.py` 在數據更新後自動計算並寫入（4 種快照：market_overview / industry_prosperity / rotation_signals / market_breadth）；前端通過 `/api/snapshot` 端點直接讀取，毫秒級加載，支持歷史快照回看
+  - Agent 狀態持久化：`module.agentstate` 提供 Agent 優化器三層狀態（記憶→文件→DB）的 DB 持久化層（`agent_state` 表，單行 upsert 模式）；Agent 通過 `backend_client.save_agent_state()` / `load_agent_state()` 實現跨重啟恢復
+  - 當日市場摘要：`module.dailydigest` 提供當日市場摘要的 DB 持久化（`daily_market_digest` 表，按交易日 upsert）；Agent 的 `daily_digest.py` 生成摘要後持久化，同交易日內複用避免重複工具調用
   - 緩存：已按域拆名（`STOCK_DAILY_CACHE`/`INDUSTRY_DAILY_CACHE`/`FORECAST_CACHE`/`ROTATION_CACHE`），各域獨立 TTL
   - 构建：`mvn -DskipTests compile`（需 JDK 21）
   - 运行：`mvn spring-boot:run`，默认 `http://localhost:8090`，**context-path 默認 `/TradingWorkstation`**，Swagger `/TradingWorkstation/swagger-ui.html`
@@ -32,13 +35,16 @@
   - LLM 供應商：DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin、ox-alpha（8 個供應商，按階段性價比路由）+ 熔斷器（CircuitBreaker，連續失敗 3 次暫停 5 分鐘）
   - 財經新聞：`agent/app/services/wallstreetcn_client.py`（華爾街見聞公開 API 抓取，無需 API Key）+ `news_store.py`（MySQL `financial_news` 表 + Milvus 向量庫雙寫，30 天 TTL，URI 去重）；`market_news.py` 階段集成語義檢索 + 實時抓取，按強弱勢行業關鍵詞補充搜索；Agent 端點 `/api/agent/news/sync`、`/news/wallstreetcn/search`、`/news/wallstreetcn/latest`、向量語義檢索
   - 優化循環改進：`optimizer.py` 防死循環（連續重複回退注入強變異 next_prompt）；`scoring.py` 新增超額收益(excessReturn) + 交易活躍度(totalTrades)評分維度，懲罰空倉「假穩健」；`strategy_generation.py` 重複策略警告 + 超短線交易鐵律
-  - AI 聊天（懸浮卡片）：`agent/app/chat/` 模組提供 ToolCalling 聊天引擎 + 7 工具（5 個直接 API 工具 + 2 個 MCP 協議工具）；`engine.py` 編排 LLM 調用 + 工具調用循環（最多 5 輪）；SSE 流式端點 `/api/agent/chat/stream`；工具分兩類：Tools（`open_web_search`/`exa_search`/`baidu_search`/`grep_app_search`/`context7_search`）+ MCP（`ftshare_mcp`/`a_share_mcp`）；環境變量 `EXA_API_KEY`/`BAIDU_QIANFAN_API_KEY`/`FTSHARE_MCP_URL`/`A_SHARE_MCP_URL`
-  - 測試：`cd agent && python -m pytest tests/`（23 個測試文件，342 個測試，覆蓋率門檻 40%）
+  - AI 聊天（懸浮卡片）：`agent/app/chat/` 模組提供 ToolCalling 聊天引擎 + 8 工具（6 個直接 API 工具 + 2 個 MCP 協議工具）；`engine.py` 編排 LLM 調用 + 工具調用循環（最多 5 輪）+ thinking 事件（每輪 LLM 調用前發送思考動畫）；SSE 流式端點 `/api/agent/chat/stream`；工具分兩類：Tools（`local_market_data`/`open_web_search`/`exa_search`/`baidu_search`/`grep_app_search`/`context7_search`）+ MCP（`ftshare_mcp`/`a_share_mcp`）；`local_market_data` 優先查詢本地數據庫（9 個 action：market_overview/index_history/sector_performance/industry_prosperity/rotation_signals/market_breadth/local_news/screener/data_range）；環境變量 `EXA_API_KEY`/`BAIDU_QIANFAN_API_KEY`/`FTSHARE_MCP_URL`/`A_SHARE_MCP_URL`
+  - 數據質量監控：`agent/app/services/data_quality.py` 提供 10 條 SQL 規則的數據質量檢查（重複行/非法值/陳舊化/缺失/行數統計）；每條規則獨立 DB 連接，避免一個超時影響後續；API 端點 `/api/agent/data-quality/run`、`/run-with-ai-summary`（免費 LLM 做自然語言總結，SQL 規則做檢測，零幻覺風險）
+  - 測試：`cd agent && python -m pytest tests/`（398 個測試，覆蓋率門檻 40%）
+  - 回顧分析 AI：`stages/retrospective.py` 每 5 輪優化自動觸發，分析最近 5 輪各 AI 節點輸入輸出，生成結構化 JSON（findings/optimization_summary/improvement_plan），注入下一輪 prompt；手動觸發 `POST /api/agent/retrospective/trigger`，查詢 `GET /api/agent/retrospective/latest`
+  - 當日市場摘要 AI：`services/daily_digest.py` 按需生成當日市場摘要（指數+板塊+新聞+情緒），同交易日複用（`force=false`）或強制刷新（`force=true`）；持久化到 Java `daily_market_digest` 表；端點 `POST /api/agent/daily-digest/generate`、`GET /api/agent/daily-digest/{trade_date}`、`GET /api/agent/daily-digest/latest`
   - 監控：`/api/agent/metrics`（Prometheus 指標端點）
   - 运行：`uvicorn app.main:app`，默认 `http://localhost:8100`，Swagger `/docs`
-- `ingestion/` — Python Baostock 数据采集（由后端 sync 模块编排；已拆分為 `baostock_fetch.py`（API 調用層）+ `baostock_write.py`（DB 寫入層）+ `baostock_ingest.py`（入口/CLI/菜單）；寫入 stock_daily / index_daily / index_metadata / stock_industry / **industry_daily 聚合**；⚠️ 前復權(adjustflag=2)增量陳舊化風險，每季度需跑 `--full-refresh-adjustflag2`；支持 `--progress-json` JSON 進度協議）
+- `ingestion/` — Python Baostock 数据采集（由后端 sync 模块编排；已拆分為 `baostock_fetch.py`（API 調用層）+ `baostock_write.py`（DB 寫入層）+ `baostock_ingest.py`（入口/CLI/菜單）+ `precompute_market_snapshot.py`（行情預計算）；寫入 stock_daily / index_daily / index_metadata / stock_industry / **industry_daily 聚合** / **market_analysis_snapshot 預計算快照**；⚠️ 前復權(adjustflag=2)增量陳舊化風險，每季度需跑 `--full-refresh-adjustflag2`；支持 `--progress-json` JSON 進度協議；數據更新完成後自動觸發預計算生成行情分析快照）
 - `docs/` — 完整文檔：`architecture.md`（架構+C4）、`MODULE_GUIDE.md`（模塊一覽）、`api.md`（API 參考）、`database.md`（Schema+ER）、`BACKTEST_ENGINE.md`、`AGENT_SERVICE.md`、`DATA_INGESTION.md`、`DEPLOYMENT.md`、`DEVELOPMENT.md`
-- `.env` / `.env.example` — 环境变量（数据库连接、查询默认值、同步配置）
+- `.env` / `.env.example` — 环境变量（数据库连接、查询默认值、同步配置）；`java/.env.example` 為 Java 後端自足配置（可獨立於根目錄 .env）
 
 ## 服务端口总览
 
@@ -151,7 +157,10 @@ java -version
 
 # ===== 1. 启动 Java 后端（端口 8090）=====
 # 注意：mvn spring-boot:run 不会自动加载 .env，需先手动加载
-Get-Content "A:\project\Trading Workstation\.env" | ForEach-Object {
+# 优先 java/.env（自足模式），降级到根目录 .env
+$envFile = "A:\project\Trading Workstation\java\.env"
+if (-not (Test-Path $envFile)) { $envFile = "A:\project\Trading Workstation\.env" }
+Get-Content $envFile | ForEach-Object {
     if ($_ -match '^\s*([A-Z_]+)\s*=\s*(.+)$') {
         Set-Item -Path "env:$($matches[1])" -Value $matches[2].Trim('"').Trim("'")
     }

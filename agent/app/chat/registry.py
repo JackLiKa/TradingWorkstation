@@ -87,6 +87,14 @@ def init_tools() -> None:
     except Exception as e:
         logger.warning(f"工具 context7_search 註冊失敗: {e}")
 
+    # === 本地數據查詢工具（查詢 Java 後端已採集的行情/行業/新聞數據）===
+    try:
+        from app.chat.tools.local_market_data import LocalMarketDataTool
+
+        registry.register(LocalMarketDataTool())
+    except Exception as e:
+        logger.warning(f"工具 local_market_data 註冊失敗: {e}")
+
     # === MCP（MCP 協議客戶端）===
     try:
         from app.chat.mcp.ftshare_mcp import FtshareMcpTool

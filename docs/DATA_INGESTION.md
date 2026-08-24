@@ -325,3 +325,59 @@ pip install -r ingestion/requirements.txt   # baostock, pymysql, python-dotenv
 | 3 | `industry_daily` 只在帶 `--industry` 的運行末尾重算——單獨補 stock_daily 後行業數據不會自動更新 |
 | 4 | `stock_industry` 只存最新分類快照，無歷史時點（survivorship bias 來源） |
 | 5 | 前復權增量陳舊化（見 §6），每季度需手動全量刷新 |
+
+---
+
+## 13. 行情預計算（precompute_market_snapshot.py）
+
+> **新增**：數據更新完成後自動觸發行情預計算，生成分析快照持久化到 `market_analysis_snapshot` 表，前端直接加載快照，毫秒級響應。
+
+### 13.1 觸發機制
+
+`baostock_ingest.py` 在 CLI 模式和交互式模式完成數據寫入後，自動調用 `precompute_market_snapshot.py --auto`：
+
+```python
+# baostock_ingest.py 完成數據寫入後
+if grand_total > 0:
+    subprocess.run([sys.executable, "precompute_market_snapshot.py", "--auto"], timeout=300)
+```
+
+- **自動觸發**：無需人工干預，數據更新後自動計算
+- **失敗不阻塞**：預計算失敗不影響數據同步結果（`--auto` 模式）
+- **手動觸發**：`python ingestion/precompute_market_snapshot.py` 或 `--date YYYY-MM-DD`
+
+### 13.2 預計算內容
+
+| 快照類型 | 內容 | 計算來源 |
+|----------|------|----------|
+| `market_overview` | 指數漲跌 + 漲跌家數 + 成交額匯總 | stock_daily + index_daily |
+| `industry_prosperity` | 81 個行業 4 維度評分（動量/資金/活躍度/廣度）+ 等級 | industry_daily |
+| `rotation_signals` | 行業短期(5天) vs 長期(20天)動量對比 + 輪動信號 | industry_daily |
+| `market_breadth` | 最近 10 天漲跌家數歷史 | stock_daily |
+
+### 13.3 持久化
+
+- **表**：`market_analysis_snapshot`
+- **唯一鍵**：`(trade_date, snapshot_type)` — UPSERT 語義，重複運行安全
+- **歷史可追蹤**：每個交易日一組快照，支持回看任意交易日的市場狀態
+- **格式版本**：`data_version` 字段標記快照格式版本，便於未來遷移
+
+### 13.4 前端消費
+
+前端通過 Java 後端 `/api/snapshot` 端點讀取快照：
+- `GET /api/snapshot` — 獲取最新交易日的全部快照
+- `GET /api/snapshot?tradeDate=YYYY-MM-DD` — 獲取指定交易日的快照
+- `GET /api/snapshot/dates` — 獲取可用日期列表（歷史回看）
+
+### 13.5 驗證
+
+```bash
+# 手動執行預計算
+python ingestion/precompute_market_snapshot.py
+
+# 指定交易日
+python ingestion/precompute_market_snapshot.py --date 2026-08-24
+
+# 驗證快照已寫入
+mysql -u root -p a_stock_baostock -e "SELECT trade_date, snapshot_type, computed_at FROM market_analysis_snapshot ORDER BY trade_date DESC LIMIT 10;"
+```

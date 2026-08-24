@@ -40,7 +40,8 @@ src/
 │   ├── agent/                    # 10 個（工作流圖/監控/供應商選擇…）
 │   ├── backtest/                 # 5 個（淨值曲線/調倉明細/策略對比…）
 │   ├── chart/                    # 2 個（K 線圖/技術指標）
-│   ├── dashboard/                # 6 個（指標卡/波動榜/行情表…）
+│   ├── chat/                     # 4 個（FloatingChatCard/ChatMessageList/ChatInput/ConversationList）— AI 投研聊天懸浮卡片，SSE 流式 + thinking 動畫 + 工具調用實時展示
+│   ├── dashboard/                # 7 個（指標卡/波動榜/行情表/MarketSnapshotPanel 行情預計算快照面板…）
 │   ├── industry/                 # 21 個（景氣度/輪動/Markov/預測/資金流…）
 │   ├── screener/                 # 4 個（條件面板/結果表…）
 │   ├── layout/                   # 5 個（Sidebar/Topbar/DbStatusBanner/LoadingOverlay/AppProviders）

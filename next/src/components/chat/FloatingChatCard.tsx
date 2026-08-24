@@ -32,6 +32,7 @@ export function FloatingChatCard() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [activeToolCalls, setActiveToolCalls] = useState<{ tool: string; status: 'running' | 'done' | 'error' }[]>([]);
+  const [thinkingMessage, setThinkingMessage] = useState('');
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -133,6 +134,7 @@ export function FloatingChatCard() {
     setIsStreaming(true);
     setStreamingContent('');
     setActiveToolCalls([]);
+    setThinkingMessage('AI 正在分析您的問題...');
     setError('');
 
     // 构建消息历史（含当前消息）
@@ -152,7 +154,11 @@ export function FloatingChatCard() {
 
       for await (const event of generator) {
         switch (event.type) {
+          case 'thinking':
+            setThinkingMessage(event.message);
+            break;
           case 'tool_start':
+            setThinkingMessage('');
             setActiveToolCalls(prev => [...prev, { tool: event.tool, status: 'running' }]);
             break;
           case 'tool_end':
@@ -163,19 +169,19 @@ export function FloatingChatCard() {
                   : tc
               )
             );
-            if (event.citations) {
-              allCitations = [...allCitations, ...event.citations];
-            }
+            // 不在 tool_end 累積 citations — done 事件已包含壓縮後的完整列表
             break;
           case 'content':
+            setThinkingMessage('');
             fullContent += event.text;
             setStreamingContent(fullContent);
             break;
           case 'done':
             provider = event.provider;
             model = event.model;
-            allCitations = [...allCitations, ...event.citations];
-            toolCallsLog = event.tool_calls_log;
+            // 直接使用 done 事件的壓縮 citations，不追加到 tool_end 累積的列表
+            allCitations = event.citations || [];
+            toolCallsLog = event.tool_calls_log || [];
             tokens = event.tokens;
             break;
           case 'error':
@@ -187,17 +193,33 @@ export function FloatingChatCard() {
       // 保存 AI 回复到后端
       if (fullContent) {
         try {
+          // allCitations 已是 Agent 端壓縮後的列表（最多 30 條），無需再壓縮
+          const citationsJson = JSON.stringify(allCitations);
           const assistantMsg = await chatApi.saveAssistantReply(conv.id, {
             content: fullContent,
             provider,
             modelName: model,
-            citationsJson: JSON.stringify(allCitations),
+            citationsJson,
             toolCallsJson: JSON.stringify(toolCallsLog),
             tokensUsed: tokens,
           });
           setMessages(prev => [...prev, assistantMsg]);
         } catch (e) {
           console.error('保存 AI 回复失败:', e);
+          // 保存失敗時仍顯示內容，避免用戶看到「沒回覆」
+          setMessages(prev => [...prev, {
+            id: Date.now(),
+            conversationId: conv.id,
+            role: 'assistant' as const,
+            content: fullContent,
+            provider,
+            modelName: model,
+            citationsJson: JSON.stringify(allCitations),
+            toolCallsJson: JSON.stringify(toolCallsLog),
+            tokensUsed: tokens,
+            createdAt: new Date().toISOString(),
+          }]);
+          setError('AI 回复已生成但保存失败（刷新后可能丢失）: ' + (e as Error).message);
         }
       }
 
@@ -209,6 +231,7 @@ export function FloatingChatCard() {
       setIsStreaming(false);
       setStreamingContent('');
       setActiveToolCalls([]);
+      setThinkingMessage('');
     }
   }, [currentConversation, isStreaming, messages, selectedProvider, loadConversations]);
 
@@ -299,6 +322,7 @@ export function FloatingChatCard() {
             messages={messages}
             streamingContent={streamingContent}
             activeToolCalls={activeToolCalls}
+            thinkingMessage={thinkingMessage}
           />
           {error && (
             <div className="text-xs text-red-400 bg-red-400/10 rounded p-2">

@@ -12,7 +12,7 @@
 - springdoc-openapi（Swagger：`/TradingWorkstation/swagger-ui.html`）
 - Lombok、MySQL 8.0+
 
-## 模塊結構（12 個業務模塊）
+## 模塊結構（17 個業務模塊）
 
 | 模塊 | 端點前綴 | 職責 |
 |------|----------|------|
@@ -28,6 +28,11 @@
 | `system` | `/api/system`（4 端點） | 健康檢查（校驗表/列/索引）、DB 配置、通知（SMTP+Webhook） |
 | `preference` | `/api/preference`（2 端點） | 用戶偏好（DB 主存 + 文件降級） |
 | `aicalllog` | `/api/aicalllog`（5 端點） | AI 調用日誌（ai_call_log 表，agent 回寫，供可視化） |
+| `news` | `/api/news`（4 端點） | 財經新聞查詢與管理（financial_news 表，URI 去重） |
+| `chat` | `/api/chat`（7 端點） | AI 投研聊天對話持久化（chat_conversation + chat_message 表） |
+| `agentstate` | `/api/agentstate`（3 端點） | Agent 三層狀態持久化（agent_state 表，單行 upsert） |
+| `dailydigest` | `/api/dailydigest`（5 端點） | 當日市場摘要持久化（daily_market_digest 表，按交易日 upsert） |
+| `snapshot` | `/api/snapshot`（3 端點） | 行情預計算快照查詢（market_analysis_snapshot 表，毫秒級加載） |
 
 ## 目錄結構
 
@@ -90,7 +95,7 @@ mvn test                      # 運行測試（80 個）
 
 ## API
 
-完整 REST API 參考（後端 51 端點 + Agent 22 端點）見 [`docs/api.md`](../docs/api.md)。
+完整 REST API 參考（後端 92 端點 + Agent 42 端點）見 [`docs/api.md`](../docs/api.md)。
 
 Swagger UI：`http://localhost:8090/TradingWorkstation/swagger-ui.html`
 

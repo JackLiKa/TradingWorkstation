@@ -1,7 +1,7 @@
 ﻿# REST API 參考（API Reference）
 
-> 覆蓋 Java 後端全部 59 個端點 + Agent 服務 29 個端點。權威來源是 Swagger（後端 `/TradingWorkstation/swagger-ui.html`、agent `:8100/docs`），本文檔提供帶示例的速查。
-> 最後校準日期：2026-08-24（基於代碼實讀，覆蓋 Phase 4 + Phase 5 + chat 模塊全部變更）。
+> 覆蓋 Java 後端全部 65 個端點 + Agent 服務 35 個端點。權威來源是 Swagger（後端 `/TradingWorkstation/swagger-ui.html`、agent `:8100/docs`），本文檔提供帶示例的速查。
+> 最後校準日期：2026-08-25（基於代碼實讀，覆蓋 Phase 4 + Phase 5 + chat + agentstate + dailydigest + snapshot + data-quality 全部變更）。
 
 ---
 
@@ -452,7 +452,49 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 
 ---
 
-## 15. Agent 服務（http://localhost:8100/api/agent，29 端點）
+## 14b. snapshot（/api/snapshot，3 端點）
+
+> 行情預計算快照查詢。快照由 `ingestion/precompute_market_snapshot.py` 在數據更新後自動計算並寫入 `market_analysis_snapshot` 表。
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| GET | /api/snapshot | 獲取全部快照（market_overview + industry_prosperity + rotation_signals + market_breadth） |
+| GET | /api/snapshot/type?snapshotType=xxx | 按類型獲取快照 |
+| GET | /api/snapshot/dates?snapshotType=xxx&limit=10 | 獲取快照可用日期列表 |
+
+**示例 — 獲取最新快照**：
+
+```bash
+curl http://localhost:8090/TradingWorkstation/api/snapshot
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "found": true,
+    "trade_date": "2026-08-24",
+    "computed_at": "2026-08-25T01:47:40",
+    "market_overview": { "indices": [...], "breadth": {...}, "summary": {...} },
+    "industry_prosperity": [ {"industry": "半導體", "prosperity_index": 87.5, ...}, ... ],
+    "rotation_signals": [ {"industry": "半導體", "signal": "加速上漲", ...}, ... ],
+    "market_breadth": [ {"date": "2026-08-24", "rising": 1036, "falling": 2040, ...}, ... ]
+  }
+}
+```
+
+**快照類型**：
+
+| snapshot_type | 內容 |
+|---------------|------|
+| market_overview | 指數漲跌 + 漲跌家數 + 成交額匯總 |
+| industry_prosperity | 81 個行業 4 維度評分 + 等級 |
+| rotation_signals | 行業短期 vs 長期動量對比 + 輪動信號 |
+| market_breadth | 最近 10 天漲跌家數歷史 |
+
+---
+
+## 15. Agent 服務（http://localhost:8100/api/agent，35 端點）
 
 > Agent 有獨立 OpenAPI 文檔：`http://localhost:8100/docs`。注意：agent 響應**不使用**後端的 ApiResponse 信封，為 FastAPI 原生 JSON。
 
@@ -478,7 +520,7 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
-| GET | /providers | 7 供應商可用性+定價+階段映射 |
+| GET | /providers | 8 供應商可用性+定價+階段映射 |
 | POST | /providers/stage | `{stage, provider}` 設置某階段供應商 |
 | POST | /providers/stage/reset | 重置為自動路由 |
 | POST | /model/check | 手動觸發全供應商探活 |
@@ -529,23 +571,120 @@ curl -X POST http://localhost:8090/TradingWorkstation/api/sync/run \
 | 方法 | 路徑 | 參數 | 說明 |
 |------|------|------|------|
 | GET | /chat/providers | — | 可用 LLM 供應商列表（僅支持 function calling 的模型） |
-| GET | /chat/tools | — | 可用工具列表（7 個工具元數據） |
-| POST | /chat/stream | `{messages: [{role, content}], provider?}` | SSE 流式聊天（返回 tool_start/tool_end/content/done/error 事件） |
+| GET | /chat/tools | — | 可用工具列表（8 個工具元數據） |
+| POST | /chat/stream | `{messages: [{role, content}], provider?}` | SSE 流式聊天（返回 thinking/tool_start/tool_end/content/done/error 事件） |
 
 **POST /chat/stream SSE 事件協議**：
 
 ```
-data: {"type":"tool_start","tool":"open_web_search","arguments":{"query":"A股行情"}}
+data: {"type":"thinking","round":1,"message":"AI 正在分析您的問題..."}
 
-data: {"type":"tool_end","tool":"open_web_search","success":true,"citations":[{"source":"OpenWebSearch","title":"...","url":"..."}]}
+data: {"type":"tool_start","tool":"local_market_data","arguments":{"action":"market_overview"}}
 
-data: {"type":"content","text":"## 搜索結果\n..."}
+data: {"type":"tool_end","tool":"local_market_data","success":true,"citations":[]}
+
+data: {"type":"content","text":"## 市場分析\n..."}
 
 data: {"type":"done","provider":"glm-5.2","model":"glm-5.2","citations":[...],"tool_calls_log":[...],"tokens":1234}
 ```
 
-> **7 個工具**：`open_web_search`（DuckDuckGo）、`exa_search`（Exa.ai 語義搜索）、`baidu_search`（百度千帆）、`ftshare_mcp`（FTShare 金融數據 MCP）、`a_share_mcp`（A股歷史數據 MCP）、`context7_search`（官方文檔）、`grep_app_search`（GitHub 代碼搜索）。
+> **8 個工具**：`local_market_data`（本地市場數據查詢，優先使用）、`open_web_search`（DuckDuckGo）、`exa_search`（Exa.ai 語義搜索）、`baidu_search`（百度千帆）、`ftshare_mcp`（FTShare 金融數據 MCP）、`a_share_mcp`（A股歷史數據 MCP）、`context7_search`（官方文檔）、`grep_app_search`（GitHub 代碼搜索）。
+> **思考動畫**：`thinking` 事件在每輪 LLM 調用前發送，前端顯示脈動大腦圖標 + 狀態文字。
 > **工具調用循環**：最多 5 輪，LLM 自動決定調用哪些工具。
+> **本地數據優先**：系統 prompt 指示 AI 回答金融問題時優先使用 `local_market_data` 工具查詢本地數據庫。
+
+### 15.7b 數據質量監控（Data Quality）
+
+| 方法 | 路徑 | 參數 | 說明 |
+|------|------|------|------|
+| GET | /data-quality/rules | — | 獲取數據質量規則列表（10 條 SQL 規則） |
+| POST | /data-quality/run | — | 執行數據質量檢查（純 SQL 規則，返回結果） |
+| POST | /data-quality/run-with-ai-summary | — | 執行檢查 + 用免費 LLM 生成自然語言報告 |
+
+**POST /data-quality/run 響應**：
+
+```json
+{
+  "rules": [
+    {"name": "dup_stock_daily", "passed": true, "rows": 0},
+    {"name": "invalid_price_stock", "passed": true, "rows": 0},
+    {"name": "stale_adjustflag2", "passed": true, "rows": 0}
+  ],
+  "total": 10, "passed": 10, "failed": 0
+}
+```
+
+> **10 條 SQL 規則**：重複行檢測 / 非法價格 / 前復權陳舊化 / 行業缺失 / 日期缺口 / 表行數統計。
+> **零幻覺風險**：SQL 規則做檢測（100% 準確），LLM 僅做自然語言總結（不檢測）。
+
+### 15.8 回顧分析 AI（Retrospective）
+
+| 方法 | 路徑 | 參數 | 說明 |
+|------|------|------|------|
+| POST | /retrospective/trigger | — | 手動觸發回顧分析（需 ≥5 輪迭代，否則返回 FAILED） |
+| GET | /retrospective/latest | — | 獲取最近一次回顧分析結果 |
+
+**POST /retrospective/trigger 響應（成功）**：
+
+```json
+{
+  "status": "SUCCESS",
+  "result": {
+    "iteration_range": [1, 5],
+    "timestamp": "2026-08-25T10:00:00",
+    "findings": "...",
+    "optimization_summary": "...",
+    "improvement_plan": "...",
+    "stage_issues": {"market_news": "..."},
+    "score_trend": "...",
+    "recommendations": ["..."]
+  }
+}
+```
+
+**POST /retrospective/trigger 響應（迭代不足）**：
+
+```json
+{
+  "status": "FAILED",
+  "message": "迭代數不足：當前 0 輪，需 ≥5 輪才能觸發回顧分析"
+}
+```
+
+### 15.9 當日市場摘要 AI（Daily Digest）
+
+| 方法 | 路徑 | 參數 | 說明 |
+|------|------|------|------|
+| POST | /daily-digest/generate | force=false（默認） | 生成當日摘要（force=false 時複用已有，force=true 時重新生成） |
+| GET | /daily-digest/{trade_date} | trade_date=YYYY-MM-DD | 按交易日查詢摘要 |
+| GET | /daily-digest/latest | — | 獲取最新摘要 |
+
+**POST /daily-digest/generate 響應（成功）**：
+
+```json
+{
+  "status": "SUCCESS",
+  "result": {
+    "trade_date": "2026-08-25",
+    "timestamp": "2026-08-25T10:00:00",
+    "market_overview": "上證指數...",
+    "sector_highlights": "半導體強勢...",
+    "news_digest": "央行降準...",
+    "sentiment": "偏多",
+    "key_events": ["..."],
+    "data_sources": ["DB", "華爾街見聞"]
+  }
+}
+```
+
+**POST /daily-digest/generate 響應（失敗）**：
+
+```json
+{
+  "status": "FAILED",
+  "message": "摘要生成失敗：可能原因為該交易日無市場數據、LLM返回空內容或後端不可用。請查看 Agent 日誌確認具體原因。"
+}
+```
 
 ---
 

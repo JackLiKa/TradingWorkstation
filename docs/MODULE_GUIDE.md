@@ -1,8 +1,8 @@
 # 模塊指南（Module Guide）
 
-> 逐模塊說明職責、REST 端點、分層結構、數據表、緩存與依賴關係。後端共 **14 個模塊**（Phase 5 已將 `stock` 三分拆為 `stock` + `industry` + `forecast`；新增 `news` 財經新聞模塊；新增 `chat` AI 聊天對話持久化模塊）。
+> 逐模塊說明職責、REST 端點、分層結構、數據表、緩存與依賴關係。後端共 **17 個模塊**（Phase 5 已將 `stock` 三分拆為 `stock` + `industry` + `forecast`；新增 `news` 財經新聞模塊；新增 `chat` AI 聊天對話持久化模塊；新增 `agentstate` Agent 狀態持久化模塊；新增 `dailydigest` 當日市場摘要持久化模塊；新增 `snapshot` 行情預計算快照模塊）。
 > 路徑均省略前綴 `java/src/main/java/com/quantization/`。
-> 最後校準日期：2026-08-24（覆蓋 Phase 4 + Phase 5 + news + chat 模塊全部變更）。
+> 最後校準日期：2026-08-25（覆蓋 Phase 4 + Phase 5 + news + chat + agentstate + dailydigest + snapshot 模塊全部變更）。
 
 ---
 
@@ -24,6 +24,9 @@
 | aicalllog | /api/aicalllog | 6 | ai_call_log | 無 | —（消費者是 agent） |
 | news | /api/news | 3 | financial_news | 無 | —（抓取由 agent 负责） |
 | chat | /api/chat | 7 | chat_conversation + chat_message | 無 | —（AI 回復由 agent 生成） |
+| agentstate | /api/agentstate | 3 | agent_state | 無 | —（消費者是 agent） |
+| dailydigest | /api/dailydigest | 5 | daily_market_digest | 無 | —（生成由 agent 负责） |
+| snapshot | /api/snapshot | 3 | market_analysis_snapshot | 無 | —（預計算由 ingestion 腳本負責） |
 
 ---
 
@@ -687,7 +690,108 @@ Agent 端聊天端點（`/api/agent/chat/*`）：
 
 ---
 
-## 16. 橫切層（common / config）
+## 16. 模塊：agentstate（Agent 狀態持久化）
+
+> Agent 優化器三層狀態（記憶→文件→DB）的 DB 持久化層。單行 upsert 模式。
+
+### 分層結構
+
+- `AgentStateController` — REST 端點（3 個）
+- `AgentStateService` — 業務邏輯（upsert by state_key）
+- `AgentStateRepository` — Spring Data JPA
+- `AgentStateEntity` — JPA 實體（`agent_state` 表）
+- `dto/AgentStateDto` — 響應 DTO
+- `dto/AgentStateRequest` — 請求 DTO
+
+### 端點
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| GET | /api/agentstate | 讀取當前狀態（state_key='default'） |
+| POST | /api/agentstate | 保存/更新狀態（upsert by state_key） |
+| GET | /api/agentstate/{stateKey} | 按 state_key 讀取狀態 |
+
+### 數據表
+
+`agent_state`（見 `docs/database.md` §4.11）
+
+---
+
+## 17. 模塊：dailydigest（當日市場摘要持久化）
+
+> AI 生成的當日市場摘要，按交易日 upsert。同交易日內所有 AI 節點複用。
+
+### 分層結構
+
+- `DailyDigestController` — REST 端點（5 個）
+- `DailyDigestService` — 業務邏輯（upsert by trade_date）
+- `DailyDigestRepository` — Spring Data JPA
+- `DailyDigestEntity` — JPA 實體（`daily_market_digest` 表）
+- `dto/DailyDigestDto` — 響應 DTO
+- `dto/DailyDigestRequest` — 請求 DTO
+
+### 端點
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| GET | /api/dailydigest/{tradeDate} | 按交易日查詢摘要 |
+| GET | /api/dailydigest/latest | 查詢最新摘要 |
+| GET | /api/dailydigest/recent | 查詢最近 N 條摘要 |
+| POST | /api/dailydigest | 保存/更新摘要（upsert by trade_date） |
+| DELETE | /api/dailydigest/{tradeDate} | 按交易日刪除摘要 |
+
+### 數據表
+
+`daily_market_digest`（見 `docs/database.md` §4.12）
+
+---
+
+## 18. 模塊：snapshot（行情預計算快照查詢）
+
+### 職責
+
+提供預計算的行情分析快照查詢接口。快照由 `ingestion/precompute_market_snapshot.py` 在數據更新完成後自動計算並寫入 `market_analysis_snapshot` 表，前端直接加載快照，無需實時計算，將行情分析加載時間從數秒降至毫秒級。
+
+### 分層結構
+
+```
+module/snapshot/
+├── MarketSnapshotController.java   # REST 端點
+├── MarketSnapshotService.java      # JSON 解析 + 歷史快照查詢
+├── MarketSnapshotRepository.java   # JPA Repository
+└── MarketSnapshotEntity.java       # market_analysis_snapshot 表映射
+```
+
+### REST 端點
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| GET | /api/snapshot | 獲取全部快照（market_overview + industry_prosperity + rotation_signals + market_breadth），不傳 tradeDate 則返回最新 |
+| GET | /api/snapshot/type?snapshotType=xxx | 按類型獲取快照（market_overview / industry_prosperity / rotation_signals / market_breadth） |
+| GET | /api/snapshot/dates?snapshotType=xxx&limit=10 | 獲取快照可用日期列表（用於歷史回看） |
+
+### 快照類型
+
+| snapshot_type | 內容 | 計算來源 |
+|---------------|------|----------|
+| market_overview | 指數漲跌 + 漲跌家數 + 成交額匯總 | stock_daily + index_daily |
+| industry_prosperity | 81 個行業 4 維度評分（動量/資金/活躍度/廣度）+ 等級 | industry_daily |
+| rotation_signals | 行業短期 vs 長期動量對比 + 輪動信號 | industry_daily（20 天窗口） |
+| market_breadth | 最近 10 天漲跌家數歷史 | stock_daily |
+
+### 數據表
+
+`market_analysis_snapshot`（見 `docs/database.md` §4.13）
+
+### 預計算觸發
+
+- **自動觸發**：`ingestion/baostock_ingest.py` 在 CLI 和交互式模式完成數據寫入後自動調用 `precompute_market_snapshot.py --auto`
+- **手動觸發**：`python ingestion/precompute_market_snapshot.py` 或 `--date YYYY-MM-DD` 指定交易日
+- **冪等寫入**：UPSERT 語義，重複運行不會產生重複數據
+
+---
+
+## 19. 橫切層（common / config）
 
 ### common
 - `common.api`：`ApiResponse{success, code, message, data}`（NON_NULL）、`ErrorCode`（String 常量：OK/BAD_REQUEST/VALIDATION_ERROR/NOT_FOUND/DB_ERROR/SYNC_ERROR/INTERNAL_ERROR）、`PageResponse`

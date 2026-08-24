@@ -52,11 +52,11 @@ public class ChatMessageEntity {
     private String modelName;
 
     /** 引用来源 JSON（新闻标题/日期/URL、行情数据来源、搜索结果片段） */
-    @Column(name = "citations_json", columnDefinition = "TEXT")
+    @Column(name = "citations_json", columnDefinition = "MEDIUMTEXT")
     private String citationsJson;
 
     /** 工具调用链 JSON（工具名、参数、结果摘要） */
-    @Column(name = "tool_calls_json", columnDefinition = "TEXT")
+    @Column(name = "tool_calls_json", columnDefinition = "MEDIUMTEXT")
     private String toolCallsJson;
 
     /** 本次消息消耗的 token 数 */

@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     news_sync_channels: str = "all"  # 同步頻道（all/a-stock/單頻道）
     news_sync_catchup_on_startup: bool = True  # 啟動時是否執行補抓
 
+    # ===== 新聞過濾 =====
+    news_filter_enabled: bool = True  # 是否啟用財經關鍵詞過濾
+    news_filter_keywords: str = ""  # 自定義關鍵詞白名單（逗號分隔，空=用默認）
+    news_filter_blacklist: str = ""  # 自定義黑名單（逗號分隔，追加到默認）
+
     # ===== Per-stage provider =====
     stage_providers: dict[str, str] = {}  # 每階段供應商偏好
 

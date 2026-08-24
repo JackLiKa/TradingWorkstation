@@ -50,6 +50,10 @@ TOOL_CALLING_PROVIDERS = ["deepseek-flash", "glm-5.2", "qwen"]
 # 複雜金融分析問題需要多輪工具調用（新聞+行情+資金+基本面），5 輪遠不夠
 MAX_TOOL_ROUNDS = 100
 
+# 引用壓縮配置 — 避免大量工具調用後 citations_json 超出 DB 列上限
+MAX_CITATIONS = 30          # 最多保留 30 條引用（去重後）
+MAX_SNIPPET_LENGTH = 200    # 每條引用的 snippet 最多保留 200 字符
+
 # 不支持 function calling 的推理模型
 REASONING_ONLY_PROVIDERS = {"deepseek-pro"}
 
@@ -88,6 +92,45 @@ class ChatEngine:
         if not self._tools_initialized:
             init_tools()
             self._tools_initialized = True
+
+    @staticmethod
+    def _compress_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """壓縮/提煉引用列表 — 去重 + 截斷 + 限量。
+
+        問題：一次對話可能調用 20+ 次工具（如 open_web_search），每次返回 8 條 citation，
+        累計 160+ 條含 title/url/snippet 的引用，JSON 序列化後輕易超過 DB TEXT 列上限（65KB）。
+        解決：按 URL 去重 → 截斷 snippet → 限量保留前 MAX_CITATIONS 條。
+        """
+        seen_urls: set[str] = set()
+        deduped: list[dict[str, Any]] = []
+        for c in citations:
+            url = c.get("url", "")
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            # 只保留必要字段，截斷 snippet
+            compressed = {
+                "source": c.get("source", ""),
+                "title": c.get("title", ""),
+                "url": url,
+            }
+            snippet = c.get("snippet", "")
+            if snippet:
+                compressed["snippet"] = snippet[:MAX_SNIPPET_LENGTH]
+            # 保留 date 字段（如有）
+            date = c.get("date", "")
+            if date:
+                compressed["date"] = date
+            deduped.append(compressed)
+            if len(deduped) >= MAX_CITATIONS:
+                break
+        if len(citations) > len(deduped):
+            logger.info(
+                f"[聊天] 引用壓縮: {len(citations)} → {len(deduped)} 條"
+                f"（去重 + 截斷 snippet + 限量 {MAX_CITATIONS}）"
+            )
+        return deduped
 
     def _get_tool_calling_provider(self) -> str:
         """選擇實際執行工具調用的供應商。
@@ -157,7 +200,7 @@ class ChatEngine:
                     content=response["content"],
                     provider=tool_provider,
                     model_name=PROVIDERS[tool_provider].model_id,
-                    citations=all_citations,
+                    citations=self._compress_citations(all_citations),
                     tool_calls_log=all_tool_logs,
                     tokens_used=response.get("tokens", 0),
                 )
@@ -171,7 +214,7 @@ class ChatEngine:
             content=final_content,
             provider=provider or "devin",
             model_name=PROVIDERS.get(provider or "devin", PROVIDERS["devin"]).model_id,
-            citations=all_citations,
+            citations=self._compress_citations(all_citations),
             tool_calls_log=all_tool_logs,
         )
 
@@ -192,6 +235,13 @@ class ChatEngine:
         tool_provider = self._get_tool_calling_provider()
 
         for round_idx in range(MAX_TOOL_ROUNDS):
+            # 發送 thinking 事件 — 讓前端顯示「AI 思考中」動畫
+            yield json.dumps({
+                "type": "thinking",
+                "round": round_idx + 1,
+                "message": f"AI 正在思考（第 {round_idx + 1} 輪）..." if round_idx > 0 else "AI 正在分析您的問題...",
+            }, ensure_ascii=False)
+
             try:
                 response = await self._call_llm_with_fallback(
                     tool_provider, openai_messages, tools, self._get_fallback_chain(tool_provider)
@@ -253,7 +303,7 @@ class ChatEngine:
                     "type": "done",
                     "provider": tool_provider,
                     "model": PROVIDERS[tool_provider].model_id,
-                    "citations": all_citations,
+                    "citations": self._compress_citations(all_citations),
                     "tool_calls_log": all_tool_logs,
                     "tokens": response.get("tokens", 0),
                 }, ensure_ascii=False)
@@ -284,7 +334,7 @@ class ChatEngine:
             "type": "done",
             "provider": final_provider,
             "model": PROVIDERS.get(final_provider, PROVIDERS["devin"]).model_id,
-            "citations": all_citations,
+            "citations": self._compress_citations(all_citations),
             "tool_calls_log": all_tool_logs,
             "tokens": 0,
         }, ensure_ascii=False)

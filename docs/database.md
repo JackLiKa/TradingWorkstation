@@ -1,8 +1,8 @@
 # 數據庫 Schema（Database）
 
 > MySQL 8.0+，庫名 `a_stock_baostock`，字符集 utf8mb4，時區 Asia/Shanghai。
-> 本文檔面向新人，覆蓋全部 10 張表的欄位、約束、索引、關係與寫入策略。
-> 最後校準日期：2026-08-24（基於代碼實讀，覆蓋 Phase 4 + Phase 5 + chat 模塊全部變更）。
+> 本文檔面向新人，覆蓋全部 16 張表的欄位、約束、索引、關係與寫入策略。
+> 最後校準日期：2026-08-25（基於代碼實讀，覆蓋 Phase 4 + Phase 5 + chat + agentstate + dailydigest + snapshot 模塊全部變更）。
 
 ---
 
@@ -457,6 +457,73 @@ DDL：`java/src/main/resources/schema.sql`（`CREATE TABLE IF NOT EXISTS`，啟�
 
 寫入方：Java `ChatService`（JPA save）。用戶消息由前端直接 POST 保存；AI 回復由 Agent SSE 流式完成後 POST 保存。
 
+### 4.11 agent_state（Agent 狀態持久化）
+
+> Agent 優化器三層狀態（記憶→文件→DB）的 DB 持久化層。單行 upsert 模式（`state_key='default'`），支持跨重啟恢復。
+
+| 欄位 | 類型 | 約束 | 說明 |
+|------|------|------|------|
+| id | BIGINT | PK, AUTO_INCREMENT | |
+| state_key | VARCHAR(64) | NOT NULL, DEFAULT 'default', UNIQUE | 狀態鍵（單行模式） |
+| state_json | LONGTEXT | NOT NULL | 完整狀態 JSON（迭代歷史、最佳分數、回顧結果、摘要快取等） |
+| current_iteration | INT | NOT NULL, DEFAULT 0 | 當前迭代輪數 |
+| best_score | DOUBLE | NOT NULL, DEFAULT -999 | 歷史最佳綜合評分 |
+| retrospective_count | INT | NOT NULL, DEFAULT 0 | 回顧分析執行次數 |
+| updated_at | DATETIME | NOT NULL, ON UPDATE CURRENT_TIMESTAMP | 最後更新時間 |
+| created_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 建立時間 |
+
+索引：`uk_agent_state_key(state_key)` UNIQUE。
+
+寫入方：Agent `backend_client.save_agent_state()`（upsert by state_key）。Agent 每輪迭代後 checkpoint，重啟時 restore。
+
+### 4.12 daily_market_digest（當日市場摘要）
+
+> AI 生成的當日市場摘要，按交易日 upsert。同交易日內所有 AI 節點複用，減少重複工具調用。
+
+| 欄位 | 類型 | 約束 | 說明 |
+|------|------|------|------|
+| id | BIGINT | PK, AUTO_INCREMENT | |
+| trade_date | DATE | NOT NULL, UNIQUE | 交易日 |
+| market_overview | TEXT | NOT NULL | 市場概覽（指數表現、漲跌家數、成交額） |
+| sector_highlights | TEXT | NOT NULL | 板塊亮點（強勢/弱勢行業） |
+| news_digest | TEXT | NOT NULL | 新聞摘要（已凝練的關鍵新聞） |
+| sentiment | VARCHAR(500) | NOT NULL | 市場情緒（偏多/中性/偏空 + 理由） |
+| key_events_json | TEXT | NULL | 關鍵事件列表 JSON |
+| data_sources_json | TEXT | NULL | 數據來源列表 JSON |
+| generated_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 生成時間 |
+
+索引：`uk_daily_digest_date(trade_date)` UNIQUE / `idx_daily_digest_generated(generated_at)`。
+
+寫入方：Agent `daily_digest.py` 生成後調用 `backend_client.save_daily_digest()`（upsert by trade_date）。
+
+---
+
+### 4.13 market_analysis_snapshot（行情預計算快照）
+
+> 數據更新後自動預計算的行情分析快照，按 `(trade_date, snapshot_type)` upsert。前端直接加載快照，無需實時計算，將行情分析加載時間從數秒降至毫秒級。歷史快照可追蹤，支持回看任意交易日的市場狀態。
+
+| 欄位 | 類型 | 約束 | 說明 |
+|------|------|------|------|
+| id | BIGINT | PK, AUTO_INCREMENT | |
+| trade_date | DATE | NOT NULL, UNIQUE(uk_date_type) | 交易日 |
+| snapshot_type | VARCHAR(50) | NOT NULL, UNIQUE(uk_date_type) | 快照類型：market_overview / industry_prosperity / rotation_signals / market_breadth |
+| snapshot_data | JSON | NOT NULL | 預計算的 JSON 快照數據 |
+| computed_at | DATETIME | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 計算時間 |
+| data_version | VARCHAR(20) | NOT NULL, DEFAULT '1.0' | 快照格式版本 |
+
+索引：`uk_date_type(trade_date, snapshot_type)` UNIQUE / `idx_trade_date(trade_date)` / `idx_computed_at(computed_at)`。
+
+寫入方：`ingestion/precompute_market_snapshot.py` 在 `baostock_ingest.py` 完成數據寫入後自動調用（UPSERT 語義）。
+
+**快照類型詳解**：
+
+| snapshot_type | 內容 | 計算來源 |
+|---------------|------|----------|
+| market_overview | 指數漲跌 + 漲跌家數 + 成交額匯總 | stock_daily + index_daily |
+| industry_prosperity | 81 個行業 4 維度評分（動量/資金/活躍度/廣度）+ 等級（優/良/中/差） | industry_daily |
+| rotation_signals | 行業短期(5天) vs 長期(20天)動量對比 + 輪動信號（加速上漲/溫和上行/溫和下行/加速下跌） | industry_daily |
+| market_breadth | 最近 10 天漲跌家數歷史 + 平均漲跌幅 + 成交額 | stock_daily |
+
 ---
 
 ## 5. 寫入策略總覽
@@ -474,6 +541,9 @@ DDL：`java/src/main/resources/schema.sql`（`CREATE TABLE IF NOT EXISTS`，啟�
 | financial_news | agent（news_store.py） | 批量 upsert（URI 去重），同時寫 Milvus | ✅ URI 去重 |
 | chat_conversation | java（ChatService） | JPA save，append-only | — |
 | chat_message | java（ChatService） | JPA save，append-only；刪除對話級聯刪消息 | — |
+| agent_state | agent（backend_client） | JPA save，upsert by state_key（單行模式） | ✅ upsert by state_key |
+| daily_market_digest | agent（daily_digest.py） | JPA save，upsert by trade_date | ✅ upsert by trade_date |
+| market_analysis_snapshot | ingestion（precompute_market_snapshot.py） | UPSERT by (trade_date, snapshot_type) | ✅ upsert by (trade_date, snapshot_type) |
 
 ### 5.1 增量 vs 全量
 

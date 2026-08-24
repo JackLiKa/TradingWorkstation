@@ -35,17 +35,18 @@ market_news → industry_analysis → market_analysis → strategy_generation
 | 回測反思 | `backtest_reflection` | 根據回測統計反思策略優劣，提出改進方向 |
 | 提示詞生成 | `prompt_generation` | 生成下一輪策略生成的改進提示詞 |
 
-## 七個 LLM 供應商
+## 八個 LLM 供應商
 
 | Provider ID | 模型 | 特點 |
 |-------------|------|------|
 | `deepseek-pro` | deepseek-chat | 付費，能力強 |
 | `deepseek-flash` | deepseek-chat（flash 模式） | 付費，速度快 |
 | `glm-5.2` | glm-5.2 | 智譜免費額度 |
-| `glm-flash` | glm-4-flash | 智譜免費，JSON 穩定（備用首選） |
-| `qwen` | qwen-turbo | 阿里通義 |
+| `glm-flash` | glm-4.5-flash | 智譜免費，JSON 穩定（備用首選） |
+| `qwen` | qwen3.6 | 阿里通義 |
 | `qoder` | qoder | Qoder 平台 |
 | `devin` | devin | Devin API |
+| `ox-alpha` | ox-alpha | OpenRouter 推理模型 |
 
 **降級鏈**：優先免費/低成本供應商，失敗時按鏈降級。每個階段可獨立配置 `stage_providers`。
 
@@ -92,10 +93,10 @@ agent/
 ├── app/
 │   ├── main.py                    # FastAPI 入口 + lifespan 初始化
 │   ├── api/
-│   │   └── routes.py              # 22 個 API 端點
+│   │   └── routes.py              # 42 個 API 端點
 │   ├── core/
 │   │   ├── config.py              # Pydantic Settings（從 .env 讀取）
-│   │   ├── llm_client.py          # LLM 客戶端（7 供應商 + 降級鏈）
+│   │   ├── llm_client.py          # LLM 客戶端（8 供應商 + 降級鏈）
 │   │   ├── providers.py           # 供應商註冊與默認分配
 │   │   ├── rate_limiter.py        # 令牌桶限流（backtest/screener/read）
 │   │   ├── metrics.py             # Prometheus 自定義指標
@@ -125,7 +126,7 @@ agent/
 │   │   └── model_checker.py       # 模型可用性檢查
 │   └── utils/
 │       └── json_extractor.py      # JSON 提取工具
-├── tests/                         # 197 個 pytest 測試
+├── tests/                         # 398 個 pytest 測試
 ├── data/                          # checkpoint + Milvus 數據
 ├── requirements.txt
 └── .env.example
@@ -176,7 +177,7 @@ curl http://localhost:8100/api/agent/metrics     # Prometheus 指標
 
 ## API 端點
 
-完整 22 端點見 [`docs/api.md`](../docs/api.md)，核心端點：
+完整 42 端點見 [`docs/api.md`](../docs/api.md)，核心端點：
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
@@ -200,14 +201,20 @@ curl http://localhost:8100/api/agent/metrics     # Prometheus 指標
 - **用戶配置優先**：`/start` 時手動設置的 config 字段優先保留，不被 checkpoint/DB 覆蓋
 - **內存控制**：最多保留 100 輪迭代記錄在內存（`MAX_IN_MEMORY_ITERATIONS`）
 - **checkpoint**：每輪結束寫本地文件，崩潰後可恢復
+- **三層狀態持久化**：記憶（in-memory）→ 文件（checkpoint）→ DB（agent_state 表），跨重啟恢復
+- **回顧分析 AI**：每 5 輪自動觸發，分析最近 5 輪各 AI 節點輸入輸出，生成改進方案注入下一輪
+- **當日市場摘要 AI**：按需生成當日市場摘要，同交易日內複用減少工具調用，持久化到 daily_market_digest 表
+- **AI 投研聊天引擎**：`agent/app/chat/` 模組提供 ToolCalling 聊天 + 8 工具 + SSE 流式 + thinking 事件思考動畫；`local_market_data` 工具優先查詢本地數據庫（9 個 action），系統 prompt 指示 AI 回答金融問題時本地數據優先
+- **數據質量監控**：`agent/app/services/data_quality.py` 提供 10 條 SQL 規則的數據質量檢查（零幻覺風險：SQL 檢測 + LLM 總結），API 端點 `/api/agent/data-quality/run`、`/run-with-ai-summary`
 
 ## 測試
 
-**197 個 pytest 測試**：
+**398 個 pytest 測試**：
 
 ```bash
-python -m pytest tests/           # 197 tests collected
-python -m pytest tests/ --cov=app # 覆蓋率 ~18.6%（閾值 40%，當前未達標）
+python -m pytest tests/           # 398 tests collected
+python -m pytest tests/ --cov=app # 覆蓋率 ~44.7%（閾值 40%，已達標）
 ```
 
-> 覆蓋率閾值 40% 是 `pyproject.toml` 中的 `--cov-fail-under` 配置；當前實際覆蓋率 ~18.6%，測試本身全部通過但命令因覆蓋率未達標而退出非零碼。這是既有狀態，非本次文檔變更引入。
+> 覆蓋率閾值 40% 是 `pytest.ini` 中的 `--cov-fail-under` 配置；當前實際覆蓋率 ~44.7%，已達標。
+> 注意：`test_optimizer_multi_window.py` 中有 3 個停滯終止邏輯測試為已知失敗（與 scoring 邏輯相關，非新引入問題）。

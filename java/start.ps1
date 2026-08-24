@@ -1,6 +1,7 @@
 ﻿# ===== Java 後端啟動腳本 =====
 # 用法: .\start.ps1
-# 功能: 自動加載根目錄 .env、設置 JDK 21、啟動 Spring Boot 後端（端口 8090）
+# 功能: 自動加載 .env、設置 JDK 21、啟動 Spring Boot 後端（端口 8090）
+# 環境變量加載順序：java/.env（優先）→ 根目錄 .env（降級兼容）
 
 $ErrorActionPreference = "Stop"
 # java -version 輸出到 stderr，需要臨時放寬
@@ -9,9 +10,20 @@ $javaVer = & java -version 2>&1 | Out-String
 $ErrorActionPreference = "Stop"
 Write-Host $javaVer.Trim() -ForegroundColor Gray
 
-# 項目根目錄（腳本所在目錄的上一級）
+# 環境變量文件：優先 java/.env（自足模式），降級到根目錄 .env（向後兼容）
+$LocalEnv = Join-Path $PSScriptRoot ".env"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$EnvFile = Join-Path $ProjectRoot ".env"
+$RootEnv = Join-Path $ProjectRoot ".env"
+$EnvFile = $null
+$EnvSource = ""
+
+if (Test-Path $LocalEnv) {
+    $EnvFile = $LocalEnv
+    $EnvSource = "java/.env"
+} elseif (Test-Path $RootEnv) {
+    $EnvFile = $RootEnv
+    $EnvSource = "根目錄 .env（建議遷移到 java/.env 實現目錄自足）"
+}
 
 # 1. 設置 JDK 21
 $Jdk21Path = "C:\Users\13026\.jdks\ms-21.0.9"
@@ -35,8 +47,8 @@ if (Test-Path $Jdk21Path) {
     Write-Host "[WARN] 未找到 JDK 21，使用系統默認 Java" -ForegroundColor Yellow
 }
 
-# 2. 加載根目錄 .env
-if (Test-Path $EnvFile) {
+# 2. 加載 .env 環境變量
+if ($EnvFile) {
     Get-Content $EnvFile | ForEach-Object {
         $line = $_.Trim()
         if ($line -and -not $line.StartsWith("#") -and $line -match '^\s*([A-Z_]+)\s*=\s*(.+)$') {
@@ -45,13 +57,14 @@ if (Test-Path $EnvFile) {
             Set-Item -Path "env:$key" -Value $val
         }
     }
-    Write-Host "[OK] 已加載 .env 環境變量" -ForegroundColor Green
+    Write-Host "[OK] 已加載 $EnvSource" -ForegroundColor Green
     if ($env:DB_PASSWORD) {
         Write-Host "      DB_USER=$env:DB_USER, DB_HOST=$env:DB_HOST, DB_PORT=$env:DB_PORT, DB_NAME=$env:DB_NAME" -ForegroundColor Gray
     }
 } else {
-    Write-Host "[WARN] 未找到 .env 文件: $EnvFile" -ForegroundColor Yellow
-    Write-Host "      數據庫密碼將為空，可能導致連接失敗" -ForegroundColor Yellow
+    Write-Host "[WARN] 未找到 .env 文件" -ForegroundColor Yellow
+    Write-Host "      已查找: $LocalEnv 和 $RootEnv" -ForegroundColor Gray
+    Write-Host "      請從 java/.env.example 複製為 java/.env 並填寫數據庫密碼等" -ForegroundColor Yellow
 }
 
 # 3. 檢查端口 8090 是否被佔用（去重 PID，處理多個連接和已退出進程）

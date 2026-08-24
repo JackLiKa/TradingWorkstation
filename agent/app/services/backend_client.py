@@ -600,6 +600,122 @@ class BackendClient:
             logger.warning(f"寫入 ai_call_log 失敗（不影響優化）: {e}")
             return {}
 
+    # ===== Agent 狀態持久化（DB 層）=====
+
+    async def save_agent_state(
+        self,
+        state_json: str,
+        current_iteration: int = 0,
+        best_score: float = -999,
+        retrospective_count: int = 0,
+        state_key: str = "default",
+    ) -> dict:
+        """保存 Agent 狀態到後端 agent_state 表（跨重啟恢復）。
+
+        後端不可用時靜默失敗，不影響優化循環。
+        """
+        try:
+            data = await self._request_with_retry(
+                "POST",
+                f"{self._base_url}/api/agentstate",
+                json_data={
+                    "stateKey": state_key,
+                    "stateJson": state_json,
+                    "currentIteration": current_iteration,
+                    "bestScore": best_score,
+                    "retrospectiveCount": retrospective_count,
+                },
+                timeout=10,
+            )
+            return data.get("data", {})
+        except Exception as e:
+            logger.warning(f"保存 Agent 狀態失敗（不影響優化）: {e}")
+            return {}
+
+    async def load_agent_state(self, state_key: str = "default") -> dict | None:
+        """從後端讀取 Agent 狀態（啟動時恢復用）。
+
+        Returns:
+            dict | None: 狀態字典（含 stateJson），後端不可用或無記錄時返回 None
+        """
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/agentstate",
+                params={"stateKey": state_key},
+                timeout=10,
+            )
+            return data.get("data")
+        except Exception as e:
+            logger.warning(f"讀取 Agent 狀態失敗: {e}")
+            return None
+
+    # ===== 當日市場摘要持久化（DB 層）=====
+
+    async def save_daily_digest(
+        self,
+        trade_date: str,
+        market_overview: str,
+        sector_highlights: str,
+        news_digest: str,
+        sentiment: str,
+        key_events: list[str] | None = None,
+        data_sources: list[str] | None = None,
+    ) -> dict:
+        """保存當日市場摘要到後端 daily_market_digest 表。
+
+        同交易日重複提交時更新（upsert）。
+        """
+        try:
+            data = await self._request_with_retry(
+                "POST",
+                f"{self._base_url}/api/dailydigest",
+                json_data={
+                    "tradeDate": trade_date,
+                    "marketOverview": market_overview,
+                    "sectorHighlights": sector_highlights,
+                    "newsDigest": news_digest,
+                    "sentiment": sentiment,
+                    "keyEvents": key_events or [],
+                    "dataSources": data_sources or [],
+                },
+                timeout=10,
+            )
+            return data.get("data", {})
+        except Exception as e:
+            logger.warning(f"保存當日摘要失敗（不影響優化）: {e}")
+            return {}
+
+    async def load_daily_digest(self, trade_date: str) -> dict | None:
+        """按交易日讀取當日市場摘要。
+
+        Returns:
+            dict | None: 摘要字典，無記錄時返回 None
+        """
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/dailydigest/{trade_date}",
+                timeout=10,
+            )
+            return data.get("data")
+        except Exception as e:
+            logger.warning(f"讀取當日摘要失敗: {e}")
+            return None
+
+    async def load_latest_daily_digest(self) -> dict | None:
+        """讀取最新的當日市場摘要。"""
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/dailydigest/latest",
+                timeout=10,
+            )
+            return data.get("data")
+        except Exception as e:
+            logger.warning(f"讀取最新摘要失敗: {e}")
+            return None
+
 
 # 全局後端客戶端單例
 backend_client = BackendClient()

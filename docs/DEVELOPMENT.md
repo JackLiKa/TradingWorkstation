@@ -102,9 +102,9 @@ pip install -r ingestion/requirements.txt
 
 `src/lib/api/__tests__/api.test.ts`，覆蓋 lib/api 層（API 客戶端函數/類型映射）。
 
-### 3.4 Agent 測試（342 個 pytest）
+### 3.4 Agent 測試（398 個 pytest）
 
-23 個測試文件，覆蓋率門檻 40%（`pytest.ini`）。含 **24 個多窗口評分測試**（Phase 5 新增，`test_optimizer_multi_window.py`）+ **16 個聊天引擎測試**（chat 模組，`test_chat.py`）：
+覆蓋率門檻 40%（`pytest.ini`）。含 **24 個多窗口評分測試**（Phase 5 新增，`test_optimizer_multi_window.py`）+ **16 個聊天引擎測試**（chat 模組，`test_chat.py`）+ **30 個狀態管理測試**（`test_state_management.py`，含三層狀態持久化、回顧分析、當日摘要、camelCase/snake_case 兼容）：
 
 | 測試類 | 測試數 | 覆蓋場景 |
 |--------|--------|----------|

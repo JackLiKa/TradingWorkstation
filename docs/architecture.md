@@ -28,11 +28,11 @@ Trading Workstation 是一個**單機/小團隊自用的 A 股量化研究工作
 
 | 組件 | 技術棧 | 端口 | 職責 |
 |------|--------|------|------|
-| Java 後端 | Java 21 + Spring Boot 3.3 + Spring Data JPA + Caffeine | 8090 | REST API（59 端點）+ 14 模塊業務邏輯 + 同步編排 |
+| Java 後端 | Java 21 + Spring Boot 3.3 + Spring Data JPA + Caffeine | 8090 | REST API（92 端點）+ 16 模塊業務邏輯 + 同步編排 |
 | Next.js 前端 | Next.js 15 + React 19 + TypeScript 5.6 + ECharts 5.5 + SWR + Zustand + Tailwind | 3010 | 7 頁面可視化 + AI 聊天懸浮卡片 + API 客戶端 |
 | Agent 服務 | Python 3.10+ + FastAPI + LangGraph 風格優化循環 | 8100 | AI 策略優化 + 8 供應商 LLM 路由 + Milvus Lite RAG + AI 聊天引擎（ToolCalling + 7 工具） |
 | 採集腳本 | Python 3.10+ + Baostock + PyMySQL | — | 由後端 sync 模塊 fork，寫入 5 張行情表 |
-| MySQL | 8.0+ | 3306 | 庫名 `a_stock_baostock`，10 張表 |
+| MySQL | 8.0+ | 3306 | 庫名 `a_stock_baostock`，16 張表 |
 | Prometheus + Grafana | docker-compose 可選 | 9090 / 3000 | 監控 Agent 服務指標 |
 
 ---
@@ -139,7 +139,7 @@ flowchart TD
     end
 
     subgraph AGENT["agent/ (8100)"]
-        routes["api/routes.py 29 端點"] --> loop["agents/ 優化循環<br/>6 AI 階段 + judge + scoring"]
+        routes["api/routes.py 42 端點"] --> loop["agents/ 優化循環<br/>6 AI 階段 + judge + scoring"]
         routes --> chatengine["chat/ AI 聊天引擎<br/>ToolCalling + 7 工具 + SSE"]
         loop --> providers["core/providers.py<br/>8 供應商分階段路由"]
         loop --> backendcli["services/backend_client.py<br/>21 個後端端點 + 限流"]
@@ -165,9 +165,9 @@ flowchart TD
     write -->|ON DUPLICATE KEY UPDATE| MYSQL
 ```
 
-### 3.3 Component（後端 14 模塊組件視圖）
+### 3.3 Component（後端 16 模塊組件視圖）
 
-後端按業務域拆分為 **14 個模塊**（`com.quantization.module.*`），Phase 5 已將原 `stock` 三分拆為 `stock`（行情）+ `industry`（景氣度）+ `forecast`（預測），後續新增 `news`（財經新聞）+ `chat`（AI 聊天對話持久化）：
+後端按業務域拆分為 **17 個模塊**（`com.quantization.module.*`），Phase 5 已將原 `stock` 三分拆為 `stock`（行情）+ `industry`（景氣度）+ `forecast`（預測），後續新增 `news`（財經新聞）+ `chat`（AI 聊天對話持久化）+ `agentstate`（Agent 狀態持久化）+ `dailydigest`（當日市場摘要持久化）+ `snapshot`（行情預計算快照查詢）：
 
 | 模塊 | 端點前綴 | 端點數 | 持久化 | 核心類 |
 |------|----------|:---:|--------|--------|
@@ -185,6 +185,8 @@ flowchart TD
 | aicalllog | /api/aicalllog | 6 | ai_call_log | AiCallLogService / AiCallLogCleanupScheduler |
 | news | /api/news | 4 | financial_news | NewsService / NewsController（查詢+清理，抓取由 Agent 負責） |
 | chat | /api/chat | 7 | chat_conversation + chat_message | ChatService / ChatController（對話+消息持久化，AI 回復由 Agent SSE 生成） |
+| agentstate | /api/agentstate | 3 | agent_state | AgentStateService / AgentStateController（Agent 三層狀態 DB 持久化，單行 upsert） |
+| dailydigest | /api/dailydigest | 5 | daily_market_digest | DailyDigestService / DailyDigestController（當日摘要按交易日 upsert，AI 生成後持久化） |
 
 > 模塊間依賴關係圖見 `docs/MODULE_GUIDE.md` §模塊依賴關係圖。
 
@@ -294,7 +296,7 @@ agent  → java(:8090/TradingWorkstation/api/*)  ← 回測/行情/日誌回寫
 
 ## 5. 數據流
 
-### 5.1 行情數據流（寫路徑）
+### 5.1 行情數據流（寫路徑 + 預計算）
 
 ```mermaid
 flowchart TD
@@ -306,9 +308,18 @@ flowchart TD
     write -->|upsert + 7天新鮮度| si["stock_industry<br/>行業分類"]
     write -->|upsert| im["index_metadata<br/>指數元數據"]
     write -->|純 SQL 聚合| ind["industry_daily<br/>JOIN stock_daily(af=3) × stock_industry<br/>GROUP BY date,industry"]
+    write -->|數據更新完成後自動觸發| pre["precompute_market_snapshot.py<br/>行情預計算"]
+    pre -->|UPSERT by (trade_date, snapshot_type)| snap["market_analysis_snapshot<br/>4 種快照：market_overview /<br/>industry_prosperity / rotation_signals /<br/>market_breadth"]
 ```
 
-**Java 後端對以上 5 張行情表只讀不寫**。後端寫的表：`backtest_strategy`（策略保存）、`user_preference`（偏好）、`ai_call_log`（agent 回寫）。
+**Java 後端對以上 5 張行情表只讀不寫**。後端寫的表：`backtest_strategy`（策略保存）、`user_preference`（偏好）、`ai_call_log`（agent 回寫）、`market_analysis_snapshot`（由 ingestion 腳本寫入，後端只讀）。
+
+**行情預計算流程**：
+1. `baostock_ingest.py` 完成 stock_daily / index_daily / industry_daily 寫入後
+2. 自動調用 `precompute_market_snapshot.py --auto`
+3. 計算 4 種快照（市場概覽 / 行業景氣度 / 輪動信號 / 市場廣度）
+4. UPSERT 寫入 `market_analysis_snapshot` 表（冪等，重複運行安全）
+5. 前端通過 `/api/snapshot` 端點直接讀取快照，毫秒級加載
 
 ### 5.2 預測數據流（讀路徑）
 
@@ -448,7 +459,7 @@ ConfigValidationInitializer（@PostConstruct 打 WARN 日誌，不阻止啟動�
 
 ### 9.1 安全邊界（重要）
 
-**系統目前無任何認證層**：後端 59 端點 + agent 29 端點全部開放，包含寫配置、觸發同步、啟停 AI 循環、AI 聊天等操作。docker-compose 端口映射到 `0.0.0.0`，意味着**局域網內任意主機可訪問**。僅適合單機/可信網絡部署；暴露公網前必須加認證（反代 BasicAuth 起步）。
+**系統目前無任何認證層**：後端 92 端點 + agent 42 端點全部開放，包含寫配置、觸發同步、啟停 AI 循環、AI 聊天等操作。docker-compose 端口映射到 `0.0.0.0`，意味着**局域網內任意主機可訪問**。僅適合單機/可信網絡部署；暴露公網前必須加認證（反代 BasicAuth 起步）。
 
 ### 9.2 Webhook HMAC-SHA256 簽名
 
@@ -497,9 +508,9 @@ Phase 5 已修復：Webhook secret 從放入 payload body 改為 **HMAC-SHA256 �
 
 | 文檔 | 內容 |
 |------|------|
-| `docs/MODULE_GUIDE.md` | 14 模塊職責、API、數據表、緩存、依賴關係一覽 |
-| `docs/api.md` | 完整 REST API 參考（59 後端 + 29 agent 端點） |
-| `docs/database.md` | 10 張表 schema + ER 圖 + 寫入策略 |
+| `docs/MODULE_GUIDE.md` | 16 模塊職責、API、數據表、緩存、依賴關係一覽 |
+| `docs/api.md` | 完整 REST API 參考（92 後端 + 42 agent 端點） |
+| `docs/database.md` | 16 張表 schema + ER 圖 + 寫入策略 |
 | `docs/BACKTEST_ENGINE.md` | 回測引擎原理與假設聲明 |
 | `docs/AGENT_SERVICE.md` | Agent LLM 路由 + 優化循環 + AI 聊天引擎（ToolCalling + 7 工具） |
 | `docs/DATA_INGESTION.md` | 數據採集完整指南 |

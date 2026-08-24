@@ -799,3 +799,146 @@ async def chat_stream(request: ChatStreamRequest):
         },
     )
 
+
+# ===== 回顧分析 AI（每5輪分析各AI輸入輸出）=====
+
+
+@router.post("/retrospective/trigger")
+async def trigger_retrospective(window_size: int = 5):
+    """手動觸發回顧分析 — 分析最近 N 輪各AI節點的輸入輸出。
+
+    Args:
+        window_size: 回顧窗口大小（默認5輪）
+    """
+    from app.agents.optimizer import state
+    from app.agents.stages.retrospective import run_retrospective
+
+    if len(state.iterations) < window_size:
+        return {
+            "status": "FAILED",
+            "message": f"迭代數不足（當前 {len(state.iterations)} 輪，需要至少 {window_size} 輪）",
+        }
+
+    result = await run_retrospective(state, window_size=window_size)
+    if result:
+        return {"status": "SUCCESS", "result": result.to_dict()}
+    return {"status": "FAILED", "message": "回顧分析失敗（查看日誌）"}
+
+
+@router.get("/retrospective/latest")
+async def get_latest_retrospective():
+    """獲取最近一次回顧分析結果。"""
+    from app.agents.optimizer import state
+
+    if state.last_retrospective:
+        return {"status": "SUCCESS", "result": state.last_retrospective.to_dict()}
+    return {"status": "SUCCESS", "result": None}
+
+
+# ===== 當日市場摘要 AI（按需生成 + 同日複用）=====
+
+
+@router.post("/daily-digest/generate")
+async def generate_daily_digest(force: bool = False):
+    """按需生成當日市場摘要 — 從DB+工具+MCP獲取數據，凝練濃縮後持久化。
+
+    Args:
+        force: 是否強制重新生成（即使當日已有摘要）
+
+    Returns:
+        status=SUCCESS + result: 摘要內容
+        status=FAILED + message: 失敗原因（無數據/LLM失敗/後端不可用等）
+    """
+    from app.services.daily_digest import generate_digest
+
+    result = await generate_digest(force=force)
+    if result:
+        return {"status": "SUCCESS", "result": result.to_dict()}
+    return {
+        "status": "FAILED",
+        "message": "摘要生成失敗：可能原因為該交易日無市場數據、LLM返回空內容或後端不可用。請查看 Agent 日誌確認具體原因。",
+    }
+
+
+@router.get("/daily-digest/{trade_date}")
+async def get_daily_digest(trade_date: str):
+    """按交易日查詢當日市場摘要。
+
+    返回標準化 snake_case 格式（兼容 Java camelCase API 響應）。
+    """
+    from app.agents.state import DailyDigest
+    from app.services.backend_client import backend_client
+
+    data = await backend_client.load_daily_digest(trade_date)
+    if not data:
+        return {"status": "SUCCESS", "data": None}
+    # 用 from_dict 兼容 camelCase → to_dict 輸出標準 snake_case
+    digest = DailyDigest.from_dict(data)
+    if digest.is_empty():
+        return {"status": "SUCCESS", "data": None}
+    return {"status": "SUCCESS", "data": digest.to_dict()}
+
+
+@router.get("/daily-digest/latest")
+async def get_latest_daily_digest():
+    """獲取最新的當日市場摘要。
+
+    返回標準化 snake_case 格式（兼容 Java camelCase API 響應）。
+    """
+    from app.agents.state import DailyDigest
+    from app.services.backend_client import backend_client
+
+    data = await backend_client.load_latest_daily_digest()
+    if not data:
+        return {"status": "SUCCESS", "data": None}
+    digest = DailyDigest.from_dict(data)
+    if digest.is_empty():
+        return {"status": "SUCCESS", "data": None}
+    return {"status": "SUCCESS", "data": digest.to_dict()}
+
+
+# ===== 數據質量檢查 =====
+
+
+@router.post("/data-quality/run")
+async def run_data_quality_checks():
+    """執行數據質量 SQL 規則檢查。
+
+    純 SQL 規則集，零 AI 幻覺風險。返回結構化報告。
+    """
+    from app.services.data_quality import run_quality_checks
+
+    report = run_quality_checks()
+    return {"status": "SUCCESS", "data": report}
+
+
+@router.post("/data-quality/run-with-ai-summary")
+async def run_data_quality_with_ai():
+    """執行數據質量檢查 + AI 生成自然語言總結報告。
+
+    SQL 規則做檢測（100% 準確），免費 LLM 做總結（glm-flash）。
+    """
+    from app.services.data_quality import run_quality_checks, generate_ai_summary
+
+    report = run_quality_checks()
+    ai_summary = await generate_ai_summary(report)
+    report["ai_summary"] = ai_summary
+    return {"status": "SUCCESS", "data": report}
+
+
+@router.get("/data-quality/rules")
+async def list_quality_rules():
+    """列出所有數據質量規則（不執行，僅展示規則定義）。"""
+    from app.services.data_quality import QUALITY_RULES
+
+    rules = [
+        {
+            "rule_id": r[0],
+            "severity": r[1],
+            "description": r[2],
+            "expected_zero": r[4],
+        }
+        for r in QUALITY_RULES
+    ]
+    return {"status": "SUCCESS", "data": rules}
+

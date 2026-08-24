@@ -15,10 +15,34 @@ import hashlib
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("agent.rag")
+
+
+def _cleanup_stale_lock(data_dir: Path, db_path: str) -> None:
+    """清理 Milvus Lite 殘留鎖文件。
+
+    Milvus Lite 使用 msvcrt.locking（Windows）或 fcntl（Linux）做文件鎖。
+    Agent 異常退出（kill -9、崩潰）後鎖文件可能殘留，導致下次啟動時
+    DataDirLockedError: another process holds the lock。
+
+    策略：檢查 .lock 文件的最後修改時間，超過 60 秒未修改則視為殘留並刪除。
+    正在運行的進程會持續更新鎖文件，不會誤刪。
+    """
+    lock_file = data_dir / "milvus_lite.db.lock"
+    if not lock_file.exists():
+        return
+    try:
+        mtime = lock_file.stat().st_mtime
+        age = time.time() - mtime
+        if age > 60:
+            lock_file.unlink(missing_ok=True)
+            logger.info(f"Milvus: 清理殘留鎖文件（年齡 {age:.0f}s）: {lock_file}")
+    except Exception as e:
+        logger.debug(f"Milvus: 鎖文件清理檢查失敗（非致命）: {e}")
 
 # ===== 配置 =====
 _MAX_EXPERIENCES = int(os.environ.get("RAG_MAX_EXPERIENCES", "1000"))  # 最多保留經驗數
@@ -62,6 +86,9 @@ def _try_init():
         data_dir = Path(__file__).resolve().parent.parent.parent / "data"
         data_dir.mkdir(exist_ok=True)
         db_path = str(data_dir / "milvus_lite.db")
+
+        # 清理殘留鎖文件（Agent 異常退出後可能留下 .lock 文件導致下次啟動失敗）
+        _cleanup_stale_lock(data_dir, db_path)
 
         _milvus = MilvusClient(db_path)
         logger.info(f"Milvus Lite 初始化成功: {db_path}")

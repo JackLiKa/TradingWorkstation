@@ -165,4 +165,15 @@ export const api = {
   // ===== Preference 用戶偏好 =====
   preference: () => apiFetch<UserPreferenceDto>(`/preference`),
   savePreference: (pref: UserPreferenceDto) => apiPut<UserPreferenceDto>(`/preference`, pref),
+
+  // ===== Snapshot 行情預計算快照 =====
+  /** 獲取全部行情快照（市場概覽+景氣度+輪動+廣度），不傳 tradeDate 則返回最新 */
+  allSnapshots: (tradeDate?: string) =>
+    apiFetch<Record<string, unknown>>(`/snapshot${tradeDate ? `?tradeDate=${tradeDate}` : ''}`),
+  /** 按類型獲取快照 */
+  snapshotByType: (snapshotType: string, tradeDate?: string) =>
+    apiFetch<Record<string, unknown>>(`/snapshot/type?snapshotType=${snapshotType}${tradeDate ? `&tradeDate=${tradeDate}` : ''}`),
+  /** 獲取快照可用日期列表 */
+  snapshotDates: (snapshotType = 'market_overview', limit = 10) =>
+    apiFetch<{ dates: string[] }>(`/snapshot/dates?snapshotType=${snapshotType}&limit=${limit}`),
 };

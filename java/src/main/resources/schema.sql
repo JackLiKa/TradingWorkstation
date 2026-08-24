@@ -102,8 +102,8 @@ CREATE TABLE IF NOT EXISTS chat_message (
     content         MEDIUMTEXT,
     provider        VARCHAR(32),
     model_name      VARCHAR(64),
-    citations_json  TEXT,
-    tool_calls_json TEXT,
+    citations_json  MEDIUMTEXT,
+    tool_calls_json MEDIUMTEXT,
     tokens_used     INT          DEFAULT 0,
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
@@ -111,4 +111,44 @@ CREATE TABLE IF NOT EXISTS chat_message (
     INDEX idx_chat_message_created (created_at),
     CONSTRAINT fk_chat_message_conversation FOREIGN KEY (conversation_id)
         REFERENCES chat_conversation(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 遷移：將 citations_json / tool_calls_json 從 TEXT 升級為 MEDIUMTEXT，
+-- 避免大量 web_search 引用累積後觸發 Data truncation（TEXT 上限 65535 字節）。
+-- ALTER TABLE ... MODIFY COLUMN 是冪等的：列已是 MEDIUMTEXT 時為 no-op，不會報錯。
+ALTER TABLE chat_message MODIFY COLUMN citations_json MEDIUMTEXT;
+ALTER TABLE chat_message MODIFY COLUMN tool_calls_json MEDIUMTEXT;
+
+-- Agent 狀態持久化表：跨重啟恢復優化循環狀態。
+-- 存儲 best_score/criteria/config、current_reflection/next_prompt、回顧分析結果等。
+-- 單行模式（state_key='default'），Agent 啟動時讀取，每輪結束後寫入。
+CREATE TABLE IF NOT EXISTS agent_state (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    state_key       VARCHAR(64)  NOT NULL DEFAULT 'default',
+    state_json      LONGTEXT     NOT NULL,
+    current_iteration INT        NOT NULL DEFAULT 0,
+    best_score      DOUBLE       NOT NULL DEFAULT -999,
+    retrospective_count INT      NOT NULL DEFAULT 0,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_agent_state_key (state_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 當日市場摘要表：每個交易日一條，同交易日內所有 AI 節點複用。
+-- 減少工具調用、提高數據命中率、減小幻覺風險。
+-- Agent 按需生成，持久化後供前端查詢和跨重啟恢復。
+CREATE TABLE IF NOT EXISTS daily_market_digest (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    trade_date      DATE         NOT NULL,
+    market_overview TEXT         NOT NULL,
+    sector_highlights TEXT       NOT NULL,
+    news_digest     TEXT         NOT NULL,
+    sentiment       VARCHAR(500) NOT NULL,
+    key_events_json TEXT,
+    data_sources_json TEXT,
+    generated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_daily_digest_date (trade_date),
+    INDEX idx_daily_digest_generated (generated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

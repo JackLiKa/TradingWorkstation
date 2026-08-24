@@ -1,8 +1,24 @@
-"""優化器狀態數據類 — 負責狀態存儲和序列化。
+"""優化器狀態數據類 — 三層狀態管理（內存 + 文件 + DB）。
+
+狀態分層：
+1. 瞬時狀態（TransientState）— 僅內存，重啟丟失
+   - 當前階段進度、當前迭代各階段結果、實時狀態消息
+   - 用途：實時可視化、進度追蹤
+
+2. 持久狀態（PersistentState）— 文件 checkpoint，重啟可恢復
+   - best_score/criteria/config、current_criteria/config
+   - current_reflection/next_prompt、最近 N 輪摘要
+   - 用途：崩潰恢復、跨重啟延續優化
+
+3. 數據庫狀態（DbState）— MySQL 持久化，跨進程/跨交易日
+   - 回顧分析結果（每5輪一次）
+   - 當日市場摘要（每日一次，同交易日內複用）
+   - 用途：跨交易日狀態、前端查詢、AI 數據複用
 
 工程化改進：
 - iterations 列表自動截斷（保留最近 100 輪），防止內存洩漏
-- 提供 checkpoint/restore 方法，支持狀態持久化到磁盤
+- checkpoint/restore 支持文件持久化
+- DB 狀態通過 backend_client 持久化到 Java 後端
 """
 
 import json
@@ -19,6 +35,9 @@ logger = logging.getLogger("agent.state")
 
 # 內存中保留的最大迭代輪數（防止 OOM）
 MAX_IN_MEMORY_ITERATIONS = 100
+
+# 回顧分析觸發間隔（每 N 輪觸發一次）
+RETROSPECTIVE_INTERVAL = 5
 
 # 預設選股條件（初始值）
 _now = datetime.now()
@@ -140,6 +159,133 @@ class IterationResult:
 
 
 @dataclass
+class RetrospectiveResult:
+    """回顧分析結果 — 每5輪由回顧AI生成，注入下一輪優化。
+
+    分析最近5輪各AI節點的輸入輸出，發現問題、提出優化總結和改善方案。
+    持久化到DB（agent_state表），供前端展示和跨重啟恢復。
+    """
+
+    iteration_range: tuple[int, int]  # 分析的迭代範圍（如 (1, 5)）
+    timestamp: str  # ISO 格式時間戳
+    findings: str  # 發現的問題（自然語言）
+    optimization_summary: str  # 優化總結
+    improvement_plan: str  # 改善方案（具體可執行的建議）
+    stage_issues: dict[str, str] = field(default_factory=dict)  # 各階段問題 {stage_name: issue_description}
+    score_trend: str = ""  # 評分趨勢分析
+    recommendations: list[str] = field(default_factory=list)  # 具體建議列表
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        # tuple 序列化為 list
+        d["iteration_range"] = list(self.iteration_range)
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RetrospectiveResult":
+        """從字典構建（用於從 DB 恢復）。"""
+        rng = data.get("iteration_range", [0, 0])
+        if isinstance(rng, list):
+            rng = (rng[0], rng[1])
+        return cls(
+            iteration_range=rng,
+            timestamp=data.get("timestamp", ""),
+            findings=data.get("findings", ""),
+            optimization_summary=data.get("optimization_summary", ""),
+            improvement_plan=data.get("improvement_plan", ""),
+            stage_issues=data.get("stage_issues", {}),
+            score_trend=data.get("score_trend", ""),
+            recommendations=data.get("recommendations", []),
+        )
+
+    def to_prompt_text(self) -> str:
+        """格式化為可注入 next_prompt 的文本。"""
+        lines = [
+            f"## 回顧分析（第 {self.iteration_range[0]}-{self.iteration_range[1]} 輪）",
+            f"### 發現的問題",
+            self.findings,
+            f"### 優化總結",
+            self.optimization_summary,
+            f"### 改善方案（必須遵循）",
+            self.improvement_plan,
+        ]
+        if self.recommendations:
+            lines.append("### 具體建議")
+            for i, rec in enumerate(self.recommendations, 1):
+                lines.append(f"{i}. {rec}")
+        return "\n".join(lines)
+
+
+@dataclass
+class DailyDigest:
+    """當日市場摘要 — 每日生成一次，同交易日內所有AI節點複用。
+
+    凝練濃縮當天的市場信息和新聞，標準化格式持久化到DB。
+    減少工具調用、提高數據命中率、減小幻覺。
+    """
+
+    trade_date: str  # 交易日 YYYY-MM-DD
+    timestamp: str  # 生成時間 ISO 格式
+    market_overview: str  # 市場概覽（指數表現、漲跌家數、成交額）
+    sector_highlights: str  # 板塊亮點（強勢/弱勢行業）
+    news_digest: str  # 新聞摘要（已凝練的關鍵新聞）
+    sentiment: str  # 市場情緒（偏多/中性/偏空 + 理由）
+    key_events: list[str] = field(default_factory=list)  # 關鍵事件列表
+    data_sources: list[str] = field(default_factory=list)  # 數據來源（DB/Tool/MCP）
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DailyDigest":
+        """從字典構建（用於從 DB 恢復）。
+
+        兼容兩種 key 格式：
+        - snake_case：內部 state 序列化 / DB agent_state 的 stateJson
+        - camelCase：Java 後端 DailyDigestDto 返回的 API 響應
+        """
+        return cls(
+            trade_date=data.get("trade_date") or data.get("tradeDate") or "",
+            timestamp=data.get("timestamp") or data.get("generatedAt") or "",
+            market_overview=data.get("market_overview") or data.get("marketOverview") or "",
+            sector_highlights=data.get("sector_highlights") or data.get("sectorHighlights") or "",
+            news_digest=data.get("news_digest") or data.get("newsDigest") or "",
+            sentiment=data.get("sentiment") or "",
+            key_events=data.get("key_events") or data.get("keyEvents") or [],
+            data_sources=data.get("data_sources") or data.get("dataSources") or [],
+        )
+
+    def is_empty(self) -> bool:
+        """判斷摘要是否為空（無實質內容）。
+
+        用於區分「有效摘要」和「生成失敗的空殼」。
+        trade_date 和 market_overview 是必要字段，任一為空則視為無效。
+        """
+        return not self.trade_date or not self.market_overview
+
+    def to_prompt_text(self) -> str:
+        """格式化為可注入 AI prompt 的標準化文本。"""
+        lines = [
+            f"## 當日市場摘要（{self.trade_date}，生成於 {self.timestamp[:19]}）",
+            f"### 市場概覽",
+            self.market_overview,
+            f"### 板塊亮點",
+            self.sector_highlights,
+            f"### 新聞摘要",
+            self.news_digest,
+            f"### 市場情緒",
+            self.sentiment,
+        ]
+        if self.key_events:
+            lines.append("### 關鍵事件")
+            for event in self.key_events:
+                lines.append(f"- {event}")
+        if self.data_sources:
+            lines.append(f"（數據來源: {', '.join(self.data_sources)}）")
+        return "\n".join(lines)
+
+
+@dataclass
 class OptimizerState:
     """優化器運行狀態 — 全局單例，貫穿整個優化循環生命週期。
 
@@ -165,14 +311,24 @@ class OptimizerState:
     current_market_news: str = ""  # 當前行情新聞分析結果
     current_favorable_industries: list = field(default_factory=list)  # 當前利好行業列表
     current_filtered_codes: list = field(default_factory=list)  # 當前篩選後的股票代碼
-    # 當前階段信息（可觀測性）
+    # 當前階段信息（可觀測性）— 瞬時狀態
     current_stage: str = ""  # 當前正在執行的階段名稱
     current_stage_status: str = ""  # 當前階段狀態: idle/running/judging/passed/failed/retrying
-    # 當前迭代的各階段結果（增量更新，用於實時可視化）
+    # 當前迭代的各階段結果（增量更新，用於實時可視化）— 瞬時狀態
     current_stage_results: list[dict] = field(default_factory=list)
     status_message: str = "idle"  # 人類可讀的狀態描述
     started_at: str | None = None  # 啟動時間（ISO 格式）
     stopped_at: str | None = None  # 停止時間（ISO 格式）
+
+    # ===== 新增：回顧分析結果（持久狀態，DB + 文件）=====
+    # 每 RETROSPECTIVE_INTERVAL 輪由回顧AI生成，注入下一輪 next_prompt
+    last_retrospective: RetrospectiveResult | None = None  # 最近一次回顧分析結果
+    retrospective_count: int = 0  # 已執行的回顧分析次數
+
+    # ===== 新增：當日市場摘要快取（持久狀態，DB）=====
+    # 同交易日內所有AI節點複用，減少工具調用
+    current_daily_digest: DailyDigest | None = None  # 當日市場摘要
+    daily_digest_date: str = ""  # 當日摘要對應的交易日
 
     def to_dict(self) -> dict:
         """將運行狀態序列化為字典，供 /status 等 API 端點返回。
@@ -200,6 +356,11 @@ class OptimizerState:
             "status_message": self.status_message,
             "started_at": self.started_at,
             "stopped_at": self.stopped_at,
+            # 新增：回顧分析和當日摘要
+            "last_retrospective": self.last_retrospective.to_dict() if self.last_retrospective else None,
+            "retrospective_count": self.retrospective_count,
+            "current_daily_digest": self.current_daily_digest.to_dict() if self.current_daily_digest else None,
+            "daily_digest_date": self.daily_digest_date,
             "model_status": {
                 "provider": llm_client.model_status.provider,
                 "model_name": llm_client.model_status.model_name,
@@ -254,6 +415,11 @@ class OptimizerState:
                 "current_config": self.current_config,
                 "current_reflection": self.current_reflection,
                 "current_next_prompt": self.current_next_prompt,
+                # 新增：回顧分析結果和當日摘要
+                "last_retrospective": self.last_retrospective.to_dict() if self.last_retrospective else None,
+                "retrospective_count": self.retrospective_count,
+                "current_daily_digest": self.current_daily_digest.to_dict() if self.current_daily_digest else None,
+                "daily_digest_date": self.daily_digest_date,
                 # 只保存最近 5 輪摘要（完整數據太大）
                 "recent_iterations": [
                     {
@@ -302,6 +468,16 @@ class OptimizerState:
             self.current_reflection = data.get("current_reflection", "")
             self.current_next_prompt = data.get("current_next_prompt", "")
 
+            # 恢復回顧分析結果和當日摘要
+            retro_data = data.get("last_retrospective")
+            if retro_data:
+                self.last_retrospective = RetrospectiveResult.from_dict(retro_data)
+            self.retrospective_count = data.get("retrospective_count", 0)
+            digest_data = data.get("current_daily_digest")
+            if digest_data:
+                self.current_daily_digest = DailyDigest.from_dict(digest_data)
+            self.daily_digest_date = data.get("daily_digest_date", "")
+
             # 恢復最近迭代摘要（不完整恢復，只供歷史參考）
             recent = data.get("recent_iterations", [])
             for r in recent:
@@ -324,4 +500,132 @@ class OptimizerState:
             return True
         except Exception as e:
             logger.warning(f"Checkpoint 恢復失敗: {e}")
+            return False
+
+    def to_db_json(self) -> str:
+        """序列化完整狀態為 JSON 字符串，用於 DB 持久化。
+
+        包含文件 checkpoint 的全部字段 + 回顧分析結果 + 當日摘要。
+        不包含完整 iterations（太大），只保存最近 5 輪摘要。
+        """
+        try:
+            db_data = {
+                "saved_at": datetime.now().isoformat(),
+                "current_iteration": self.current_iteration,
+                "best_score": self.best_score,
+                "best_iteration": self.best_iteration,
+                "best_strategy_id": self.best_strategy_id,
+                "best_criteria": self.best_criteria,
+                "best_config": self.best_config,
+                "current_criteria": self.current_criteria,
+                "current_config": self.current_config,
+                "current_reflection": self.current_reflection,
+                "current_next_prompt": self.current_next_prompt,
+                "last_retrospective": self.last_retrospective.to_dict() if self.last_retrospective else None,
+                "retrospective_count": self.retrospective_count,
+                "current_daily_digest": self.current_daily_digest.to_dict() if self.current_daily_digest else None,
+                "daily_digest_date": self.daily_digest_date,
+                "recent_iterations": [
+                    {
+                        "iteration": it.iteration,
+                        "composite_score": it.composite_score,
+                        "criteria": it.criteria,
+                        "backtest_statistics": it.backtest_statistics,
+                    }
+                    for it in self.iterations[-5:]
+                ],
+            }
+            return json.dumps(db_data, ensure_ascii=False, default=str)
+        except Exception as e:
+            logger.warning(f"DB 狀態序列化失敗: {e}")
+            return "{}"
+
+    async def checkpoint_db(self) -> bool:
+        """將狀態持久化到後端數據庫（DB 層 checkpoint）。
+
+        與文件 checkpoint 互補：文件用於快速恢復，DB 用於跨進程/跨交易日。
+        後端不可用時靜默失敗，不影響優化循環。
+
+        Returns:
+            bool: 是否成功持久化
+        """
+        try:
+            from app.services.backend_client import backend_client
+
+            state_json = self.to_db_json()
+            await backend_client.save_agent_state(
+                state_json=state_json,
+                current_iteration=self.current_iteration,
+                best_score=self.best_score,
+                retrospective_count=self.retrospective_count,
+            )
+            logger.debug(f"DB 狀態已持久化: iteration={self.current_iteration}")
+            return True
+        except Exception as e:
+            logger.warning(f"DB 狀態持久化失敗（不影響優化）: {e}")
+            return False
+
+    async def restore_db(self) -> bool:
+        """從後端數據庫恢復狀態（DB 層 restore）。
+
+        優先級：DB > 文件 checkpoint（DB 更新更及時）。
+        後端不可用時降級為文件 checkpoint。
+
+        Returns:
+            bool: 是否成功恢復
+        """
+        try:
+            from app.services.backend_client import backend_client
+
+            data = await backend_client.load_agent_state()
+            if not data:
+                logger.info("DB 無 Agent 狀態記錄")
+                return False
+
+            state_json = data.get("stateJson", "{}")
+            parsed = json.loads(state_json)
+
+            self.current_iteration = parsed.get("current_iteration", 0)
+            self.best_score = parsed.get("best_score", -999)
+            self.best_iteration = parsed.get("best_iteration", 0)
+            self.best_strategy_id = parsed.get("best_strategy_id")
+            self.best_criteria = parsed.get("best_criteria", dict(DEFAULT_CRITERIA))
+            self.best_config = parsed.get("best_config", dict(DEFAULT_BACKTEST_CONFIG))
+            self.current_criteria = parsed.get("current_criteria", dict(DEFAULT_CRITERIA))
+            self.current_config = parsed.get("current_config", dict(DEFAULT_BACKTEST_CONFIG))
+            self.current_reflection = parsed.get("current_reflection", "")
+            self.current_next_prompt = parsed.get("current_next_prompt", "")
+
+            # 恢復回顧分析結果和當日摘要
+            retro_data = parsed.get("last_retrospective")
+            if retro_data:
+                self.last_retrospective = RetrospectiveResult.from_dict(retro_data)
+            self.retrospective_count = parsed.get("retrospective_count", 0)
+            digest_data = parsed.get("current_daily_digest")
+            if digest_data:
+                self.current_daily_digest = DailyDigest.from_dict(digest_data)
+            self.daily_digest_date = parsed.get("daily_digest_date", "")
+
+            # 恢復最近迭代摘要
+            recent = parsed.get("recent_iterations", [])
+            for r in recent:
+                self.iterations.append(
+                    IterationResult(
+                        iteration=r.get("iteration", 0),
+                        timestamp="",
+                        criteria=r.get("criteria", {}),
+                        config={},
+                        screener_summary="",
+                        backtest_statistics=r.get("backtest_statistics", {}),
+                        composite_score=r.get("composite_score", 0),
+                    )
+                )
+
+            logger.info(
+                f"狀態已從 DB 恢復: iteration={self.current_iteration}, "
+                f"best_score={self.best_score}, 歷史記錄={len(self.iterations)} 條"
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"DB 狀態恢復失敗: {e}")
             return False

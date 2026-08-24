@@ -16,6 +16,7 @@ import type {
   NodeEvent,
   TimelineData,
 } from './types';
+import { apiFetch } from './client';
 
 /** 行業新聞項（來自 Agent 服務的東方財富搜索） */
 export interface IndustryNewsItem {
@@ -38,6 +39,29 @@ export interface WallstreetcnNewsItem {
   channel: string;
   image_url?: string;
   similarity?: number;
+}
+
+/** 數據庫財經新聞項（Java 後端 FinancialNewsDto） */
+export interface DbNewsItem {
+  id: number;
+  uri: string;
+  title: string;
+  summary: string;
+  source: string;
+  author: string | null;
+  channel: string;
+  publishedAt: string;  // ISO datetime
+  url: string;
+  imageUrl: string | null;
+}
+
+/** Spring Data Page 響應結構 */
+export interface PageResult<T> {
+  content: T[];
+  totalElements: number;
+  totalPages: number;
+  number: number;  // 當前頁碼（從 0 開始）
+  size: number;
 }
 
 // 通過 next rewrites 反代：/TradingWorkstation/agent-api/* → agent:8100/api/agent/*
@@ -139,4 +163,22 @@ export const agentApi = {
     ),
   cleanupExpiredNews: () =>
     agentPost<{ deleted: number; status: string }>(`/news/cleanup`, {}),
+};
+
+// ===== 數據庫新聞 API（走 Java 後端，分頁查詢已入庫新聞）=====
+// Java 後端 /api/news 返回 Spring Page<FinancialNewsDto>，經 ApiResponse 包裝
+// apiFetch 自動解包 ApiResponse.data，所以這裡直接拿到 Page 結構
+
+export const newsDbApi = {
+  /** 分頁查詢最新新聞（按發佈時間倒序） */
+  listLatest: (page = 0, size = 20) =>
+    apiFetch<PageResult<DbNewsItem>>(`/news?page=${page}&size=${size}`),
+
+  /** 按頻道分頁查詢新聞 */
+  listByChannel: (channel: string, page = 0, size = 20) =>
+    apiFetch<PageResult<DbNewsItem>>(`/news/channel/${channel}?page=${page}&size=${size}`),
+
+  /** 新聞總數 */
+  count: () =>
+    apiFetch<number>(`/news/count`),
 };

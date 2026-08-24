@@ -380,7 +380,7 @@ kill $(lsof -t -i:8090); pkill -f "next dev"; pkill -f "uvicorn app.main:app"
 
 ## 10. 安全部署注意（必讀）
 
-- **系統無認證**：後端 51+ agent 22 端點全開放，含觸發同步、寫 DB 配置、啟停 AI 循環。僅限單機或可信內網；暴露公網前必須加反代認證（nginx BasicAuth / OAuth proxy）
+- **系統無認證**：後端 92+ agent 42 端點全開放，含觸發同步、寫 DB 配置、啟停 AI 循環。僅限單機或可信內網；暴露公網前必須加反代認證（nginx BasicAuth / OAuth proxy）
 - **CORS**：後端 origins 白名單來自 .env；agent 硬編碼 localhost——跨機部署需調整
 - **通知 Webhook** 當前無 HMAC 簽名；**郵件密碼明文存 .env**——妥善保護 .env 權限
 - **Prometheus/Grafana** 若啟用同樣無認證，注意網絡邊界

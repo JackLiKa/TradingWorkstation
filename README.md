@@ -5,27 +5,70 @@
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.4-green.svg)](https://spring.io/projects/spring-boot)
 [![Next.js](https://img.shields.io/badge/Next.js-15.1.9-black.svg)](https://nextjs.org/)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangola.com/)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1.svg)](https://www.mysql.com/)
 
-> **A 股量化交易工作台** — 含行情採集、技術指標、條件選股、策略回測、AI 優化、AI 投研問答。
+> **A 股量化交易工作台** — 含行情採集、技術指標、條件選股、策略回測、AI 優化、AI 投研問答、行情預計算、數據質量監控。
 > 由原 PySide6 桌面端項目 ([Quantization](https://github.com/JackLiKa/Quantization.git)) 重構而來，保持全部功能並做性能優化與 AI 策略優化集成。
 
-**[快速開始](#快速開始)** • **[架構概覽](#架構概覽)** • **[文檔導航](#文檔導航)** • **[開發](#開發)** • **[部署](#部署)** • **[License](#license)**
+**[快速開始](#快速開始)** • **[項目亮點](#項目亮點)** • **[架構概覽](#架構概覽)** • **[文檔導航](#文檔導航)** • **[開發](#開發)** • **[部署](#部署)** • **[License](#license)**
 
 ---
 
-## 項目簡介
+## 項目亮點
 
-Trading Workstation 是一個**單機/小團隊自用**的 A 股量化研究工作台，覆蓋從數據採集到 AI 策略優化的完整閉環：
+### 完整的量化研究閉環
 
-- **行情採集** — Baostock 日線（3 種復權）+ 540 個指數 + 行業分類，冪等寫入 MySQL
-- **技術指標** — MA/EMA/BOLL/MACD/KDJ/RSI 等，註冊表模式可擴展
+從數據採集到 AI 策略優化，覆蓋量化研究全流程：
+
+- **行情採集** — Baostock 日線（3 種復權）+ 540 個指數 + 行業分類，冪等寫入 MySQL，增量更新 + 全量重刷
+- **技術指標** — MA/EMA/BOLL/MACD/KDJ/RSI 等，註冊表模式可擴展（新增指標只需實現接口 + `@Component`）
 - **條件選股** — 49 字段條件組合篩選，全市場 parallelStream 過濾
-- **策略回測** — 等權調倉 + 滑點 + 漲跌停約束 + 夏普減無風險利率 + 結果自動落庫
-- **行業分析** — 景氣度/輪動/Markov/多模型預測（ARIMA/Holt-Winters/線性回歸）/AutoML/季節性
-- **AI 優化** — 6 階段 AI 循環（分析→生成→驗證→回測→評分→反思），8 個 LLM 供應商按階段性價比路由
-- **AI 投研問答** — 懸浮聊天卡片，ToolCalling + 7 工具（全網搜索/語義搜索/百度/金融數據 MCP/A 股歷史 MCP/代碼搜索/文檔搜索），SSE 流式回復 + 引用追溯 + 對話持久化
+- **策略回測** — 等權調倉 + 滑點 + 漲跌停約束 + 夏普減無風險利率 + Walk-forward 樣本外驗證 + 結果自動落庫
+- **行業分析** — 景氣度 4 維度評分 / 輪動信號 / Markov 狀態轉移 / 多模型預測（ARIMA/Holt-Winters/線性回歸）/ AutoML 調參 / 季節性分析
+
+### AI 驅動的策略優化
+
+6 階段 AI 優化循環，8 個 LLM 供應商按階段性價比智能路由：
+
+```
+AI 0 行情新聞 → AI 1 行情分析 → AI 2 策略生成 → AI 3 回測驗證 → AI 4 評分 → AI 5 反思
+     ↑                                                                    ↓
+     └────────────────────── 變異注入 + 歷史經驗 RAG ←──────────────────────┘
+```
+
+- **8 個 LLM 供應商**：DeepSeek V4-Pro/Flash、GLM-5.2/4-Flash、Qwen3.6、Qoder、Devin、OX-Alpha
+- **熔斷器**：連續失敗 3 次自動暫停 5 分鐘，避免雪崩
+- **RAG 經驗回憶**：Milvus Lite 向量庫，每輪結果向量化存入，下輪語義搜索相似歷史經驗
+- **回顧分析**：每 5 輪自動觸發回顧，分析跨輪趨勢並注入強變異
+- **三層狀態管理**：記憶 → 文件 → 數據庫，跨重啟恢復優化循環
+
+### AI 投研問答（ToolCalling + 流式輸出）
+
+懸浮聊天卡片，支持 SSE 流式回復 + 思考動畫 + 工具調用實時展示：
+
+- **8 個工具**：本地市場數據查詢 / 全網搜索 / 語義搜索 / 百度 / FTShare 金融 MCP / A 股歷史 MCP / 代碼搜索 / 文檔搜索
+- **本地數據優先**：AI 回答金融問題時優先查詢本地數據庫（行情/行業/新聞/選股），再補充外部數據
+- **思考動畫**：AI 思考時顯示脈動大腦圖標 + 三點跳動 + 實時狀態文字
+- **引用追溯**：每條引用包含來源、標題、URL，可點擊跳轉
+- **對話持久化**：歷史對話切換、模型選擇、工具調用鏈完整記錄
+
+### 行情預計算快照（毫秒級加載）
+
+數據更新後自動預計算行情分析，前端直接加載快照，無需實時計算：
+
+- **4 種快照**：市場概覽 / 行業景氣度 / 輪動信號 / 市場廣度
+- **自動觸發**：ingestion 腳本完成後自動調用預計算，無需人工干預
+- **歷史可追蹤**：快照按交易日持久化，支持回看任意交易日的市場狀態
+- **性能提升**：從數秒實時計算降至毫秒級快照讀取
+
+### 數據質量監控
+
+純 SQL 規則集 + AI 總結，零幻覺風險：
+
+- **10 條 SQL 規則**：重複行 / 非法值 / 前復權陳舊化 / 行業缺失 / 日期缺口 / 表行數統計
+- **AI 總結**：SQL 規則做檢測（100% 準確），免費 LLM 做自然語言報告（總結，不檢測）
+- **API 端點**：`POST /data-quality/run` / `POST /data-quality/run-with-ai-summary`
 
 ## 快速開始
 
@@ -96,7 +139,7 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 
 ## 架構概覽
 
-4 個自研服務 + 1 個數據庫 + 1 個可選 MCP 服務 + 可選監控棧，後端按業務域拆分為 **14 個模塊**：
+4 個自研服務 + 1 個數據庫 + 1 個可選 MCP 服務 + 可選監控棧，後端按業務域拆分為 **16 個模塊**：
 
 ```
 瀏覽器 → Next.js 前端 (:3010)  ──rewrites──→  Java 後端 (:8090)  ──JPA──→  MySQL (:3306)
@@ -107,7 +150,7 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
                                          └──→  a-share-mcp (:8101，可選)  ← A 股歷史數據 MCP
 ```
 
-**後端 14 模塊**（`com.quantization.module.*`）：
+**後端 17 模塊**（`com.quantization.module.*`）：
 
 | 模塊 | 職責 |
 |------|------|
@@ -125,6 +168,9 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 | `aicalllog` | AI 調用日誌（agent 回寫，供可視化） |
 | `news` | 財經新聞查詢與管理（華爾街見聞，URI 去重） |
 | `chat` | AI 投研聊天對話持久化（對話+消息，引用追溯，工具調用鏈） |
+| `agentstate` | Agent 三層狀態持久化（記憶→文件→DB，跨重啟恢復） |
+| `dailydigest` | 當日市場摘要持久化（AI 生成 + 同日複用，減少重複工具調用） |
+| `snapshot` | 行情預計算快照查詢（market_analysis_snapshot 表，毫秒級加載） |
 
 > 完整架構設計、C4 圖、數據流詳見 [`docs/architecture.md`](./docs/architecture.md)。
 
@@ -148,8 +194,8 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 |----|------|
 | 後端 | Java 21、Spring Boot 3.3.4、Spring Data JPA (Hibernate 6.5)、HikariCP、Caffeine、springdoc-openapi、Lombok、Spring Mail |
 | 前端 | Next.js 15.1.9 (App Router)、React 19、TypeScript 5.6、Tailwind CSS、shadcn/ui、ECharts 5.5、SWR、Zustand |
-| AI Agent | Python 3.10+、FastAPI、Uvicorn、LangGraph 風格優化循環、多模型 LLM 路由（8 供應商）、Milvus Lite (RAG)、AI 聊天引擎（ToolCalling + 7 工具）、Prometheus |
-| 數據庫 | MySQL 8.0+（10 張表：stock_daily / index_daily / index_metadata / stock_industry / industry_daily / backtest_strategy / user_preference / ai_call_log / financial_news / chat_conversation + chat_message） |
+| AI Agent | Python 3.10+、FastAPI、Uvicorn、LangGraph 風格優化循環、多模型 LLM 路由（8 供應商）、Milvus Lite (RAG)、AI 聊天引擎（ToolCalling + 8 工具 + SSE 流式 + 思考動畫）、數據質量監控（10 條 SQL 規則 + AI 總結）、Prometheus |
+| 數據庫 | MySQL 8.0+（16 張表：stock_daily / index_daily / index_metadata / stock_industry / industry_daily / backtest_strategy / user_preference / ai_call_log / financial_news / news_sentiment_score / stock_listing / chat_conversation / chat_message / agent_state / daily_market_digest / market_analysis_snapshot） |
 | 數據採集 | Python Baostock 腳本（三模塊拆分：fetch + write + ingest），Java SyncService 通過 ProcessBuilder 編排 |
 | 通知 | Spring Mail (SMTP) + Webhook（景氣度預警，異步推送） |
 | 安全 | Spring Security + API Key 認證（`SECURITY_ENABLED=true` + `API_KEY`，開發環境默認關閉） |
@@ -159,26 +205,26 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 ### 架構與設計
 
 - [`docs/architecture.md`](./docs/architecture.md) — 系統架構與模塊設計（C4 圖、服務拓撲、context-path 契約鏈）
-- [`docs/MODULE_GUIDE.md`](./docs/MODULE_GUIDE.md) — 14 模塊逐一說明（端點、分層、緩存、依賴）
-- [`docs/database.md`](./docs/database.md) — 數據庫 Schema（10 張表、索引、ER 圖）
+- [`docs/MODULE_GUIDE.md`](./docs/MODULE_GUIDE.md) — 17 模塊逐一說明（端點、分層、緩存、依賴）
+- [`docs/database.md`](./docs/database.md) — 數據庫 Schema（16 張表、索引、ER 圖）
 
 ### API 與引擎
 
-- [`docs/api.md`](./docs/api.md) — REST API 參考（後端 59 端點 + Agent 29 端點）
+- [`docs/api.md`](./docs/api.md) — REST API 參考（後端 98 端點 + Agent 48 端點）
 - [`docs/BACKTEST_ENGINE.md`](./docs/BACKTEST_ENGINE.md) — 回測引擎原理與使用指南
 - [`docs/AGENT_SERVICE.md`](./docs/AGENT_SERVICE.md) — Agent 服務詳解（LLM 路由、優化循環、RAG、AI 聊天引擎）
 
 ### 數據與運維
 
-- [`docs/DATA_INGESTION.md`](./docs/DATA_INGESTION.md) — 數據採集完整指南（含前復權陳舊化對策）
+- [`docs/DATA_INGESTION.md`](./docs/DATA_INGESTION.md) — 數據採集完整指南（含前復權陳舊化對策 + 行情預計算觸發）
 - [`docs/DEVELOPMENT.md`](./docs/DEVELOPMENT.md) — 開發指南（規範、構建命令、變更清單）
 - [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) — 部署指南（環境變量、Docker Compose、故障排查）
 
 ### 子模塊 README
 
-- [`java/README.md`](./java/README.md) — 後端模塊說明（12 模塊、構建、關鍵設計）
-- [`next/README.md`](./next/README.md) — 前端模塊說明（路由、API 客戶端、ECharts 封裝）
-- [`agent/README.md`](./agent/README.md) — Agent 服務說明（6 階段、7 供應商、多窗口評分）
+- [`java/README.md`](./java/README.md) — 後端模塊說明（17 模塊、構建、關鍵設計）
+- [`next/README.md`](./next/README.md) — 前端模塊說明（路由、API 客戶端、ECharts 封裝、AI 聊天）
+- [`agent/README.md`](./agent/README.md) — Agent 服務說明（6 階段、8 供應商、8 工具、數據質量）
 - [`ingestion/README.md`](./ingestion/README.md) — 數據採集說明（三模塊、CLI、進度協議）
 
 ### 其他
@@ -197,7 +243,7 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 ```bash
 cd java  && mvn -DskipTests compile          # 後端編譯（需 JDK 21）
 cd next  && npm run build && npm run lint     # 前端構建 + lint
-cd agent && python -m pytest tests/           # Agent 測試（342 個）
+cd agent && python -m pytest tests/           # Agent 測試（398 個）
 cd java  && mvn test                          # 後端測試（80 個）
 cd next  && npm run test                      # 前端測試（24 個 vitest）
 ```

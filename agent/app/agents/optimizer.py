@@ -31,6 +31,7 @@ from app.agents.stages.market_analysis import MarketAnalysisStage
 from app.agents.stages.market_news import MarketNewsStage
 from app.agents.stages.prompt_generation import PromptGenerationStage
 from app.agents.stages.strategy_generation import StrategyGenerationStage, parse_strategy_output
+from app.agents.stages.retrospective import run_retrospective
 from app.agents.state import (
     DEFAULT_BACKTEST_CONFIG,
     DEFAULT_CRITERIA,
@@ -39,6 +40,7 @@ from app.agents.state import (
     StageResult,
     build_default_backtest_config,
     build_default_criteria,
+    RETROSPECTIVE_INTERVAL,
 )
 from app.core.llm_client import llm_client
 from app.core.metrics import (
@@ -412,10 +414,15 @@ async def run_optimization_loop():
     # 必須在 restore() 之前捕獲，因為 restore() 會覆蓋 state.current_config
     user_config_overrides = dict(state.current_config)
 
-    # 嘗試從 checkpoint 恢復狀態（崩潰恢復）
-    restored = state.restore()
-    if restored and state.best_score > -999:
-        logger.info(f"從 checkpoint 恢復: iteration={state.current_iteration}, best_score={state.best_score}")
+    # 嘗試從 DB 恢復狀態（優先級高於文件 checkpoint，DB 更新更及時）
+    db_restored = await state.restore_db()
+    if not db_restored:
+        # DB 不可用時降級為文件 checkpoint
+        restored = state.restore()
+        if restored and state.best_score > -999:
+            logger.info(f"從文件 checkpoint 恢復: iteration={state.current_iteration}, best_score={state.best_score}")
+    elif state.best_score > -999:
+        logger.info(f"從 DB 恢復: iteration={state.current_iteration}, best_score={state.best_score}")
 
     # === 校準基準日期到數據庫最新交易日 ===
     latest_trade_date = await backend_client.get_latest_trade_date()
@@ -558,17 +565,31 @@ async def run_optimization_loop():
             state.current_stage_results = list(_results)  # 同步到狀態
 
         try:
+            # === 當日市場摘要複用（減少工具調用）===
+            # 若當日已有摘要，注入到 market_data 供 AI0 優先使用
+            if not state.current_daily_digest or state.daily_digest_date != latest_trade_date:
+                try:
+                    from app.services.daily_digest import generate_digest
+                    digest = await generate_digest()
+                    if digest:
+                        logger.info(f"當日摘要已生成/複用（交易日={digest.trade_date}）")
+                except Exception as e:
+                    logger.warning(f"當日摘要生成失敗（不影響優化）: {e}")
+
             # === AI 0: 行情新聞分析（+ 評委） ===
             # 優化：提前獲取 market_data，AI 0 和 AI 1 共享，避免重複調用後端 API
             state.status_message = f"第 {iteration} 輪：AI 0 行情新聞分析中..."
             logger.info(f"第 {iteration} 輪：AI 0 行情新聞")
             shared_market_data = await backend_client.get_market_overview()
+            # 若有當日摘要，注入到 market_data 供 AI0 參考
+            if state.current_daily_digest:
+                shared_market_data["daily_digest"] = state.current_daily_digest.to_prompt_text()
             news_result: StageResult = await _market_news_stage.run(
                 state=state,
                 judge=_judge,
                 max_attempts=2,
                 history=state.iterations,
-                market_data=shared_market_data,  # ← 共享市場數據
+                market_data=shared_market_data,  # ← 共享市場數據（含當日摘要）
             )
             _add_stage_result(news_result)
             market_news = sanitize_output(news_result.output)
@@ -1029,6 +1050,25 @@ async def run_optimization_loop():
 
             # === 狀態 checkpoint（崩潰恢復用）===
             state.checkpoint()
+            # DB 層 checkpoint（跨進程/跨交易日恢復）
+            await state.checkpoint_db()
+
+            # === 回顧分析（每 RETROSPECTIVE_INTERVAL 輪觸發）===
+            if state.current_iteration > 0 and state.current_iteration % RETROSPECTIVE_INTERVAL == 0:
+                logger.info(f"第 {state.current_iteration} 輪：觸發回顧分析（每{RETROSPECTIVE_INTERVAL}輪）")
+                state.status_message = f"第 {state.current_iteration} 輪：回顧分析中..."
+                try:
+                    retro_result = await run_retrospective(state, window_size=RETROSPECTIVE_INTERVAL)
+                    if retro_result:
+                        logger.info(f"回顧分析完成，結論已注入下一輪 next_prompt")
+                        state.status_message = f"第 {state.current_iteration} 輪完成+回顧分析完成，評分 {composite_score}"
+                        # 回顧分析後再次 checkpoint（含回顧結果）
+                        state.checkpoint()
+                        await state.checkpoint_db()
+                    else:
+                        logger.warning("回顧分析未產出結果")
+                except Exception as retro_e:
+                    logger.error(f"回顧分析異常（不影響優化）: {retro_e}", exc_info=True)
 
             # 等待間隔
             await asyncio.wait_for(_stop_event.wait(), timeout=settings.optimization_interval)

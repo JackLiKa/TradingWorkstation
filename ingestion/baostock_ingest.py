@@ -422,6 +422,28 @@ def _run_cli(args) -> int:
         except Exception:
             pass
 
+    # === 數據更新完成後觸發行情預計算 ===
+    if grand_total > 0:
+        _log(f"\n{'=' * 60}")
+        _log(f"開始行情預計算（生成分析快照）")
+        _log(f"{'=' * 60}")
+        try:
+            import subprocess
+            precompute_script = str(Path(__file__).resolve().parent / "precompute_market_snapshot.py")
+            result = subprocess.run(
+                [sys.executable, precompute_script, "--auto"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=300,
+            )
+            if result.returncode == 0:
+                _log("[預計算] 行情快照已生成")
+            else:
+                _log(f"[預計算] 預計算失敗（不影響數據同步結果）: {result.stderr[:200]}")
+        except Exception as e:
+            _log(f"[預計算] 觸發失敗（不影響數據同步結果）: {e}")
+
     return 0
 
 
@@ -594,6 +616,28 @@ def _run_interactive() -> int:
             bs.logout()
         except Exception:
             pass
+
+    # === 數據更新完成後觸發行情預計算 ===
+    if grand_total > 0:
+        print(f"\n{'=' * 60}")
+        print(f"開始行情預計算（生成分析快照）")
+        print(f"{'=' * 60}")
+        try:
+            import subprocess
+            precompute_script = str(Path(__file__).resolve().parent / "precompute_market_snapshot.py")
+            result = subprocess.run(
+                [sys.executable, precompute_script, "--auto"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=300,
+            )
+            if result.returncode == 0:
+                print("[預計算] 行情快照已生成")
+            else:
+                print(f"[預計算] 預計算失敗（不影響數據同步結果）: {result.stderr[:200]}")
+        except Exception as e:
+            print(f"[預計算] 觸發失敗（不影響數據同步結果）: {e}")
 
     return 0
 

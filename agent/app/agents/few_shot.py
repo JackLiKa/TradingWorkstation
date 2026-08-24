@@ -146,6 +146,48 @@ AI 輸出: {"reasoning": "市場震盪上行適合趨勢跟蹤，反思指出需
 {"passed": false, "reason": "reasoning 僅說「根據市場分析調整」，無具體參數原因和預期效果"}
 """
 
+# ===== 回顧分析 AI — 每5輪分析各AI輸入輸出的回顧節點 =====
+RETROSPECTIVE_EXAMPLE = """\
+## 示例
+
+### 輸入（示例）
+回顧範圍: 第 1-5 輪
+評分趨勢: [62.5, 65.3, 64.8, 68.1, 67.9]
+
+第1輪各階段摘要:
+- market_news: 識別出半導體、新能源為利好行業，但未引用具體新聞標題驗證
+- strategy_generation: 生成策略 minTurn=1.5, minVolumeRatio=1.0, industries=["C39電子設備製造"]
+- backtest_reflection: 收益3.2%, 回撤8.5%, 反思指出回撤偏高需加止損
+- 評委: strategy_generation 得分 58（reasoning 引用數據不足）
+
+第3輪各階段摘要:
+- strategy_generation: 新增 stopLossPct=8, 但同時加了 maxRsi14<=30 導致選股數不足
+- backtest_reflection: 交易=0筆，策略無功能
+
+第5輪各階段摘要:
+- strategy_generation: 移除 maxRsi14, 擴展至2個行業, 交易=12筆, 評分67.9
+- 評委: reasoning 質量提升至 72 分
+
+### 輸出（示例）
+{
+  "findings": "1. AI2策略生成在第3輪疊加過多條件(maxRsi14+單一行業)導致0交易，違反超短線鐵律\\n2. AI0行情新聞連續5輪未引用具體新聞標題驗證利好利空，數據引用不足\\n3. AI3反思質量穩定但建議過於籠統（如「需控制回撤」未給出具體止損值）\\n4. 評分從62.5升至67.9但第3輪因0交易跌至低點，說明策略生成對條件疊加敏感",
+  "optimization_summary": "5輪中評分總體上升趨勢(+5.4分)，但第3輪出現0交易的低質量迭代。核心問題是AI2在嘗試改進時傾向疊加條件而非替換條件，導致過度收斂。AI0的新聞引用質量持續偏低，影響利好利空判斷可信度。AI3反思建議缺乏可執行性。",
+  "improvement_plan": "1. AI2策略生成：下次調整時優先替換條件而非疊加，若新增條件必須同時移除一個舊條件\\n2. AI0行情新聞：必須在related_news中引用至少1條具體新聞標題，否則supported_by_news設為false\\n3. AI3回測反思：給出具體參數建議（如「stopLossPct從8調至5」）而非籠統建議\\n4. 評分提升目標：下一個5輪窗口目標達到72+分",
+  "stage_issues": {
+    "market_news": "新聞引用率低，5輪中僅1輪引用了具體新聞標題",
+    "strategy_generation": "條件疊加傾向明顯，第3輪導致0交易",
+    "backtest_reflection": "建議籠統缺乏可執行性"
+  },
+  "score_trend": "62.5→65.3→64.8→68.1→67.9，總體上升但第3輪因0交易出現波谷",
+  "recommendations": [
+    "AI2下次調整時替換而非疊加條件",
+    "AI0必須引用至少1條新聞標題驗證利好利空",
+    "AI3反思需給出具體參數值建議",
+    "下一窗口目標評分72+"
+  ]
+}
+"""
+
 
 def get_few_shot(stage_name: str) -> str:
     """根據階段名稱返回對應的少樣本提示。"""
@@ -157,5 +199,6 @@ def get_few_shot(stage_name: str) -> str:
         "backtest_reflection": BACKTEST_REFLECTION_EXAMPLE,
         "prompt_generation": PROMPT_GENERATION_EXAMPLE,
         "judge": JUDGE_EXAMPLE,
+        "retrospective": RETROSPECTIVE_EXAMPLE,
     }
     return examples.get(stage_name, "")

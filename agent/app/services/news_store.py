@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services import wallstreetcn_client
+from app.services.news_filter import filter_mixed_news, filter_news_items
 
 logger = logging.getLogger("agent.news_store")
 
@@ -82,6 +83,11 @@ def _try_init():
             data_dir = Path(__file__).resolve().parent.parent.parent / "data"
             data_dir.mkdir(exist_ok=True)
             db_path = str(data_dir / "milvus_lite.db")
+
+            # 復用 vector_store 的鎖清理邏輯
+            from app.services.vector_store import _cleanup_stale_lock
+            _cleanup_stale_lock(data_dir, db_path)
+
             _milvus = MilvusClient(db_path)
             logger.info(f"[news_store] Milvus Lite 初始化成功: {db_path}")
         except Exception as e:
@@ -612,13 +618,21 @@ async def sync_news_to_vector_store(
     # 抓取新聞
     if channel == "all":
         # 全量同步：所有頻道 + 頭條 + 熱文 + 快訊
-        articles = await wallstreetcn_client.fetch_all_channels(limit_per_channel=50)
+        raw_articles = await wallstreetcn_client.fetch_all_channels(limit_per_channel=50)
     elif channel == "a-stock":
         # A 股聚焦：A 股 + 全球 + 快訊 + 熱文
-        articles = await wallstreetcn_client.fetch_a_stock_focused(limit=limit)
+        raw_articles = await wallstreetcn_client.fetch_a_stock_focused(limit=limit)
     else:
         # 單頻道
-        articles = await wallstreetcn_client.fetch_latest_articles(channel, limit=limit)
+        raw_articles = await wallstreetcn_client.fetch_latest_articles(channel, limit=limit)
+
+    # 財經關鍵詞過濾 — 丟棄噪音（7x24 快訊無關鍵詞的、廣告、非財經內容）
+    fetched_count = len(raw_articles)
+    if channel in ("all", "a-stock"):
+        articles = filter_mixed_news(raw_articles)
+    else:
+        articles = filter_news_items(raw_articles, source_type="article")
+    filtered_count = fetched_count - len(articles)
 
     # 1. 存入向量庫
     result = store_news_batch(articles)
@@ -627,7 +641,8 @@ async def sync_news_to_vector_store(
     mysql_result = await _upsert_to_mysql(articles)
 
     return {
-        "fetched": len(articles),
+        "fetched": fetched_count,
+        "filtered": filtered_count,
         "stored": result["stored"],
         "duplicated": result["duplicated"],
         "failed": result["failed"],
@@ -698,6 +713,7 @@ async def catchup_news(
         return {
             "channels": len(channels),
             "fetched": 0,
+            "filtered": 0,
             "stored": 0,
             "duplicated": 0,
             "failed": 0,
@@ -705,6 +721,13 @@ async def catchup_news(
             "mysql_duplicated": 0,
             "duration_seconds": round(_time.time() - start, 1),
         }
+
+    # 財經關鍵詞過濾 — 補抓的新聞也需要過濾噪音
+    fetched_count = len(all_articles)
+    all_articles = filter_news_items(all_articles, source_type="article")
+    filtered_count = fetched_count - len(all_articles)
+    if filtered_count > 0:
+        logger.info(f"[news_store] 補抓新聞過濾: {fetched_count} → {len(all_articles)} 條（丟棄 {filtered_count} 條噪音）")
 
     # 存入向量庫
     result = store_news_batch(all_articles)
@@ -721,7 +744,8 @@ async def catchup_news(
 
     return {
         "channels": len(channels),
-        "fetched": len(all_articles),
+        "fetched": fetched_count,
+        "filtered": filtered_count,
         "stored": result["stored"],
         "duplicated": result["duplicated"],
         "failed": result["failed"],

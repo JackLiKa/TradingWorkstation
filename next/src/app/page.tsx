@@ -14,6 +14,7 @@ import { MetricGrid } from '@/components/dashboard/MetricCard';
 import { MoversList } from '@/components/dashboard/MoversList';
 import { StockTable } from '@/components/dashboard/StockTable';
 import { LogPanel } from '@/components/dashboard/LogPanel';
+import { MarketSnapshotPanel } from '@/components/dashboard/MarketSnapshotPanel';
 import { CandlestickChart } from '@/components/chart/CandlestickChart';
 import {
   MetricGridSkeleton,
@@ -284,6 +285,9 @@ export default function DashboardPage() {
           </Button>
         </div>
       )}
+
+      {/* 行情預計算快照（預計算數據，毫秒級加載） */}
+      <MarketSnapshotPanel />
 
       {/* 日誌面板 */}
       {logs.length > 0 && <LogPanel logs={logs} statusText="搜索结果已刷新" />}

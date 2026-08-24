@@ -1,9 +1,11 @@
-# Agent 服務專題（LLM 路由與優化循環 + AI 聊天）
+# Agent 服務專題（LLM 路由與優化循環 + AI 聊天 + 數據質量）
 
 > 對應代碼：`agent/app/`
 > 服務：FastAPI，端口 8100，前綴 `/api/agent`，Swagger `:8100/docs`
 > 定位：無人值守的選股策略自動優化循環——用多個 LLM 分工生成/反思策略，用後端回測 API 驗證，用向量庫記憶經驗。
-> **新增**：AI 聊天引擎（`agent/app/chat/`）— ToolCalling + 7 工具 + SSE 流式，為前端懸浮聊天卡片提供投研問答能力。
+> **新增**：AI 聊天引擎（`agent/app/chat/`）— ToolCalling + 8 工具 + SSE 流式 + 思考動畫，為前端懸浮聊天卡片提供投研問答能力。
+> **新增**：數據質量監控（`agent/app/services/data_quality.py`）— 10 條 SQL 規則 + AI 總結，零幻覺風險。
+> **新增**：本地市場數據工具（`agent/app/chat/tools/local_market_data.py`）— AI 聊天優先查詢本地數據庫。
 
 ---
 
@@ -11,7 +13,7 @@
 
 ```mermaid
 flowchart TD
-    subgraph API["api/routes.py (29 端點)"]
+    subgraph API["api/routes.py (42 端點)"]
         start["POST /start"] --> task["asyncio.create_task(run_optimization_loop)"]
     end
     subgraph LOOP["agents/optimizer.py 優化循環"]
@@ -439,7 +441,7 @@ agent_json_failure_total{recovered="true",stage="strategy_generation"} 1
 cd agent && pip install -r requirements.txt
 cp .env.example .env   # 填至少一個 LLM key
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8100
-python -m pytest tests/          # 342 個測試，覆蓋率門檻 40%
+python -m pytest tests/          # 398 個測試，覆蓋率門檻 40%
 ```
 
 ### 11.1 測試覆蓋（200+ 個測試）
@@ -545,11 +547,13 @@ flowchart TD
 | `content` | text | 文本塊（打字機效果，20 字/塊） |
 | `done` | provider, model, citations, tool_calls_log, tokens | 全部完成（含所有引用 + 工具鏈） |
 | `error` | message | 錯誤 |
+| `thinking` | round, message | AI 思考中（每輪 LLM 調用前發送，前端顯示脈動大腦動畫） |
 
-### 13.4 7 個工具
+### 13.4 8 個工具
 
 | 分類 | 工具名 | 顯示名 | 數據源 | API Key |
 |------|--------|--------|--------|---------|
+| Tools | `local_market_data` | 本地市場數據 | 後端 REST API（行情/行業/新聞/選股） | 無需（本地數據） |
 | Tools | `open_web_search` | 全網資訊檢索 | DuckDuckGo Lite HTML 解析 | 無需 |
 | Tools | `exa_search` | Exa 深度語義搜索 | Exa.ai API | `EXA_API_KEY`（每日 150 次免費） |
 | Tools | `baidu_search` | 百度中文資訊搜索 | 百度千帆 AI 搜索 API | `BAIDU_QIANFAN_API_KEY` |
@@ -557,6 +561,20 @@ flowchart TD
 | Tools | `context7_search` | Context7 文檔搜索 | Context7 API | 無需 |
 | MCP | `ftshare_mcp` | FTShare 金融數據 | FTShare MCP（streamableHttp） | 無需（公開服務） |
 | MCP | `a_share_mcp` | A股歷史數據 | a-share-mcp（本地 MCP 服務） | 無需（需本地啟動） |
+
+**`local_market_data` 工具支持的 action**：
+
+| action | 說明 | 數據來源 |
+|--------|------|----------|
+| `market_overview` | 市場概覽（指數 + 漲跌家數） | 後端 `/api/stock/market-overview` |
+| `index_history` | 指數歷史 | 後端 `/api/stock/index-history` |
+| `sector_performance` | 板塊表現 | 後端 `/api/stock/sector-performance` |
+| `industry_prosperity` | 行業景氣度 | 後端 `/api/stock/industry-prosperity` |
+| `rotation_signals` | 輪動信號 | 後端 `/api/stock/rotation` |
+| `market_breadth` | 市場廣度 | 後端 `/api/stock/market-breadth` |
+| `local_news` | 本地新聞 | 後端 `/api/news` |
+| `screener` | 選股器 | 後端 `/api/screener/run` |
+| `data_range` | 數據範圍 | 後端 `/api/stock/data-range` |
 
 ### 13.5 支持 function calling 的供應商
 
@@ -573,7 +591,35 @@ flowchart TD
 
 - 角色：頂尖量化交易與智能投研助手
 - 核心目標：結合實時網路資訊 + 金融數據接口，提供基於真實數據的分析
+- **本地數據優先**：回答金融問題時優先使用 `local_market_data` 工具查詢本地數據庫
 - 工具調用規則：禁止僅憠訓練數據回答金融事實類問題
-- 數據交叉驗證：先調用金融 MCP 獲取基本面，再調用搜索補充市場情緒
+- 數據交叉驗證：先調用本地數據 + 金融 MCP 獲取基本面，再調用搜索補充市場情緒
 - 輸出規範：必須標註數據來源，優先使用 Markdown 表格
 - 容錯機制：數據不可用時明確告知，嚴禁編造
+
+### 13.7 數據質量監控（data_quality）
+
+`agent/app/services/data_quality.py` 提供 10 條 SQL 規則的數據質量檢查：
+
+| 規則名 | 檢測內容 | 目標表 |
+|--------|----------|--------|
+| `dup_stock_daily` | 重複行（code+date+adjustflag） | stock_daily |
+| `dup_index_daily` | 重複行（code+date+frequency） | index_daily |
+| `dup_financial_news` | 重複新聞（URI 去重） | financial_news |
+| `invalid_price_stock` | 非法價格（負數或零） | stock_daily |
+| `invalid_price_index` | 非法價格（負數或零） | index_daily |
+| `stale_adjustflag2` | 前復權陳舊化 | stock_daily |
+| `missing_industry` | 行業缺失 | stock_industry |
+| `missing_dates_latest_stock` | 最新日期缺口 | stock_daily |
+| `table_row_counts` | 表行數統計 | 全部 |
+| `data_range` | 數據範圍 | stock_daily |
+
+**設計原則**：
+- SQL 規則做檢測（100% 準確，零幻覺風險）
+- 免費 LLM 僅做自然語言總結（不檢測）
+- 每條規則使用獨立數據庫連接，避免一個超時影響後續
+
+**API 端點**：
+- `GET /api/agent/data-quality/rules` — 獲取規則列表
+- `POST /api/agent/data-quality/run` — 執行檢查
+- `POST /api/agent/data-quality/run-with-ai-summary` — 執行檢查 + AI 總結
