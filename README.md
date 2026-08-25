@@ -9,7 +9,7 @@
 [![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1.svg)](https://www.mysql.com/)
 
 > **A 股量化交易工作台** — 含行情採集、技術指標、條件選股、策略回測、AI 優化、AI 投研問答、行情預計算、數據質量監控。
-> 由原 PySide6 桌面端項目 ([Quantization](https://github.com/JackLiKa/Quantization.git)) 重構而來，保持全部功能並做性能優化與 AI 策略優化集成。
+
 
 **[快速開始](#快速開始)** • **[項目亮點](#項目亮點)** • **[架構概覽](#架構概覽)** • **[文檔導航](#文檔導航)** • **[開發](#開發)** • **[部署](#部署)** • **[License](#license)**
 
