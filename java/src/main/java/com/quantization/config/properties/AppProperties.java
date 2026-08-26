@@ -69,6 +69,14 @@ public class AppProperties {
         private boolean quarterlyFullRefreshEnabled = true;
         /** 季度全刷 cron 表達式（默認每季度首月 1 號凌晨 2 點）。 */
         private String quarterlyRefreshCron = "0 0 2 1 */3 ?";
+        /** 是否啟用每日自動增量同步（啟動時補齊 + 交易日收盤後定時更新）。 */
+        private boolean dailyEnabled = true;
+        /** 每日定時增量同步 cron 表達式（默認每週一到五 16:30，A 股 15:00 收盤後半小時）。 */
+        private String dailyCron = "0 30 16 * * MON-FRI";
+        /** 啟動時是否自動執行增量同步補齊停機期間缺失的數據。 */
+        private boolean catchupOnStartup = true;
+        /** 啟動後延遲多少秒再執行補齊同步（避免與其他啟動任務衝突）。 */
+        private int catchupDelaySeconds = 30;
     }
 
     /** 用户偏好配置（JSON 文件路径，支持相对/绝对路径） */

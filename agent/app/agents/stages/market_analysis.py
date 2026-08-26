@@ -188,21 +188,20 @@ def _extract_market_news_summary(market_news: str) -> str:
     """從 AI 0 的 JSON 輸出中提取關鍵摘要，供 AI 1 使用。
 
     避免重複分析市場形態和板塊強弱，AI 1 只需在此基礎上做策略推導。
+
+    使用 extract_json() 穩健提取，容忍 sanitize_output() 添加的免責聲明尾部文本。
     """
     if not market_news or market_news == "無":
         return "無（AI 0 未提供分析結果）"
 
+    from app.utils.json_extractor import extract_json
+
+    data = extract_json(market_news)
+    if data is None:
+        logger.warning("[AI1] AI 0 JSON 提取失敗（所有降級策略均未成功），降級為截斷原文")
+        return market_news[:1500] if market_news else "無"
+
     try:
-        # AI 0 輸出可能是 JSON 字符串，也可能帶有 markdown 代碼塊標記
-        cleaned = market_news.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-        data = json.loads(cleaned)
-
         lines = []
 
         # 市場形態
@@ -233,9 +232,8 @@ def _extract_market_news_summary(market_news: str) -> str:
             lines.append(f"選股建議: {advice[:200]}")
 
         return "\n".join(lines) if lines else "AI 0 分析結果解析失敗，無可用摘要"
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
-        # JSON 解析失敗，降級為截斷原文
-        logger.warning(f"[AI1] AI 0 JSON 解析失敗，降級為截斷原文: {e}")
+    except (KeyError, TypeError) as e:
+        logger.warning(f"[AI1] AI 0 JSON 字段提取失敗，降級為截斷原文: {e}")
         return market_news[:1500] if market_news else "無"
 
 

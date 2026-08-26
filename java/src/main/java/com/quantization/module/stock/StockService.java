@@ -182,13 +182,26 @@ public class StockService {
     public List<SectorPerformanceDto> sectorPerformance(int days) {
         return repository.sectorPerformance(days).stream()
                 .map(row -> new SectorPerformanceDto(
-                        (java.time.LocalDate) row[0],
+                        toLocalDate(row[0]),
                         (String) row[1],
                         row[2] instanceof Number n2 ? n2.doubleValue() : null,
                         (String) row[3],
                         (String) row[4],
                         row[5] instanceof Number n5 ? n5.doubleValue() : null))
                 .toList();
+    }
+
+    /**
+     * 將原生查詢返回的日期對象轉為 LocalDate。
+     * Hibernate 原生查詢可能返回 java.sql.Date 或 java.time.LocalDate，需兼容處理。
+     */
+    private static java.time.LocalDate toLocalDate(Object value) {
+        if (value == null) return null;
+        if (value instanceof java.time.LocalDate ld) return ld;
+        if (value instanceof java.sql.Date sd) return sd.toLocalDate();
+        if (value instanceof java.util.Date ud) return ud.toInstant()
+                .atZone(java.time.ZoneId.systemDefault()).toLocalDate();
+        throw new IllegalStateException("無法將 " + value.getClass() + " 轉為 LocalDate");
     }
 
     /**

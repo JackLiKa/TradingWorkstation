@@ -13,6 +13,7 @@
 """
 
 import logging
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -61,16 +62,24 @@ class NewsSyncScheduler:
             )
 
         # 2. 定時同步（每 NEWS_SYNC_INTERVAL 秒）
+        # ⚠️ 不能用 next_run_time=None，那會永久暫停 job。
+        # 補抓完成後由 _catchup() 末尾重新設定 next_run_time 激活定時循環。
+        # 若禁用補抓，則直接以 now+interval 作為首次執行時間。
+        initial_next_run = None if settings.news_sync_catchup_on_startup else (
+            datetime.now() + timedelta(seconds=settings.news_sync_interval)
+        )
         self._scheduler.add_job(
             self._sync,
             "interval",
             seconds=settings.news_sync_interval,
             id="news_sync",
             replace_existing=True,
-            # 補抓完成後再開始定時同步（避免衝突）
-            next_run_time=None,  # 手動啟動
+            next_run_time=initial_next_run,
         )
-        logger.info(f"新聞定時同步已排程: 間隔 {settings.news_sync_interval}s")
+        if settings.news_sync_catchup_on_startup:
+            logger.info(f"新聞定時同步已排程: 間隔 {settings.news_sync_interval}s（等待補抓完成後激活）")
+        else:
+            logger.info(f"新聞定時同步已排程: 間隔 {settings.news_sync_interval}s（無補抓，直接定時）")
 
         self._scheduler.start()
         logger.info("新聞同步排程器已啟動")
@@ -102,13 +111,29 @@ class NewsSyncScheduler:
                 f"耗時 {result['duration_seconds']}s"
             )
 
-            # 補抓完成後，啟動定時同步
+            # 補抓完成後，先手動同步一次，再激活定時循環
             await self._sync()
+            self._activate_interval_sync()
         except Exception as e:
             logger.error(f"新聞補抓異常: {e}")
             self._catchup_done = True
-            # 即使補抓失敗，也啟動定時同步
-            await self._sync()
+            # 即使補抓失敗，也激活定時同步
+            self._activate_interval_sync()
+
+    def _activate_interval_sync(self):
+        """補抓完成後激活定時同步 job（設定 next_run_time）。"""
+        try:
+            next_run = datetime.now() + timedelta(seconds=settings.news_sync_interval)
+            self._scheduler.modify_job(
+                "news_sync",
+                next_run_time=next_run,
+            )
+            logger.info(
+                f"定時同步已激活: 下次執行 {next_run.strftime('%H:%M:%S')} "
+                f"（間隔 {settings.news_sync_interval}s）"
+            )
+        except Exception as e:
+            logger.error(f"激活定時同步失敗: {e}")
 
     async def _sync(self):
         """定時同步最新新聞。"""

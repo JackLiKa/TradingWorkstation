@@ -51,11 +51,20 @@ TOOL_CALLING_PROVIDERS = ["deepseek-flash", "glm-5.2", "qwen"]
 MAX_TOOL_ROUNDS = 100
 
 # 引用壓縮配置 — 避免大量工具調用後 citations_json 超出 DB 列上限
-MAX_CITATIONS = 30          # 最多保留 30 條引用（去重後）
+MAX_CITATIONS = 50          # 最多保留 50 條引用（去重後）
 MAX_SNIPPET_LENGTH = 200    # 每條引用的 snippet 最多保留 200 字符
 
 # 不支持 function calling 的推理模型
 REASONING_ONLY_PROVIDERS = {"deepseek-pro"}
+
+# ===== 安全配置（參考 jnuxky.xyz 安全兜底機制）=====
+# 歷史長度截斷 — 服務端保留最後 N 輪，防止 token 耗盡攻擊
+MAX_HISTORY_ROUNDS = 10  # 保留最後 10 輪（20 條 user+assistant 消息）
+# 單條消息長度限制 — 防止超長輸入導致 token 耗盡或 DoS
+MAX_MESSAGE_LENGTH = 10000  # 每條消息最多 10000 字符
+# 客戶端消息角色白名單 — 只接受 user/assistant，拒絕 system/developer/tool
+# 防止客戶端注入 system role 覆蓋服務端硬編碼的 system prompt
+ALLOWED_CLIENT_ROLES = {"user", "assistant"}
 
 
 @dataclass
@@ -413,9 +422,35 @@ class ChatEngine:
         return response.text
 
     def _build_messages(self, messages: list[ChatMessage]) -> list[dict[str, Any]]:
-        """構建 OpenAI 格式消息列表（含 system prompt）。"""
+        """構建 OpenAI 格式消息列表（含 system prompt）。
+
+        安全處理：
+        1. System prompt 服務端硬編碼，不接受客戶端 system role
+        2. 角色白名單：只接受 user/assistant，拒絕 system/developer/tool
+        3. 歷史截斷：保留最後 MAX_HISTORY_ROUNDS 輪，防止 token 耗盡
+        4. 長度限制：每條消息截斷到 MAX_MESSAGE_LENGTH 字符
+        """
         result: list[dict[str, Any]] = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
+
+        # 安全過濾：只接受白名單角色 + 截斷超長消息
+        safe_messages: list[ChatMessage] = []
         for msg in messages:
+            # 角色白名單：拒絕客戶端注入的 system/developer/tool 角色
+            if msg.role not in ALLOWED_CLIENT_ROLES:
+                logger.warning(f"拒絕客戶端消息：非法角色 '{msg.role}'（只接受 {ALLOWED_CLIENT_ROLES}）")
+                continue
+            # 長度限制：截斷超長消息
+            content = msg.content[:MAX_MESSAGE_LENGTH] if msg.content else ""
+            safe_messages.append(ChatMessage(role=msg.role, content=content))
+
+        # 歷史截斷：保留最後 MAX_HISTORY_ROUNDS 輪（2*N 條消息）
+        max_messages = MAX_HISTORY_ROUNDS * 2
+        if len(safe_messages) > max_messages:
+            truncated_count = len(safe_messages) - max_messages
+            safe_messages = safe_messages[-max_messages:]
+            logger.info(f"歷史截斷：丟棄前 {truncated_count} 條消息，保留最後 {max_messages} 條")
+
+        for msg in safe_messages:
             m: dict[str, Any] = {"role": msg.role, "content": msg.content}
             if msg.tool_calls:
                 m["tool_calls"] = msg.tool_calls

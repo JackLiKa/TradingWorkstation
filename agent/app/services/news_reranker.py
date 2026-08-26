@@ -102,7 +102,21 @@ _RERANK_SYSTEM_PROMPT = """你是頂級超短線投資者的新聞分析助手�
 4. **看產業鏈不看個股**：單個公司利好無行業效應→持續性低
 5. **查詢方向匹配**：若查詢含「利好/看多」，方向相反的新聞綜合分應為負
 
-嚴格按 JSON 數組格式輸出，每項含 id、direction、sustainability、label、reason。"""
+## 邊界案例處理規則
+- **多主題新聞**：取與查詢最相關的主題評分，忽略無關部分
+- **模糊新聞**：方向不明時 direction=0，持續性按最壞情況估計（偏低）
+- **重複新聞**：內容高度相似的新聞給相同評分
+- **舊聞新發**：日期超過3天的新聞持續性降至 0-2（信息已被市場消化）
+
+## 輸出格式（嚴格遵守）
+- 只輸出一個 JSON 數組，不要輸出任何其他文字、解釋或 markdown 標記
+- 不要在 JSON 前後添加任何自然語言
+- reason 字段限制在 30 字以內，只寫關鍵判斷依據
+- 每條新聞的 id 必須與輸入序號對應
+- 必須覆蓋所有候選新聞，不可遺漏
+
+輸出格式示例：
+[{"id": 0, "direction": 8, "sustainability": 9, "label": "持續性利好", "reason": "財政部發文Q4執行500億配套"}, {"id": 1, "direction": -3, "sustainability": 2, "label": "一日遊利空", "reason": "傳聞無落地來源不明"}]"""
 
 
 def _classify_news(direction: float, sustainability: float) -> str:
@@ -142,12 +156,13 @@ def _build_rerank_prompt(query: str, candidates: list[dict[str, Any]]) -> str:
         lines.append("")
 
     lines.append("請對上述候選新聞逐條評估 direction 和 sustainability。")
-    lines.append("嚴格輸出 JSON 數組，格式：")
+    lines.append("只輸出 JSON 數組，不要輸出任何其他文字。格式：")
     lines.append(
-        '[{"id": 0, "direction": 8, "sustainability": 9, "label": "持續性利好", "reason": "簡短理由"}, ...]'
+        '[{"id": 0, "direction": 8, "sustainability": 9, "label": "持續性利好", "reason": "30字內理由"}, ...]'
     )
-    lines.append("id 對應候選新聞的序號，必須覆蓋所有候選。")
-    lines.append("direction 範圍 -10 到 +10，sustainability 範圍 0-10。")
+    lines.append("id 對應候選新聞的序號，必須覆蓋所有候選，不可遺漏。")
+    lines.append("direction 範圍 -10 到 +10 整數，sustainability 範圍 0-10 整數。")
+    lines.append("reason 限制 30 字以內，只寫關鍵判斷依據。")
     return "\n".join(lines)
 
 

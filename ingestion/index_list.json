@@ -1,7 +1,7 @@
 {
   "_comment": "Baostock 指數清單 — 經 sample 驗證，共 540 個有效指數。",
   "_source": "https://www.baostock.com/mainContent?file=indexData.md",
-  "_updated": "2026-08-21",
+  "_updated": "2026-08-25",
   "_verified": true,
   "_valid_count": 540,
   "_invalid_count": 0,

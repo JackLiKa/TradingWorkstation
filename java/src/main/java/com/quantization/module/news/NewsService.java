@@ -10,8 +10,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.HexFormat;
 import java.util.List;
 
 /**
@@ -27,6 +31,23 @@ public class NewsService {
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final FinancialNewsRepository repository;
+
+    /**
+     * 计算标题+摘要的 SHA-256 哈希值，用于内容级去重。
+     * <p>
+     * 规范化：去除首尾空白、null 转空字符串，确保不同来源的相同内容产生相同哈希。
+     */
+    private static String computeTitleSummaryHash(String title, String summary) {
+        String normalized = (title == null ? "" : title.trim()) + "|" + (summary == null ? "" : summary.trim());
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = digest.digest(normalized.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hashBytes);
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 is guaranteed to be available in all Java implementations
+            throw new RuntimeException("SHA-256 algorithm not available", e);
+        }
+    }
 
     public NewsService(FinancialNewsRepository repository) {
         this.repository = repository;
@@ -92,7 +113,12 @@ public class NewsService {
 
     /**
      * 批量 upsert 新闻 — Agent 服务抓取后调用。
-     * URI 去重：已存在的 URI 跳过。
+     * <p>
+     * 双层去重：
+     * <ol>
+     *   <li>URI 去重：同一 wallstreetcn 文章 ID 不重复入库</li>
+     *   <li>标题+摘要去重：标题和摘要都相同的新闻不重复入库（即使 URI 不同）</li>
+     * </ol>
      *
      * @param items 新闻列表
      * @return 同步结果统计
@@ -112,14 +138,24 @@ public class NewsService {
                     failed++;
                     continue;
                 }
+                // 第一层去重：URI
                 if (repository.existsByUri(uri)) {
+                    duplicated++;
+                    continue;
+                }
+                // 第二层去重：标题+摘要哈希（即使 URI 不同，标题和摘要都相同也视为重复）
+                String title = item.title() != null ? item.title() : "";
+                String summary = item.summary() != null ? item.summary() : "";
+                String titleSummaryHash = computeTitleSummaryHash(title, summary);
+                if (repository.existsByTitleSummaryHash(titleSummaryHash)) {
                     duplicated++;
                     continue;
                 }
                 FinancialNewsEntity entity = new FinancialNewsEntity();
                 entity.setUri(uri);
-                entity.setTitle(item.title() != null ? item.title() : "");
-                entity.setSummary(item.summary());
+                entity.setTitle(title);
+                entity.setSummary(summary);
+                entity.setTitleSummaryHash(titleSummaryHash);
                 entity.setContent(item.content());
                 entity.setSource(item.source() != null ? item.source() : "華爾街見聞");
                 entity.setAuthor(item.author());

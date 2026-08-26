@@ -9,13 +9,16 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * 财经新闻 Repository — 提供 URI 去重查询、频道过滤、时间范围查询。
+ * 财经新闻 Repository — 提供双层去重查询（URI + 标题摘要哈希）、频道过滤、时间范围查询。
  */
 @Repository
 public interface FinancialNewsRepository extends JpaRepository<FinancialNewsEntity, Long> {
 
-    /** 按 URI 查询（去重检查） */
+    /** 按 URI 查询（第一层去重：同一文章 ID） */
     boolean existsByUri(String uri);
+
+    /** 按标题+摘要哈希查询（第二层去重：标题和摘要都相同） */
+    boolean existsByTitleSummaryHash(String titleSummaryHash);
 
     /** 按频道分页查询（最新的在前） */
     Page<FinancialNewsEntity> findByChannelOrderByPublishedAtDesc(String channel, Pageable pageable);

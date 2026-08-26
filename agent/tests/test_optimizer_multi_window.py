@@ -136,21 +136,27 @@ class TestBuildWindowConfig:
 def _stats_for_score(target_score: float) -> dict:
     """構建能產生指定 composite_score 的回測統計。
 
-    新公式: 收益(25%) + 回撤(20%) + 夏普(15%) + Calmar(15%) + 超額(10%) + 交易(10%) + 樣本(5%)
+    新公式: 收益(20%) + 回撤(15%) + 夏普(15%) + Calmar(10%) + 超額(15%) + 交易質量(15%) + 樣本(7%) + IR(3%)
 
     策略：用較大 maxDrawdown 避免 Calmar 封頂，同時調整 totalReturn 達到目標分。
-    固定 sharpe=2（sharpe_score=100→15 分）、totalTrades=30（trade_score=100→10 分, sample_score=100→5 分）、
-    excessReturn=totalReturn、annualReturn=totalReturn*2。
+    固定 sharpe=2（sharpe_score=100→15 分）、totalTrades=30（trade_activity=100, sample=100）、
+    excessReturn=totalReturn、annualReturn=totalReturn*2、winRate=0、profitLossRatio=0、IR=0。
 
-    設 maxDrawdown=20（drawdown_score=60→12 分）：
+    交易質量分（winRate=0, plRatio=0, trades=30）：
+    win_rate_score=50, pl_ratio_score=50, trade_activity=100
+    trade_quality = 50*0.4 + 50*0.3 + 100*0.3 = 65 → 65*0.15 = 9.75
+
+    設 maxDrawdown=20（drawdown_score=60→9 分）：
     Calmar = totalReturn*2/20 = totalReturn*0.1, calmar_score = min(totalReturn*0.1*33.3, 100)
     當 totalReturn ≤ 30: calmar_score = totalReturn*3.33
-    composite = totalReturn*1.25*0.25 + 60*0.20 + 100*0.15 + totalReturn*3.33*0.15 + totalReturn*3*0.10 + 100*0.10 + 100*0.05
-             = totalReturn*0.3125 + 12 + 15 + totalReturn*0.4995 + totalReturn*0.3 + 10 + 5
-             = totalReturn*1.112 + 42
-    故 totalReturn = (target - 42) / 1.112
+    IR=0 → ir_score=50 → 50*0.03 = 1.5
+
+    composite = totalReturn*1.25*0.20 + 60*0.15 + 100*0.15 + totalReturn*3.33*0.10 + totalReturn*3*0.15 + 65*0.15 + 100*0.07 + 50*0.03
+             = totalReturn*0.25 + 9 + 15 + totalReturn*0.333 + totalReturn*0.45 + 9.75 + 7 + 1.5
+             = totalReturn*1.033 + 42.25
+    故 totalReturn = (target - 42.25) / 1.033
     """
-    total_return = (target_score - 42) / 1.112
+    total_return = (target_score - 42.25) / 1.033
     return {
         "totalReturn": total_return,
         "maxDrawdown": 20,

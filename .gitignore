@@ -1,7 +1,10 @@
 # ===== 环境变量（含密钥，不入库）=====
 .env
 agent/.env
+java/.env
 next/.env.local
+next/.env
+a-share-mcp/.env
 
 # ===== AI 本地记忆（aim-memory 知识图谱，不入库）=====
 .aim/

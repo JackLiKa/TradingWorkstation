@@ -1,9 +1,10 @@
 """Agent 服務入口 — FastAPI 應用。"""
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
@@ -66,14 +67,44 @@ async def lifespan(app: FastAPI):
     logger.info("Agent 服務已關閉")
 
 
+# 生產環境標誌 — 控制文檔暴露和安全頭
+_is_production = os.getenv("ENVIRONMENT", "development").lower() in ("production", "prod")
+
 app = FastAPI(
     title="量化交易 AI 優化 Agent",
     description="自動優化回測策略的 AI Agent 服務",
     version="1.0.0",
     lifespan=lifespan,
+    # 生產環境關閉 Swagger/ReDoc/OpenAPI 文檔（防止接口暴露）
+    docs_url=None if _is_production else "/docs",
+    redoc_url=None if _is_production else "/redoc",
+    openapi_url=None if _is_production else "/openapi.json",
 )
 
+
+# ===== 安全頭中間件（參考 jnuxky.xyz 安全兜底機制）=====
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """為所有響應添加安全頭，防範 XSS/點擊劫持/MIME 嗅探。"""
+    response: Response = await call_next(request)
+    # X-Content-Type-Options: 防止瀏覽器 MIME 嗅探
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # X-Frame-Options: 防止點擊劫持（頁面被 iframe 嵌入）
+    response.headers["X-Frame-Options"] = "DENY"
+    # X-XSS-Protection: 舊版瀏覽器 XSS 過濾
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    # Referrer-Policy: 限制 Referer 洩露
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # 生產環境加 HSTS（強制 HTTPS）
+    if _is_production:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=63072000; includeSubDomains; preload"
+        )
+    return response
+
+
 # CORS — 允許前端跨域訪問（Next.js 默認 3010，備用 3000）
+# 不使用 allow_origins=["*"]，明確列出允許的來源
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3010", "http://localhost:3000"],

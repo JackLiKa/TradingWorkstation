@@ -29,7 +29,7 @@ RUN apk add --no-cache curl
 # 環境變量默認值（由 docker-compose 覆蓋）
 ENV SERVER_PORT=8090 \
     SERVER_CONTEXT_PATH=/TradingWorkstation \
-    JAVA_OPTS="-Xmx4g -Xms512m"
+    JAVA_OPTS="-Xmx512m -Xms256m -XX:+UseG1GC"
 
 EXPOSE 8090
 

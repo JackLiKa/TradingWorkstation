@@ -197,19 +197,20 @@ def _extract_ai0_industry_signals(market_news: str) -> str:
 
     只提取與行業分析相關的字段（bullish_factors / bearish_factors / stock_selection_advice），
     而非截斷整個 JSON，減少 token 消耗並提高信號精度。
+
+    使用 extract_json() 穩健提取，容忍 sanitize_output() 添加的免責聲明尾部文本。
     """
     if not market_news or market_news == "無":
         return "無（AI 0 未提供分析結果）"
 
-    try:
-        cleaned = market_news.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
+    from app.utils.json_extractor import extract_json
 
-        data = json.loads(cleaned)
+    data = extract_json(market_news)
+    if data is None:
+        logger.warning("[AI0.5] AI 0 JSON 提取失敗（所有降級策略均未成功），降級為截斷原文")
+        return market_news[:1500] if market_news else "無"
+
+    try:
         lines = []
 
         # 利好行業（含持續性判斷）
@@ -240,8 +241,8 @@ def _extract_ai0_industry_signals(market_news: str) -> str:
             lines.append(f"AI 0 選股建議: {advice[:300]}")
 
         return "\n".join(lines) if lines else "AI 0 分析結果中無行業信號"
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
-        logger.warning(f"[AI0.5] AI 0 JSON 解析失敗，降級為截斷原文: {e}")
+    except (KeyError, TypeError) as e:
+        logger.warning(f"[AI0.5] AI 0 JSON 字段提取失敗，降級為截斷原文: {e}")
         return market_news[:1500] if market_news else "無"
 
 

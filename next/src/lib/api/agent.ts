@@ -141,7 +141,7 @@ export const agentApi = {
   searchNews: (keyword: string, pageSize = 10) =>
     agentFetch<{ keyword: string; news: IndustryNewsItem[] }>(`/news/search?keyword=${encodeURIComponent(keyword)}&page_size=${pageSize}`),
   // ===== 華爾街見聞新聞 =====
-  syncWallstreetcnNews: (channel = 'a-stock', limit = 20) =>
+  syncWallstreetcnNews: (channel = 'a-stock', limit = 100) =>
     agentPost<{ status: string; channel: string; fetched: number; stored: number; duplicated: number; failed: number }>(
       `/news/sync?channel=${channel}&limit=${limit}`, {}
     ),
@@ -149,7 +149,7 @@ export const agentApi = {
     agentFetch<{ keyword: string; news: WallstreetcnNewsItem[]; source: string }>(
       `/news/wallstreetcn/search?keyword=${encodeURIComponent(keyword)}&limit=${limit}`
     ),
-  getWallstreetcnLatest: (channel = 'a-stock', limit = 20) =>
+  getWallstreetcnLatest: (channel = 'a-stock', limit = 50) =>
     agentFetch<{ channel: string; news: WallstreetcnNewsItem[]; source: string }>(
       `/news/wallstreetcn/latest?channel=${channel}&limit=${limit}`
     ),

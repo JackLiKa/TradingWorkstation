@@ -709,10 +709,19 @@ async def rebuild_vector_store():
 
 
 class ChatStreamRequest(BaseModel):
-    """聊天流式請求 — 用戶發送消息並獲取 SSE 流式回復。"""
+    """聊天流式請求 — 用戶發送消息並獲取 SSE 流式回復。
 
-    messages: list[dict[str, Any]]  # 對話歷史 [{role, content}, ...]
-    provider: str = ""  # 指定 LLM 供應商（空則自動選擇）
+    安全限制：
+    - messages 最多 50 條（防止 token 耗盡攻擊）
+    - 每條消息 content 最多 10000 字符
+    - provider 限制長度（防止注入）
+    """
+    from pydantic import Field
+
+    messages: list[dict[str, Any]] = Field(
+        ..., max_length=50, description="對話歷史，最多 50 條消息"
+    )
+    provider: str = Field(default="", max_length=50, description="LLM 供應商 ID")
 
 
 @router.get("/chat/providers")

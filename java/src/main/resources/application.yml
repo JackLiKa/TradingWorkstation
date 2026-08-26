@@ -82,8 +82,14 @@ app:
     ingestion-script: ${SYNC_INGESTION_SCRIPT:ingestion/baostock_ingest.py}
     batch-size: ${SYNC_BATCH_SIZE:1000}
     default-start-date: ${SYNC_DEFAULT_START_DATE:2021-01-01}
-    quarterly-full-refresh-enabled: ${SYNC_QUARTERLY_REFRESH:true}
+    quarterly-full-refresh-enabled: ${SYNC_QUARTERLY_REFRESH:false}
     quarterly-refresh-cron: ${SYNC_QUARTERLY_CRON:0 0 2 1 */3 ?}
+    # 每日自動增量同步：啟動時補齊 + 交易日收盤後定時更新
+    # ⚠️ 已禁用：用戶手動更新數據，避免自動同步向 Baostock 發送過多請求
+    daily-enabled: ${SYNC_DAILY_ENABLED:false}
+    daily-cron: ${SYNC_DAILY_CRON:0 30 16 * * MON-FRI}
+    catchup-on-startup: ${SYNC_CATCHUP_ON_STARTUP:false}
+    catchup-delay-seconds: ${SYNC_CATCHUP_DELAY_SECONDS:30}
   preference:
     path: ${PREFERENCE_PATH:preference.json}
   aicalllog:
@@ -107,6 +113,11 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+
+# 抑制 Spring Data PageImpl 序列化警告（當前扁平 JSON 結構穩定且前端已適配）
+logging:
+  level:
+    org.springframework.data.web.config.SpringDataJacksonConfiguration$PageModule$WarningLoggingModifier: ERROR
 
 springdoc:
   swagger-ui:

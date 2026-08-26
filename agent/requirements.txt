@@ -18,8 +18,10 @@ apscheduler>=3.10.0,<4.0.0
 # LLM 供應商 SDK
 qoder-agent-sdk>=0.1.0
 
-# RAG: 向量數據庫 + 中文 embedding
+# RAG: 向量數據庫 + 中文 embedding + BM25 關鍵詞檢索
 pymilvus>=2.4.2,<3.0.0
 sentence-transformers>=2.7.0,<7.0.0
+rank-bm25>=0.2.2,<1.0.0
+jieba>=0.42.1,<1.0.0
 
 # Python 版本約束: >=3.10,<3.15

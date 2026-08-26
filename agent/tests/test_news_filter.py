@@ -43,7 +43,8 @@ class TestGetKeywords:
     def test_env_override(self, monkeypatch):
         monkeypatch.setattr("app.services.news_filter.settings.news_filter_keywords", "央行,降準,CPI")
         kws = _get_keywords()
-        assert kws == {"央行", "降準", "CPI"}
+        # .env 自定義關鍵詞全部按中權重（2 分）處理
+        assert kws == {"央行": 2, "降準": 2, "CPI": 2}
 
 
 class TestGetBlacklist:
@@ -75,14 +76,15 @@ class TestFilterNewsItems:
         assert len(result) == 1
         assert "央行" in result[0]["title"]
 
-    def test_article_keeps_without_keyword(self):
-        """深度文章不要求命中關鍵詞（質量已較高），但黑名單仍生效。"""
+    def test_article_keeps_with_low_score(self):
+        """深度文章閾值低（1 分），命中低權重詞即可保留，無關鍵詞則過濾。"""
         items = [
-            {"title": "深度分析：全球經濟走勢", "summary": "長篇分析文章"},
-            {"title": "某地區天氣預報更新", "summary": "未來一周天氣"},  # 無關鍵詞但不在黑名單
+            {"title": "深度分析：全球經濟走勢與反彈", "summary": "長篇分析文章"},  # "反彈"=1分
+            {"title": "某地區天氣預報更新", "summary": "未來一周天氣"},  # 0分，過濾
         ]
         result = filter_news_items(items, source_type="article")
-        assert len(result) == 2  # 都保留（article 不要求關鍵詞）
+        assert len(result) == 1  # 只保留命中關鍵詞的
+        assert "反彈" in result[0]["title"]
 
     def test_blacklist_filters_all_sources(self):
         """黑名單對所有來源生效。"""
@@ -119,12 +121,12 @@ class TestFilterMixedNews:
     def test_mixed_separates_live_and_article(self):
         """混合來源：article 寬鬆 + live 嚴格。"""
         items = [
-            {"title": "深度分析全球經濟", "summary": "長文", "channel": "a-stock"},
+            {"title": "深度分析全球經濟與反彈", "summary": "長文", "channel": "a-stock"},  # "反彈"=1分
             {"title": "某明星出席活動", "summary": "娛樂", "channel": "live"},
             {"title": "央行降準重磅消息", "summary": "", "channel": "live"},
         ]
         result = filter_mixed_news(items)
-        # article 保留 1 條，live 保留 1 條（命中"央行"）
+        # article 保留 1 條（命中"反彈"=1分），live 保留 1 條（命中"央行"=3分+"重磅"=3分）
         assert len(result) == 2
 
     def test_mixed_disabled(self, monkeypatch):

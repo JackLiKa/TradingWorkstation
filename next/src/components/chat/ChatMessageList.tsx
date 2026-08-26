@@ -338,7 +338,7 @@ export function ChatMessageList({ messages, streamingContent, activeToolCalls, t
         );
       })}
 
-      {/* 流式输出中的 AI 回复 */}
+      {/* 流式輸出中的 AI 回覆 + 打字機光標 */}
       {(streamingContent || activeToolCalls.length > 0 || thinkingMessage) && (
         <div className="flex gap-2 flex-row">
           <div className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-accent/20">
@@ -352,6 +352,11 @@ export function ChatMessageList({ messages, streamingContent, activeToolCalls, t
             {streamingContent && (
               <div className="prose prose-sm prose-invert max-w-none">
                 {renderMarkdown(streamingContent)}
+                {/* 打字機閃爍光標 — 流式輸出進行中時顯示 */}
+                <span
+                  className="inline-block w-0.5 h-3.5 bg-accent ml-0.5 align-text-bottom animate-pulse"
+                  style={{ animationDuration: '0.8s' }}
+                />
               </div>
             )}
           </div>

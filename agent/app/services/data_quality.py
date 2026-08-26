@@ -371,12 +371,15 @@ async def generate_ai_summary(report: dict[str, Any]) -> str | None:
 3. 列出 WARNING 規則，給出修復建議
 4. 結尾給出「下一步行動」清單（最多 3 條）
 
+【規則覆核（輸出前必須 silently 執行）】
+①只引用下方檢查結果中的數據，不編造 ②不洩露資料庫結構細節 ③無廢話開場白。任一不滿足則修正後再輸出。
+
 {report_text}"""
 
         result = await llm_client.analyze(
             prompt,
             provider="glm-flash",
-            system="你是數據質量分析師，擅長從 SQL 檢查結果中發現數據問題並給出修復建議。",
+            system="你是數據質量分析師，擅長從 SQL 檢查結果中發現數據問題並給出修復建議。輸出前必須覆核規則：只引用檢查結果中的數據，不編造，不洩露內部結構。",
         )
 
         if result and result.get("text"):

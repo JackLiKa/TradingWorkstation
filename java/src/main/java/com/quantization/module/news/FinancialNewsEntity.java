@@ -18,14 +18,21 @@ import java.time.LocalDateTime;
  * 财经新闻持久化实体，对应 financial_news 表。
  * <p>
  * 数据来源：华尔街见闻 (wallstreetcn.com) 公开 API。
- * URI 去重：唯一约束 (uri) 确保同一文章不会重复入库。
+ * 双层去重：
+ * <ul>
+ *   <li>URI 去重：唯一约束 (uri) 确保同一文章不会重复入库</li>
+ *   <li>标题+摘要去重：唯一约束 (title_summary_hash) 确保标题和摘要都相同的新闻不会重复入库</li>
+ * </ul>
  */
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "financial_news", uniqueConstraints = @UniqueConstraint(name = "uk_financial_news_uri", columnNames = "uri"))
+@Table(name = "financial_news", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_financial_news_uri", columnNames = "uri"),
+        @UniqueConstraint(name = "uk_financial_news_title_summary", columnNames = "title_summary_hash")
+})
 public class FinancialNewsEntity {
 
     @Id
@@ -42,6 +49,13 @@ public class FinancialNewsEntity {
 
     @Column(name = "summary", length = 2000)
     private String summary;
+
+    /**
+     * 标题+摘要的 SHA-256 哈希值，用于内容级去重。
+     * 即使 URI 不同（如文章 vs 快訊、不同頻道），標題和摘要都相同則視為重複。
+     */
+    @Column(name = "title_summary_hash", nullable = false, length = 64)
+    private String titleSummaryHash;
 
     @Column(name = "content", columnDefinition = "TEXT")
     private String content;

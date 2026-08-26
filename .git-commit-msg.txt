@@ -1,0 +1,13 @@
+fix: 禁用自动同步 + 修复新闻定时同步 + 404重定向 + 安全加固
+
+- 禁用 Java 自动数据同步 (SYNC_DAILY_ENABLED=false, SYNC_QUARTERLY_REFRESH=false)
+- 修复新闻定时同步永久暂停 bug (next_run_time=None → 补抓后激活)
+- 修复前端根路径 404 (添加 / → /TradingWorkstation 重定向)
+- 安全加固: docker-compose 移除硬编码密码, .gitignore 补全 .env
+- Java Dockerfile 内存调优 (-Xmx512m 适配 4GB 服务器)
+- 新闻去重 (标题+摘要 SHA-256), 引用上限 50, Agent 状态持久化
+- 当日市场摘要, 回顾分析, a-share-mcp 生命周期修复
+
+Generated with [Devin](https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>

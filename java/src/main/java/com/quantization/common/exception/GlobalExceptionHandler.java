@@ -54,14 +54,17 @@ public class GlobalExceptionHandler {
     /**
      * 处理未捕获的未知异常，返回 500 状态码。
      *
+     * 安全处理：不向客户端泄露异常详情（ex.getMessage() 可能包含敏感信息如 SQL/堆栈），
+     * 只记录完整堆栈到日志，返回通用错误消息。
+     *
      * @param ex 未知异常
-     * @return 包含错误信息的 500 响应
+     * @return 包含通用错误信息的 500 响应
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception ex) {
         log.error("未处理异常", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.fail(ErrorCode.INTERNAL_ERROR, "服务器内部错误：" + ex.getMessage()));
+                .body(ApiResponse.fail(ErrorCode.INTERNAL_ERROR, "服务器内部错误，请联系管理员"));
     }
 
     /**

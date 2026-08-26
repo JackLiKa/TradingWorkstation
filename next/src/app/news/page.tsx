@@ -78,7 +78,7 @@ export default function NewsPage() {
   // ===== 實時抓取 =====
   const { data: latestData, error: latestError, mutate: mutateLatest, isValidating: liveLoading } = useSWR(
     `wallstreetcn-latest-${liveChannel}`,
-    () => agentApi.getWallstreetcnLatest(liveChannel, 20),
+    () => agentApi.getWallstreetcnLatest(liveChannel, 50),
     { refreshInterval: 60000, revalidateOnFocus: false }
   );
 
@@ -101,7 +101,7 @@ export default function NewsPage() {
     setSyncing(true);
     setSyncResult(null);
     try {
-      const result = await agentApi.syncWallstreetcnNews(liveChannel, 20);
+      const result = await agentApi.syncWallstreetcnNews(liveChannel, 100);
       const filteredInfo = 'filtered' in result ? `，過濾噪音 ${(result as any).filtered} 條` : '';
       setSyncResult(`抓取 ${result.fetched} 條，新存入 ${result.stored} 條，重複 ${result.duplicated} 條${filteredInfo}`);
       await mutateLatest();

@@ -196,9 +196,23 @@ def _compute_uri_hash(uri: str) -> str:
     return hashlib.sha256(uri.encode("utf-8")).hexdigest()[:16]
 
 
+def _compute_title_summary_hash(title: str, summary: str) -> str:
+    """計算標題+摘要的 SHA-256 哈希（用於內容級去重）。
+
+    規範化：去除首尾空白，None 轉空字符串。
+    與 Java 端 NewsService.computeTitleSummaryHash 邏輯一致。
+    """
+    normalized = f"{(title or '').strip()}|{(summary or '').strip()}"
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 # 內存級 URI 去重快取（避免頻繁查詢 Milvus + 防止 collection released 時誤判）
 _uri_cache: set[str] = set()
 _uri_cache_loaded = False
+
+# 內存級標題+摘要哈希去重快取（第二層去重：標題和摘要都相同則視為重複）
+_title_summary_cache: set[str] = set()
+_title_summary_cache_loaded = False
 
 
 def _load_uri_cache():
@@ -218,6 +232,42 @@ def _load_uri_cache():
         logger.info(f"[news_store] URI 快取載入: {len(_uri_cache)} 條")
     except Exception as e:
         logger.warning(f"[news_store] URI 快取載入失敗: {e}")
+
+
+def _load_title_summary_cache():
+    """從 Milvus 載入所有已存在的標題+摘要哈希到內存快取。"""
+    global _title_summary_cache_loaded
+    if _title_summary_cache_loaded or not _milvus or not _ensure_collection():
+        return
+    try:
+        results = _milvus.query(
+            collection_name=COLLECTION_NAME,
+            filter="timestamp > 0",  # 匹配所有記錄
+            output_fields=["title", "summary"],
+            limit=10000,
+        )
+        for item in results:
+            title = item.get("title", "") or ""
+            summary = item.get("summary", "") or ""
+            h = _compute_title_summary_hash(title, summary)
+            _title_summary_cache.add(h)
+        _title_summary_cache_loaded = True
+        logger.info(f"[news_store] 標題+摘要哈希快取載入: {len(_title_summary_cache)} 條")
+    except Exception as e:
+        logger.warning(f"[news_store] 標題+摘要哈希快取載入失敗: {e}")
+
+
+def _title_summary_exists(title: str, summary: str) -> bool:
+    """檢查標題+摘要哈希是否已存在（內存快取優先）。
+
+    異常時保守返回 True（假定已存在，跳過插入，避免重複）。
+    """
+    h = _compute_title_summary_hash(title, summary)
+    if h in _title_summary_cache:
+        return True
+    # 內存快取未命中 → 載入快取後再檢查一次
+    _load_title_summary_cache()
+    return h in _title_summary_cache
 
 
 def _uri_exists(uri: str) -> bool:
@@ -265,17 +315,24 @@ def store_news(article: dict[str, Any]) -> bool:
 
     # 載入 URI 快取（首次調用時）
     _load_uri_cache()
+    # 載入標題+摘要哈希快取（首次調用時）
+    _load_title_summary_cache()
 
     uri = article.get("uri", "")
     if not uri:
         return False
 
-    # URI 去重
+    # URI 去重（第一層）
     if _uri_exists(uri):
         return False
 
     title = article.get("title", "")
     summary = article.get("summary", "")
+
+    # 標題+摘要去重（第二層：即使 URI 不同，標題和摘要都相同也跳過）
+    if _title_summary_exists(title, summary):
+        return False
+
     channel = article.get("channel", "")
     date_str = article.get("date", "")
     url = article.get("url", "")
@@ -314,6 +371,7 @@ def store_news(article: dict[str, Any]) -> bool:
             ],
         )
         _uri_cache.add(uri)  # 加入內存快取
+        _title_summary_cache.add(_compute_title_summary_hash(title, summary))  # 標題+摘要哈希快取
         return True
     except Exception as e:
         logger.warning(f"[news_store] 新聞存入向量庫失敗: {e}")
@@ -322,6 +380,8 @@ def store_news(article: dict[str, Any]) -> bool:
 
 def store_news_batch(articles: list[dict[str, Any]]) -> dict[str, int]:
     """批量存儲新聞到向量庫。
+
+    雙層去重：URI 去重 + 標題摘要哈希去重。
 
     Returns:
         dict: {"stored": N, "duplicated": N, "failed": N}
@@ -334,7 +394,14 @@ def store_news_batch(articles: list[dict[str, Any]]) -> dict[str, int]:
         if not uri:
             failed += 1
             continue
+        # 第一層去重：URI
         if _uri_exists(uri):
+            duplicated += 1
+            continue
+        # 第二層去重：標題+摘要哈希
+        title = article.get("title", "")
+        summary = article.get("summary", "")
+        if _title_summary_exists(title, summary):
             duplicated += 1
             continue
         if store_news(article):
@@ -390,9 +457,20 @@ def search_relevant_news(
     channel: str | None = None,
     days_back: int = 7,
 ) -> list[dict[str, Any]]:
-    """語義檢索與查詢相關的新聞。
+    """雙路召回檢索與查詢相關的新聞 — 向量檢索 + BM25 關鍵詞檢索 + RRF 融合評分。
 
     用於 AI0 行情新聞階段：傳入當前市場環境描述，檢索相關新聞。
+
+    檢索流程：
+    1. 向量檢索（Milvus COSINE）：語義相似匹配，擴大 top_k 召回
+    2. BM25 關鍵詞檢索（rank_bm25 + jieba 分詞）：精確關鍵詞匹配
+    3. RRF 融合排序：Reciprocal Rank Fusion 合併兩路結果
+    4. 時間新鮮度加權：最近 3 天的新聞額外加分
+
+    自動降級：
+    - BM25 不可用（未安裝依賴）→ 只用向量檢索
+    - 向量檢索不可用（Milvus/embedding 失敗）→ 只用 BM25
+    - 兩者都不可用 → 返回空列表
 
     Args:
         query: 查詢文本（如「半導體行業利好，A股市場震盪」）
@@ -401,9 +479,51 @@ def search_relevant_news(
         days_back: 只檢索最近 N 天的新聞
 
     Returns:
-        新聞列表，每項含 title/summary/source/date/url/channel/similarity
+        新聞列表，每項含 title/summary/source/date/url/channel
+        雙路召回時額外含 rrf_score/vector_rank/bm25_rank/similarity/bm25_score
     """
     _try_init()
+
+    # ===== 1. 向量檢索（語義相似）=====
+    vector_results = _vector_search(query, top_k=top_k * 3, channel=channel, days_back=days_back)
+
+    # ===== 2. BM25 關鍵詞檢索 =====
+    bm25_results = _bm25_search(query, top_k=top_k * 3, channel=channel, days_back=days_back)
+
+    # ===== 3. 融合排序 =====
+    # 若兩路都有結果 → RRF 融合
+    # 若只有一路 → 直接用該路結果
+    if vector_results and bm25_results:
+        from app.services.news_fusion import reciprocal_rank_fusion
+
+        fused = reciprocal_rank_fusion(vector_results, bm25_results, top_k=top_k)
+        logger.info(
+            f"[news_store] 雙路召回「{query[:30]}...」: "
+            f"向量={len(vector_results)} 條, BM25={len(bm25_results)} 條, "
+            f"融合後={len(fused)} 條"
+        )
+        return fused
+    elif vector_results:
+        logger.info(f"[news_store] 僅向量檢索「{query[:30]}...」: {len(vector_results[:top_k])} 條")
+        return vector_results[:top_k]
+    elif bm25_results:
+        logger.info(f"[news_store] 僅 BM25 檢索「{query[:30]}...」: {len(bm25_results[:top_k])} 條")
+        return bm25_results[:top_k]
+    else:
+        logger.info(f"[news_store] 雙路召回「{query[:30]}...」: 無結果")
+        return []
+
+
+def _vector_search(
+    query: str,
+    top_k: int = 30,
+    channel: str | None = None,
+    days_back: int = 7,
+) -> list[dict[str, Any]]:
+    """向量檢索（Milvus COSINE）— 語義相似匹配。
+
+    擴大召回量（top_k * 3）供 RRF 融合使用。
+    """
     if not _milvus or not _embedding_model:
         return []
     if not _ensure_collection():
@@ -452,10 +572,52 @@ def search_relevant_news(
                     "similarity": round(float(hit.get("distance", 0)), 4),
                 }
             )
-        logger.info(f"[news_store] 語義檢索「{query[:30]}...」: {len(news_list)} 條")
+        logger.info(f"[news_store] 向量檢索「{query[:30]}...」: {len(news_list)} 條")
         return news_list
     except Exception as e:
-        logger.warning(f"[news_store] 語義檢索失敗: {e}")
+        logger.warning(f"[news_store] 向量檢索失敗: {e}")
+        return []
+
+
+def _bm25_search(
+    query: str,
+    top_k: int = 30,
+    channel: str | None = None,
+    days_back: int = 7,
+) -> list[dict[str, Any]]:
+    """BM25 關鍵詞檢索 — 精確關鍵詞匹配。
+
+    使用 jieba 中文分詞 + rank_bm25。
+    索引從 Milvus 拉取的文檔構建，定期刷新。
+    """
+    try:
+        from app.services import news_bm25
+
+        if not news_bm25.is_available():
+            return []
+
+        # BM25 檢索（news_bm25 內部處理索引構建/刷新）
+        results = news_bm25.search_bm25(query, top_k=top_k)
+        if not results:
+            return []
+
+        # 時間過濾 + 頻道過濾（BM25 索引包含全部文檔，需在此過濾）
+        cutoff_date = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        filtered = []
+        for item in results:
+            date_str = item.get("date", "")
+            # 時間過濾
+            if date_str and date_str[:10] < cutoff_date:
+                continue
+            # 頻道過濾
+            if channel and item.get("channel", "") != channel:
+                continue
+            filtered.append(item)
+
+        logger.info(f"[news_store] BM25 檢索「{query[:30]}...」: {len(filtered)} 條（過濾後）")
+        return filtered
+    except Exception as e:
+        logger.warning(f"[news_store] BM25 檢索失敗: {e}")
         return []
 
 
@@ -621,7 +783,8 @@ async def sync_news_to_vector_store(
         raw_articles = await wallstreetcn_client.fetch_all_channels(limit_per_channel=50)
     elif channel == "a-stock":
         # A 股聚焦：A 股 + 全球 + 快訊 + 熱文
-        raw_articles = await wallstreetcn_client.fetch_a_stock_focused(limit=limit)
+        # truncate=False — 同步入庫時不截斷，保留全部去重後的新聞
+        raw_articles = await wallstreetcn_client.fetch_a_stock_focused(limit=limit, truncate=False)
     else:
         # 單頻道
         raw_articles = await wallstreetcn_client.fetch_latest_articles(channel, limit=limit)

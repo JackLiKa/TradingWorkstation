@@ -64,6 +64,10 @@ class AShareMcpTool(ToolBase):
         """通過 MCP 協議調用 a-share-mcp 工具。"""
         arguments = arguments or {}
         try:
+            # 確保 a-share-mcp 子進程正在運行（自動重啟已崩潰的進程）
+            from app.services.ashare_mcp_manager import ashare_mcp_manager
+            await ashare_mcp_manager.ensure_running()
+
             result = await self._call_mcp_tool(tool_name, arguments)
             content = self._format_result(tool_name, result)
             citations = self._build_citations(tool_name, result)

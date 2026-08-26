@@ -572,7 +572,11 @@ async def fetch_all_channels(limit_per_channel: int = 30) -> list[dict[str, Any]
     )
 
 
-async def fetch_a_stock_focused(limit: int = 50) -> list[dict[str, Any]]:
+async def fetch_a_stock_focused(
+    limit: int = 50,
+    *,
+    truncate: bool = True,
+) -> list[dict[str, Any]]:
     """抓取 A 股聚焦新聞（最新 + 快訊 + 全球宏觀 + 熱文）。
 
     用於 AI0 行情新聞階段，提供 A 股市場最相關的新聞。
@@ -581,6 +585,9 @@ async def fetch_a_stock_focused(limit: int = 50) -> list[dict[str, Any]]:
 
     Args:
         limit: 總條數上限
+        truncate: 是否截斷到 limit 條。
+                  True（默認）= 預覽用，只返回前 limit 條；
+                  False = 同步入庫用，返回全部去重後的結果（不丟棄已抓取的新聞）。
 
     Returns:
         去重後的 A 股相關新聞列表
@@ -634,8 +641,16 @@ async def fetch_a_stock_focused(limit: int = 50) -> list[dict[str, Any]]:
         # 按日期排序（新的在前）
         all_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
 
-        result = all_articles[:limit] if limit > 0 else all_articles
-        logger.info(f"[wallstreetcn] A股聚焦: {len(result)} 條（總抓取 {len(all_articles)} 條）")
+        # truncate=True（預覽用）：只返回前 limit 條
+        # truncate=False（同步用）：返回全部去重後的結果，不丟棄已抓取的新聞
+        if truncate and limit > 0:
+            result = all_articles[:limit]
+        else:
+            result = all_articles
+        logger.info(
+            f"[wallstreetcn] A股聚焦: 返回 {len(result)} 條"
+            f"（總抓取 {len(all_articles)} 條, truncate={truncate}）"
+        )
         return result
 
     return await _throttle.throttled_request(

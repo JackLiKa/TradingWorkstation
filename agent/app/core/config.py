@@ -62,8 +62,10 @@ class Settings(BaseSettings):
 
     # ===== 新聞過濾 =====
     news_filter_enabled: bool = True  # 是否啟用財經關鍵詞過濾
-    news_filter_keywords: str = ""  # 自定義關鍵詞白名單（逗號分隔，空=用默認）
+    news_filter_keywords: str = ""  # 自定義關鍵詞白名單（逗號分隔，空=用默認三級權重）
     news_filter_blacklist: str = ""  # 自定義黑名單（逗號分隔，追加到默認）
+    news_filter_score_threshold_live: int = 2  # 快訊評分閾值（至少 N 分才保留）
+    news_filter_score_threshold_article: int = 1  # 文章評分閾值（至少 N 分才保留）
 
     # ===== Per-stage provider =====
     stage_providers: dict[str, str] = {}  # 每階段供應商偏好

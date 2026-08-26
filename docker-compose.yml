@@ -16,7 +16,7 @@ services:
     image: mysql:8.0
     container_name: tw-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root123}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
       MYSQL_DATABASE: ${DB_NAME:-a_stock_baostock}
       MYSQL_CHARACTER_SET_SERVER: utf8mb4
       MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
@@ -42,7 +42,7 @@ services:
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: root
-      DB_PASSWORD: ${DB_PASSWORD:-root123}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
       DB_NAME: ${DB_NAME:-a_stock_baostock}
       SERVER_PORT: 8090
       SERVER_CONTEXT_PATH: /TradingWorkstation
@@ -105,7 +105,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set in .env}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./docs/grafana-agent-dashboard.json:/etc/grafana/provisioning/dashboards/tw-agent.json:ro
