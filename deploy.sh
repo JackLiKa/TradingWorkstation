@@ -121,10 +121,8 @@ innodb_buffer_pool_size = 256M
 max_connections = 30
 key_buffer_size = 32M
 table_open_cache = 200
-innodb_log_file_size = 64M
+innodb_redo_log_capacity = 256M
 innodb_flush_log_at_trx_commit = 2
-query_cache_size = 0
-query_cache_type = 0
 EOF
 
 systemctl restart mysql
