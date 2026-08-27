@@ -15,7 +15,23 @@ import { FloatingChatCard } from '@/components/chat/FloatingChatCard';
 export const metadata: Metadata = {
   title: '量化交易工作台',
   description: 'Java 21 + Spring Boot + Next.js 量化交易工作台',
+  manifest: '/TradingWorkstation/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: '量化交易工作台',
+  },
 };
+
+/** PWA Service Worker 注册脚本 */
+const SW_SCRIPT = `
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/TradingWorkstation/sw.js')
+        .catch((err) => console.log('SW registration failed:', err));
+    });
+  }
+`;
 
 /**
  * RootLayout 根佈局組件 — 包裹所有頁面的全局佈局。
@@ -26,6 +42,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="zh-CN" className="dark">
       <body className="bg-bg text-slate-200 antialiased">
+        <script dangerouslySetInnerHTML={{ __html: SW_SCRIPT }} />
         <AppProviders>
           <div className="flex min-h-screen">
             <Sidebar />

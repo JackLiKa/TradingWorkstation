@@ -12,6 +12,7 @@ import { formatPercent, formatVolume, pctClass } from '@/lib/format';
  * @param onSelect 點擊行回調（傳入股票代碼）
  */
 export function MoversList({ movers, onSelect }: { movers: HotSymbolDto[]; onSelect?: (code: string) => void }) {
+  const safeMovers = movers ?? [];
   return (
     <Card>
       <CardHeader>
@@ -29,12 +30,12 @@ export function MoversList({ movers, onSelect }: { movers: HotSymbolDto[]; onSel
             </tr>
           </thead>
           <tbody>
-            {movers.length === 0 ? (
+            {safeMovers.length === 0 ? (
               <tr>
                 <td colSpan={4} className="px-4 py-6 text-center text-muted">暂无数据</td>
               </tr>
             ) : (
-              movers.map((m) => (
+              safeMovers.map((m) => (
                 <tr
                   key={m.code}
                   className={`border-b border-border-subtle hover:bg-bg-hover ${onSelect ? 'cursor-pointer' : ''}`}

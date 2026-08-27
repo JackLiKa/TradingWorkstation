@@ -70,3 +70,9 @@ Thumbs.db
 
 # ===== 测试截图（不入库）=====
 *.png
+# PWA 图标例外（需要入库）
+!next/public/icon-192.png
+!next/public/icon-512.png
+
+# ===== 服务日志（不入库）=====
+logs/
