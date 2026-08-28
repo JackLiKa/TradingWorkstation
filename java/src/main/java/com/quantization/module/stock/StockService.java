@@ -1,7 +1,11 @@
 package com.quantization.module.stock;
 
 import com.quantization.config.CacheConfig;
+import com.quantization.module.market.MarketPremarketStatsEntity;
+import com.quantization.module.market.PreMarketStatsService;
 import com.quantization.module.stock.dto.HotSymbolDto;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import com.quantization.module.stock.dto.IndexDailyDto;
 import com.quantization.module.stock.dto.MarketBreadthDto;
 import com.quantization.module.stock.dto.RotationSignalDto;
@@ -14,6 +18,7 @@ import com.quantization.module.stock.dto.SummaryMetricsDto;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.time.LocalDate;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -32,6 +37,7 @@ import java.util.stream.Collectors;
  * 輪動預測、季節性分析、Markov 模型、多模型預測已遷至
  * {@link com.quantization.module.forecast.ForecastService}。
  */
+@Slf4j
 @Service
 @Transactional(readOnly = true)
 public class StockService {
@@ -42,17 +48,21 @@ public class StockService {
     private final IndustryDailyRepository industryDailyRepository;
     private final StockIndustryRepository stockIndustryRepository;
 
+    private final PreMarketStatsService preMarketStatsService;
+
     public StockService(
             StockDailyRepository repository,
             IndexDailyRepository indexDailyRepository,
             IndexMetadataRepository indexMetadataRepository,
             IndustryDailyRepository industryDailyRepository,
-            StockIndustryRepository stockIndustryRepository) {
+            StockIndustryRepository stockIndustryRepository,
+            PreMarketStatsService preMarketStatsService) {
         this.repository = repository;
         this.indexDailyRepository = indexDailyRepository;
         this.indexMetadataRepository = indexMetadataRepository;
         this.industryDailyRepository = industryDailyRepository;
         this.stockIndustryRepository = stockIndustryRepository;
+        this.preMarketStatsService = preMarketStatsService;
     }
 
     /**
@@ -146,6 +156,35 @@ public class StockService {
      * @return 波动榜 DTO 列表
      */
     public List<HotSymbolDto> latestMovers(int limit) {
+        // 優先讀取預計算數據
+        try {
+            LocalDate latestDate = repository.latestTradeDate();
+            if (latestDate != null) {
+                List<MarketPremarketStatsEntity> preStats = preMarketStatsService.getMovers(latestDate, limit);
+                if (!preStats.isEmpty()) {
+                    ObjectMapper mapper = new ObjectMapper();
+                    return preStats.stream()
+                            .map(stat -> {
+                                try {
+                                    var data = mapper.readTree(stat.getStatValue());
+                                    return new HotSymbolDto(
+                                            data.get("code").asText(),
+                                            data.get("closePrice") != null && !data.get("closePrice").isNull() ? data.get("closePrice").asDouble() : null,
+                                            data.get("pctChange") != null && !data.get("pctChange").isNull() ? data.get("pctChange").asDouble() : null,
+                                            data.get("volume") != null && !data.get("volume").isNull() ? data.get("volume").asLong() : null
+                                    );
+                                } catch (Exception e) {
+                                    return null;
+                                }
+                            })
+                            .filter(Objects::nonNull)
+                            .toList();
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[movers] 讀取預計算數據失敗，回退到實時查詢: {}", e.getMessage());
+        }
+        // 回退：實時查詢
         return repository.latestMovers(limit).stream()
                 .map(e -> new HotSymbolDto(
                         e.getCode(),

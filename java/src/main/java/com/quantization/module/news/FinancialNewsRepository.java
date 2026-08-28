@@ -35,4 +35,10 @@ public interface FinancialNewsRepository extends JpaRepository<FinancialNewsEnti
 
     /** 清理过期新闻（删除指定时间之前的记录） */
     long deleteByPublishedAtBefore(LocalDateTime before);
+
+    /** 游标分页：查询发布时间早于 cursor 的新闻（全频道，最新的在前） */
+    List<FinancialNewsEntity> findByPublishedAtBeforeOrderByPublishedAtDesc(LocalDateTime cursor, Pageable pageable);
+
+    /** 游标分页：查询发布时间早于 cursor 的新闻（按频道，最新的在前） */
+    List<FinancialNewsEntity> findByChannelAndPublishedAtBeforeOrderByPublishedAtDesc(String channel, LocalDateTime cursor, Pageable pageable);
 }

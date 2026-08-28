@@ -136,7 +136,7 @@ def _upsert_industry_batch(cursor, rows: list[tuple]) -> None:
         "VALUES (%s, %s, %s, %s, %s) "
         "ON DUPLICATE KEY UPDATE "
         "code_name=VALUES(code_name), industry=VALUES(industry), "
-        "industry_classification=VALUES(industry_classification), updated_at=CURRENT_TIMESTAMP"
+        "industry_classification=VALUES(industry_classification), update_date=VALUES(update_date)"
     )
     cursor.executemany(sql, rows)
 

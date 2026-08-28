@@ -6,6 +6,8 @@ import java.util.List;
 public interface StockDailyRepositoryCustom {
 
     boolean ping();
+    /** 最新交易日 */
+    LocalDate latestTradeDate();
 
     /** 表总行数、去重代码数、最新交易日、最新交易日(不复权)平均涨跌幅与成交额 */
     StockSummaryProjection summaryMetrics();

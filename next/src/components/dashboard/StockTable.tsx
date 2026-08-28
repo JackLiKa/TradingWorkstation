@@ -14,7 +14,7 @@ export function StockTable({ records }: { records: StockDailyDto[] }) {
     <Card>
       <CardHeader>
         <CardTitle>日线数据</CardTitle>
-        <span className="text-xs text-muted">{records.length} 条</span>
+        <span className="text-xs text-muted">当前加载 {records.length} 条{records.length > 0 ? '（可加载更多）' : ''}</span>
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-auto max-h-[420px]">

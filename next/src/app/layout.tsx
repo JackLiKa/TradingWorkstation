@@ -6,7 +6,6 @@ import type { Metadata } from 'next';
 import './globals.css';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
-import { DbStatusBanner } from '@/components/layout/DbStatusBanner';
 import { LoadingOverlay } from '@/components/layout/LoadingOverlay';
 import { AppProviders } from '@/components/layout/AppProviders';
 import { FloatingChatCard } from '@/components/chat/FloatingChatCard';
@@ -49,9 +48,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="flex flex-1 flex-col min-w-0">
               <Topbar />
               <main className="flex-1 overflow-auto p-3 md:p-6">
-                <div className="mb-4">
-                  <DbStatusBanner />
-                </div>
                 {children}
               </main>
             </div>

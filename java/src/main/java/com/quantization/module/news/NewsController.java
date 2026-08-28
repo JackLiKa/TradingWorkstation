@@ -1,6 +1,7 @@
 package com.quantization.module.news;
 
 import com.quantization.common.api.ApiResponse;
+import com.quantization.module.news.dto.CursorPageResult;
 import com.quantization.module.news.dto.FinancialNewsDto;
 import com.quantization.module.news.dto.NewsBatchUpsertRequest;
 import com.quantization.module.news.dto.NewsSentimentScoreDto;
@@ -61,6 +62,35 @@ public class NewsController {
             @RequestParam(defaultValue = "20") int size
     ) {
         return ApiResponse.ok(newsService.listByChannel(channel, page, size));
+    }
+
+    @Operation(summary = "游标分页查询最新新闻（基于发布时间）")
+    @GetMapping("/cursor")
+    public ApiResponse<CursorPageResult<FinancialNewsDto>> listByCursor(
+            @Parameter(description = "游标（上一页最后一条新闻的发布时间，ISO格式 yyyy-MM-dd'T'HH:mm:ss）")
+            @RequestParam(required = false) String cursor,
+            @Parameter(description = "每页条数") @RequestParam(defaultValue = "20") int size
+    ) {
+        LocalDateTime cursorTime = null;
+        if (cursor != null && !cursor.isBlank()) {
+            cursorTime = LocalDateTime.parse(cursor);
+        }
+        return ApiResponse.ok(newsService.listLatestCursor(cursorTime, size));
+    }
+
+    @Operation(summary = "游标分页按频道查询新闻（基于发布时间）")
+    @GetMapping("/channel/{channel}/cursor")
+    public ApiResponse<CursorPageResult<FinancialNewsDto>> listByChannelCursor(
+            @Parameter(description = "频道：global/a-stock/us-stock/hk-stock/forex/commodity")
+            @PathVariable String channel,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        LocalDateTime cursorTime = null;
+        if (cursor != null && !cursor.isBlank()) {
+            cursorTime = LocalDateTime.parse(cursor);
+        }
+        return ApiResponse.ok(newsService.listByChannelCursor(channel, cursorTime, size));
     }
 
     @Operation(summary = "清理过期新闻")

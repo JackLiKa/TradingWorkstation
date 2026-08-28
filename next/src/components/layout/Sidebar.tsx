@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, CandlestickChart, Database, Settings, SlidersHorizontal, Menu, X, Bot, Activity, Layers, Newspaper } from 'lucide-react';
+import { LayoutDashboard, CandlestickChart, Settings, SlidersHorizontal, Menu, X, Bot, Activity, Layers, Newspaper } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /** 導航菜單項配置（路由 + 標籤 + 圖標） */
@@ -18,7 +18,6 @@ const NAV_ITEMS = [
   { href: '/agent', label: 'AI 策略优化', icon: Bot },
   { href: '/agent-dashboard', label: 'Agent Dashboard', icon: Activity },
   { href: '/news', label: '财经新闻', icon: Newspaper },
-  { href: '/sync', label: '数据同步', icon: Database },
   { href: '/settings', label: '系统设置', icon: Settings },
 ];
 
@@ -40,6 +39,7 @@ export function Sidebar() {
           <Link
             key={item.href}
             href={item.href}
+            prefetch={false}
             onClick={() => setMobileOpen(false)}
             className={cn(
               'flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors',

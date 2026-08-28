@@ -339,6 +339,9 @@ def _run_cli(args) -> int:
     # 解析 adjustflags 參數
     if args.adjustflags:
         adjustflags = [int(x.strip()) for x in args.adjustflags.split(",") if x.strip()]
+    elif args.force_industry and not args.adjustflag != "3":
+        # --force-industry 單獨使用時跳過股票數據同步
+        adjustflags = []
     else:
         adjustflags = [int(args.adjustflag)]
 
@@ -367,19 +370,25 @@ def _run_cli(args) -> int:
             codes = _load_stock_list()
             _log(f"[info] 範圍模式：從清單載入 {len(codes)} 隻股票")
 
-    # 確定指數清單
-    index_codes = _load_index_list() if args.index else []
-
     _log(f"[info] 日期範圍: {start_date} ~ {end_date}")
     _log(f"[info] 復權類型: {[ADJUSTFLAG_MAP[af] for af in adjustflags]}")
-    if index_codes:
-        _log(f"[info] 指數清單: {len(index_codes)} 個指數（10 大類別）")
 
     conn = _connect()
     try:
-        # 同步指數元數據（分類/名稱）到 index_metadata 表
+        # 同步指數元數據（分類/名稱）到 index_metadata 表，並確定指數清單
+        index_codes = []
         if args.index:
             _sync_index_metadata(conn)
+            index_source = "index_list.json"
+            if incremental:
+                index_codes = _get_existing_indexes(conn, "d")
+                if index_codes:
+                    index_source = "數據庫 index_metadata"
+                else:
+                    index_codes = _load_index_list()
+            else:
+                index_codes = _load_index_list()
+            _log(f"[info] 指數清單: {len(index_codes)} 個指數（來自{index_source}）")
 
         grand_total = 0
         for af in adjustflags:
@@ -406,11 +415,18 @@ def _run_cli(args) -> int:
             _log(f"{'=' * 60}")
             grand_total += _sync_indexes(conn, index_codes, start_date, end_date, incremental)
 
-        if args.industry:
+        if args.industry or args.force_industry:
             _log(f"\n{'=' * 60}")
             _log(f"開始同步行業分類數據")
             _log(f"{'=' * 60}")
             grand_total += _sync_industry(conn, force=args.force_industry)
+
+        # 行業日聚合：同步了不復權股票日線時，用最新行業分類做 (date, industry) 聚合
+        if 3 in adjustflags:
+            _log(f"\n{'=' * 60}")
+            _log(f"開始同步行業日聚合數據")
+            _log(f"{'=' * 60}")
+            grand_total += _sync_industry_daily(conn, start_date, end_date)
 
         _log(f"\n{'=' * 60}")
         _log(f"全部完成！共寫入 {grand_total} 條記錄")

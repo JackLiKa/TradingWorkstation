@@ -178,6 +178,18 @@ export const newsDbApi = {
   listByChannel: (channel: string, page = 0, size = 20) =>
     apiFetch<PageResult<DbNewsItem>>(`/news/channel/${channel}?page=${page}&size=${size}`),
 
+  /** 游標分頁查詢最新新聞（基於發佈時間） */
+  listLatestCursor: (cursor?: string, size = 20) =>
+    apiFetch<{ items: DbNewsItem[]; nextCursor: string | null; hasMore: boolean }>(
+      `/news/cursor?size=${size}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+    ),
+
+  /** 游標分頁按頻道查詢新聞（基於發佈時間） */
+  listByChannelCursor: (channel: string, cursor?: string, size = 20) =>
+    apiFetch<{ items: DbNewsItem[]; nextCursor: string | null; hasMore: boolean }>(
+      `/news/channel/${channel}/cursor?size=${size}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+    ),
+
   /** 新聞總數 */
   count: () =>
     apiFetch<number>(`/news/count`),

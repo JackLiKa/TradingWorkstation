@@ -8,7 +8,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import useSWR from 'swr';
 import { api } from '@/lib/api';
-import { useDbHealth } from '@/lib/hooks/useDbHealth';
+import { useInView } from '@/lib/hooks/useInView';
 import { Toolbar, type ToolbarValues } from '@/components/dashboard/Toolbar';
 import { MetricGrid } from '@/components/dashboard/MetricCard';
 import { MoversList } from '@/components/dashboard/MoversList';
@@ -24,13 +24,12 @@ import {
 } from '@/components/ui/Skeleton';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Button } from '@/components/ui/Button';
-import { Loader2, ChevronDown, Database, AlertTriangle } from 'lucide-react';
-import { RefreshButton } from '@/components/ui/RefreshButton';
+import { Loader2, ChevronDown } from 'lucide-react';
 import type { StockDailyDto } from '@/lib/api/types';
 
-/** 默認搜索條件 */
+/** 默認搜索條件 — 默認顯示上證指數 */
 const DEFAULT_QUERY: ToolbarValues = {
-  code: '',
+  code: 'sh.000001',
   adjustflag: 3,
   startDate: '',
   endDate: '',
@@ -48,7 +47,10 @@ export default function DashboardPage() {
   const [tableHasMore, setTableHasMore] = useState(false);
   const [tableLoadingMore, setTableLoadingMore] = useState(false);
   const [tableOffset, setTableOffset] = useState(0);
-  const { status: dbStatus, isLoading: dbLoading, refresh: refreshDb } = useDbHealth();
+  // 懶加載：各區域進入視口後才請求數據
+  const [metricsRef, metricsInView] = useInView<HTMLDivElement>();
+  const [chartMoversRef, chartMoversInView] = useInView<HTMLDivElement>();
+  const [tableRef, tableInView] = useInView<HTMLDivElement>();
 
   // 構建搜索參數
   const searchParams = useMemo(() => {
@@ -62,24 +64,24 @@ export default function DashboardPage() {
   }, [query]);
 
   // 獨立 SWR 調用 — 各資源獨立加載，互不阻塞
-  // 1. Summary 指標（緩存，最快返回）
+  // 1. Summary 指標（預計算數據，毫秒級返回）
   const { data: summary, error: summaryError, isLoading: summaryLoading, mutate: reloadSummary } = useSWR(
-    '/dashboard/summary',
+    metricsInView ? '/dashboard/summary' : null,
     () => api.summary(),
     { revalidateOnFocus: false, dedupingInterval: 60000 }
   );
 
-  // 2. Movers 波動列表（獨立查詢，快速）
+  // 2. Movers 波動列表（預計算數據，快速返回）
   const { data: movers, error: moversError, isLoading: moversLoading, mutate: reloadMovers } = useSWR(
-    '/stock/movers?limit=8',
+    chartMoversInView ? '/stock/movers?limit=8' : null,
     () => api.movers(8),
     { revalidateOnFocus: false, dedupingInterval: 30000 }
   );
 
-  // 3. 搜索結果（分頁，依賴 query）
+  // 3. 搜索結果（默認加載上證指數數據）
   const searchKey = useMemo(() => `/stock/search?${searchParams.toString()}`, [searchParams]);
   const { data: searchResult, error: searchError, isLoading: searchLoading, mutate: reloadSearch } = useSWR(
-    searchKey,
+    tableInView ? searchKey : null,
     () => api.search(searchParams),
     {
       revalidateOnFocus: false,
@@ -187,56 +189,23 @@ export default function DashboardPage() {
         searching={searchLoading}
       />
 
-      {/* 數據庫連接狀態卡片 — loading/disconnected/error 時顯示，替代普通錯誤提示 */}
-      {dbStatus === 'loading' && (
-        <div className="flex items-center gap-3 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3">
-          <Loader2 className="w-5 h-5 animate-spin text-accent" />
-          <div>
-            <div className="text-sm font-medium text-accent">正在连接数据库...</div>
-            <div className="text-xs text-muted">正在检查后端服务与 MySQL 连接状态</div>
-          </div>
-        </div>
-      )}
-      {dbStatus === 'error' && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-up/30 bg-up/5 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <AlertTriangle className="w-5 h-5 text-up" />
-            <div>
-              <div className="text-sm font-medium text-up">后端服务不可达</div>
-              <div className="text-xs text-muted">请确认 Java 后端 (8090) 已启动，或点击重新连接</div>
-            </div>
-          </div>
-          <RefreshButton onClick={() => refreshDb()} isLoading={dbLoading} label="重新連接" />
-        </div>
-      )}
-      {dbStatus === 'disconnected' && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-up/30 bg-up/5 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <Database className="w-5 h-5 text-up" />
-            <div>
-              <div className="text-sm font-medium text-up">数据库未连接</div>
-              <div className="text-xs text-muted">后端服务已启动但无法连接 MySQL，请检查数据库配置</div>
-            </div>
-          </div>
-          <RefreshButton onClick={() => refreshDb()} isLoading={dbLoading} label="重新檢查" />
-        </div>
-      )}
+      {/* 指標卡片 — 進入視口後懶加載 */}
+      <div ref={metricsRef}>
+        {(summaryLoading || !metrics) ? (
+          <MetricGridSkeleton />
+        ) : (
+          <>
+            {summaryLoading && <MetricGridSkeleton />}
+            {summaryError && (
+              <ErrorState message={`指标加载失败: ${summaryError.message}`} onRetry={reloadSummary} />
+            )}
+            {metrics && <MetricGrid metrics={metrics} />}
+          </>
+        )}
+      </div>
 
-      {/* 指標卡片 — 數據庫正常時才加載，否則顯示骨架屏 */}
-      {dbStatus !== 'connected' && (summaryLoading || !metrics) ? (
-        <MetricGridSkeleton />
-      ) : (
-        <>
-          {summaryLoading && <MetricGridSkeleton />}
-          {summaryError && (
-            <ErrorState message={`指标加载失败: ${summaryError.message}`} onRetry={reloadSummary} />
-          )}
-          {metrics && <MetricGrid metrics={metrics} />}
-        </>
-      )}
-
-      {/* K線圖 + 波動列表 — 並行獨立加載 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {/* K線圖 + 波動列表 — 進入視口後懶加載 */}
+      <div ref={chartMoversRef} className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
           {chartLoading && <ChartSkeleton />}
           {chartError && <ErrorState message={`K线图加载失败: ${chartError.message}`} onRetry={reloadChart} />}
@@ -261,7 +230,8 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 搜索結果表格 — 分頁加載 */}
+      {/* 搜索結果表格 — 進入視口後懶加載 */}
+      <div ref={tableRef}>
       {searchLoading && tableRecords.length === 0 && <TableSkeleton />}
       {searchError && <ErrorState message={`搜索失败: ${searchError.message}`} onRetry={reloadSearch} />}
       {!searchLoading && !searchError && tableRecords.length === 0 && (
@@ -285,6 +255,7 @@ export default function DashboardPage() {
           </Button>
         </div>
       )}
+      </div>
 
       {/* 行情預計算快照（預計算數據，毫秒級加載） */}
       <MarketSnapshotPanel />

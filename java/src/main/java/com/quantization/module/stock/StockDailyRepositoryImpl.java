@@ -195,6 +195,15 @@ public class StockDailyRepositoryImpl implements StockDailyRepositoryCustom {
      * @return 日线实体列表
      */
     @Override
+    public LocalDate latestTradeDate() {
+        CriteriaBuilder cb = em.getCriteriaBuilder();
+        CriteriaQuery<LocalDate> query = cb.createQuery(LocalDate.class);
+        Root<StockDailyEntity> root = query.from(StockDailyEntity.class);
+        query.select(cb.function("max", LocalDate.class, root.get("tradeDate")));
+        return em.createQuery(query).getSingleResult();
+    }
+
+    @Override
     public List<StockDailyEntity> latestMovers(int limit) {
         CriteriaBuilder cb = em.getCriteriaBuilder();
         CriteriaQuery<LocalDate> dateQuery = cb.createQuery(LocalDate.class);

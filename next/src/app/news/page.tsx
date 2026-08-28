@@ -21,7 +21,7 @@ import {
   type WallstreetcnNewsItem,
   type DbNewsItem,
 } from '@/lib/api/agent';
-import { Newspaper, Search, Database, ExternalLink, Loader2, ChevronLeft, ChevronRight, Zap } from 'lucide-react';
+import { Newspaper, Search, Database, ExternalLink, Loader2, ChevronDown, Zap } from 'lucide-react';
 
 type TabKey = 'database' | 'live' | 'vector';
 
@@ -46,9 +46,12 @@ const PAGE_SIZE = 20;
 export default function NewsPage() {
   const [activeTab, setActiveTab] = useState<TabKey>('database');
 
-  // ===== 數據庫新聞 Tab 狀態 =====
-  const [dbPage, setDbPage] = useState(0);
+  // ===== 數據庫新聞 Tab 狀態（游標分頁） =====
   const [dbChannel, setDbChannel] = useState<string>(''); // 空 = 全部頻道
+  const [dbCursor, setDbCursor] = useState<string | undefined>(undefined);
+  const [dbNews, setDbNews] = useState<DbNewsItem[]>([]);
+  const [dbHasMore, setDbHasMore] = useState(false);
+  const [dbLoadingMore, setDbLoadingMore] = useState(false);
 
   // ===== 實時抓取 Tab 狀態 =====
   const [liveChannel, setLiveChannel] = useState('a-stock');
@@ -63,17 +66,42 @@ export default function NewsPage() {
   const [vectorSearching, setVectorSearching] = useState(false);
   const [vectorResults, setVectorResults] = useState<WallstreetcnNewsItem[]>([]);
 
-  // ===== 數據庫新聞查詢 =====
+  // ===== 數據庫新聞查詢（游標分頁） =====
   const dbQueryKey = dbChannel
-    ? `news-db-channel-${dbChannel}-${dbPage}`
-    : `news-db-latest-${dbPage}`;
+    ? `news-db-channel-cursor-${dbChannel}-${dbCursor ?? 'init'}`
+    : `news-db-latest-cursor-${dbCursor ?? 'init'}`;
   const { data: dbPageData, error: dbError, mutate: mutateDb, isValidating: dbLoading } = useSWR(
     dbQueryKey,
     () => dbChannel
-      ? newsDbApi.listByChannel(dbChannel, dbPage, PAGE_SIZE)
-      : newsDbApi.listLatest(dbPage, PAGE_SIZE),
-    { revalidateOnFocus: false }
+      ? newsDbApi.listByChannelCursor(dbChannel, dbCursor, PAGE_SIZE)
+      : newsDbApi.listLatestCursor(dbCursor, PAGE_SIZE),
+    {
+      revalidateOnFocus: false,
+      onSuccess: (data) => {
+        if (dbCursor) {
+          setDbNews((prev) => [...prev, ...data.items]);
+        } else {
+          setDbNews(data.items);
+        }
+        setDbHasMore(data.hasMore);
+      },
+    }
   );
+
+  // 加載更多新聞
+  const loadMoreNews = () => {
+    if (!dbPageData?.nextCursor || dbLoadingMore) return;
+    setDbLoadingMore(true);
+    setDbCursor(dbPageData.nextCursor);
+    setTimeout(() => setDbLoadingMore(false), 500);
+  };
+
+  // 切換頻道時重置游標和新聞列表
+  const handleChannelChange = (channel: string) => {
+    setDbChannel(channel);
+    setDbCursor(undefined);
+    setDbNews([]);
+  };
 
   // ===== 實時抓取 =====
   const { data: latestData, error: latestError, mutate: mutateLatest, isValidating: liveLoading } = useSWR(
@@ -139,9 +167,7 @@ export default function NewsPage() {
   };
 
   // 分頁信息
-  const totalPages = dbPageData?.totalPages ?? 0;
-  const currentPage = dbPageData?.number ?? 0;
-  const totalElements = dbPageData?.totalElements ?? 0;
+  const totalElements = dbNews.length;
 
   return (
     <div className="space-y-6">
@@ -207,7 +233,7 @@ export default function NewsPage() {
             <CardContent>
               <div className="flex flex-wrap gap-2">
                 <button
-                  onClick={() => { setDbChannel(''); setDbPage(0); }}
+                  onClick={() => handleChannelChange('')}
                   className={`px-3 py-1.5 rounded-md text-sm border transition-colors ${
                     dbChannel === ''
                       ? 'border-accent bg-accent/10 text-accent'
@@ -219,7 +245,7 @@ export default function NewsPage() {
                 {CHANNELS.map((ch) => (
                   <button
                     key={ch.value}
-                    onClick={() => { setDbChannel(ch.value); setDbPage(0); }}
+                    onClick={() => handleChannelChange(ch.value)}
                     className={`px-3 py-1.5 rounded-md text-sm border transition-colors ${
                       dbChannel === ch.value
                         ? 'border-accent bg-accent/10 text-accent'
@@ -247,43 +273,32 @@ export default function NewsPage() {
             </CardHeader>
             <CardContent>
               {dbError && <ErrorState message={`載入失敗: ${(dbError as Error).message}`} onRetry={() => mutateDb()} />}
-              {dbPageData && dbPageData.content.length > 0 ? (
+              {dbNews.length > 0 ? (
                 <div className="space-y-3">
-                  {dbPageData.content.map((n) => (
+                  {dbNews.map((n) => (
                     <DbNewsCard key={n.id} news={n} />
                   ))}
                 </div>
               ) : (
                 !dbError && !dbLoading && <div className="text-muted text-sm">無數據。守護進程會定時抓取新聞入庫。</div>
               )}
-              {dbLoading && !dbPageData && <div className="text-muted text-sm">載入中...</div>}
+              {dbLoading && dbNews.length === 0 && <div className="text-muted text-sm">載入中...</div>}
 
-              {/* 分頁控件 */}
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between mt-4 pt-3 border-t border-border">
-                  <span className="text-xs text-muted">
-                    第 {currentPage + 1} / {totalPages} 頁
-                  </span>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setDbPage(Math.max(0, currentPage - 1))}
-                      disabled={currentPage === 0}
-                    >
-                      <ChevronLeft className="w-4 h-4 mr-1" />
-                      上一頁
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setDbPage(Math.min(totalPages - 1, currentPage + 1))}
-                      disabled={currentPage >= totalPages - 1}
-                    >
-                      下一頁
-                      <ChevronRight className="w-4 h-4 ml-1" />
-                    </Button>
-                  </div>
+              {/* 加載更多按鈕（游標分頁） */}
+              {dbHasMore && (
+                <div className="flex justify-center mt-4 pt-3 border-t border-border">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={loadMoreNews}
+                    disabled={dbLoadingMore || dbLoading}
+                  >
+                    {dbLoadingMore || dbLoading ? (
+                      <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> 載入中...</>
+                    ) : (
+                      <><ChevronDown className="w-4 h-4 mr-1" /> 加載更多</>
+                    )}
+                  </Button>
                 </div>
               )}
             </CardContent>

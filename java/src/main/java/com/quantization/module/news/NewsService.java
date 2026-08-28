@@ -1,5 +1,6 @@
 package com.quantization.module.news;
 
+import com.quantization.module.news.dto.CursorPageResult;
 import com.quantization.module.news.dto.FinancialNewsDto;
 import com.quantization.module.news.dto.NewsBatchUpsertRequest;
 import com.quantization.module.news.dto.NewsSyncResultDto;
@@ -69,6 +70,51 @@ public class NewsService {
         Pageable pageable = PageRequest.of(page, size);
         return repository.findByChannelOrderByPublishedAtDesc(channel, pageable)
                 .map(FinancialNewsDto::from);
+    }
+
+    /**
+     * 游标分页查询最新新闻（基于 published_at）。
+     *
+     * @param cursor 游标（上一页最后一条新闻的 publishedAt），null 表示从头开始
+     * @param size   每页条数
+     * @return 游标分页结果，包含新闻列表和下一页游标
+     */
+    public CursorPageResult<FinancialNewsDto> listLatestCursor(LocalDateTime cursor, int size) {
+        Pageable pageable = PageRequest.of(0, size + 1);
+        List<FinancialNewsEntity> entities;
+        if (cursor == null) {
+            entities = repository.findAllByOrderByPublishedAtDesc(pageable).getContent();
+        } else {
+            entities = repository.findByPublishedAtBeforeOrderByPublishedAtDesc(cursor, pageable);
+        }
+        boolean hasMore = entities.size() > size;
+        List<FinancialNewsEntity> pageItems = hasMore ? entities.subList(0, size) : entities;
+        LocalDateTime nextCursor = pageItems.isEmpty() ? null : pageItems.get(pageItems.size() - 1).getPublishedAt();
+        List<FinancialNewsDto> items = pageItems.stream().map(FinancialNewsDto::from).toList();
+        return new CursorPageResult<>(items, nextCursor, hasMore);
+    }
+
+    /**
+     * 游标分页查询按频道的新闻（基于 published_at）。
+     *
+     * @param channel 频道
+     * @param cursor  游标（上一页最后一条新闻的 publishedAt），null 表示从头开始
+     * @param size    每页条数
+     * @return 游标分页结果
+     */
+    public CursorPageResult<FinancialNewsDto> listByChannelCursor(String channel, LocalDateTime cursor, int size) {
+        Pageable pageable = PageRequest.of(0, size + 1);
+        List<FinancialNewsEntity> entities;
+        if (cursor == null) {
+            entities = repository.findByChannelOrderByPublishedAtDesc(channel, pageable).getContent();
+        } else {
+            entities = repository.findByChannelAndPublishedAtBeforeOrderByPublishedAtDesc(channel, cursor, pageable);
+        }
+        boolean hasMore = entities.size() > size;
+        List<FinancialNewsEntity> pageItems = hasMore ? entities.subList(0, size) : entities;
+        LocalDateTime nextCursor = pageItems.isEmpty() ? null : pageItems.get(pageItems.size() - 1).getPublishedAt();
+        List<FinancialNewsDto> items = pageItems.stream().map(FinancialNewsDto::from).toList();
+        return new CursorPageResult<>(items, nextCursor, hasMore);
     }
 
     /**
