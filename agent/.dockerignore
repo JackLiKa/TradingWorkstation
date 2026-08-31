@@ -1,5 +1,5 @@
-# 通用 .dockerignore — 減少 Docker build context
-# 適用於所有服務目錄
+# Agent .dockerignore — build context 為項目根目錄
+# 減少 Docker build context，排除不需要的文件
 
 # ===== VCS =====
 .git
@@ -18,6 +18,11 @@
 *.md
 docs/
 LICENSE
+NOTICE
+CLA
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+SECURITY.md
 
 # ===== 環境配置（敏感）=====
 .env
@@ -26,27 +31,42 @@ LICENSE
 *.env
 
 # ===== 運行時 / 構建產物 =====
-__pycache__/
-*.pyc
-.pytest_cache/
-node_modules/
-.next/
-dist/
-build/
-target/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+**/.coverage
+**/node_modules/
+**/.next/
+**/dist/
+**/build/
+**/target/
 *.db
 *.sqlite
 *.sqlite3
-data/
-logs/
-
-# ===== OS 文件 =====
-.DS_Store
-Thumbs.db
-desktop.ini
+agent/data/
+agent/logs/
 
 # ===== Docker 自身 =====
-Dockerfile
-Dockerfile.*
-.dockerignore
-docker-compose*.yml
+**/Dockerfile
+**/Dockerfile.*
+**/.dockerignore
+**/docker-compose*.yml
+
+# ===== 其他服務目錄（不需要進入 agent 鏡像）=====
+java/
+next/
+ingestion/
+deploy.sh
+deploy-docker.sh
+build.sh
+docker/
+dist/
+
+# ===== a-share-mcp 排除項（保留源碼，排除 .venv 和緩存）=====
+a-share-mcp/.venv/
+a-share-mcp/.git/
+a-share-mcp/.claude/
+a-share-mcp/.github/
+a-share-mcp/docs/
+a-share-mcp/typings/

@@ -112,6 +112,15 @@ export function FloatingChatCard() {
     setLayout(loaded);
   }, []);
 
+  // ===== 移動端檢測（屏幕寬度 ≤ 768px 時使用全屏覆蓋模式）=====
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth <= 768);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+
   // ===== 拖拽位置（標題欄左鍵）=====
   const handleDragStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     // 不在按鈕上才拖拽
@@ -425,6 +434,99 @@ export function FloatingChatCard() {
       >
         <Bot className="w-6 h-6" />
       </button>
+    );
+  }
+
+  // ===== 移動端全屏覆蓋模式（避免固定像素定位導致超出屏幕）=====
+  if (isMobile) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col bg-bg-panel">
+        {/* 標題欄 */}
+        <div className="flex items-center justify-between p-3 border-b border-border shrink-0">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowSidebar(!showSidebar)}
+              className="text-muted hover:text-slate-200 p-1"
+              title="對話歷史"
+            >
+              <MessageCircle className="w-5 h-5" />
+            </button>
+            <span className="text-sm font-semibold text-slate-200">AI 投研助手</span>
+          </div>
+          <button
+            onClick={() => setIsOpen(false)}
+            className="text-muted hover:text-slate-200 p-1"
+            title="關閉"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* 對話歷史側邊欄（移動端展開覆蓋） */}
+        {showSidebar && (
+          <div className="absolute inset-0 z-10 bg-bg-panel flex flex-col">
+            <div className="flex items-center justify-between p-3 border-b border-border shrink-0">
+              <span className="text-sm font-semibold text-slate-200">對話歷史</span>
+              <button
+                onClick={() => setShowSidebar(false)}
+                className="text-muted hover:text-slate-200 p-1"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-2 shrink-0">
+              <button
+                onClick={newConversation}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                新建對話
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto">
+              <ConversationList
+                conversations={conversations}
+                currentId={currentConversation?.id}
+                onSelect={switchConversation}
+                onDelete={deleteConversation}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 消息列表 */}
+        <div className="flex-1 overflow-auto p-3 space-y-3 min-h-0">
+          {messages.length === 0 && !streamingContent && !isStreaming && (
+            <div className="flex flex-col items-center justify-center h-full text-center text-muted">
+              <Bot className="w-12 h-12 mb-3 opacity-50" />
+              <p className="text-sm">我是你的量化投研助手</p>
+              <p className="text-xs mt-1">可以問我市場行情、財經新聞、策略分析等</p>
+              <p className="text-xs mt-2 text-accent/70">所有回答基於真實數據，引用可追溯</p>
+            </div>
+          )}
+          <ChatMessageList
+            messages={messages}
+            streamingContent={streamingContent}
+            activeToolCalls={activeToolCalls}
+            thinkingMessage={thinkingMessage}
+          />
+          {error && (
+            <div className="text-xs text-red-400 bg-red-400/10 rounded p-2">
+              {error}
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* 輸入區 */}
+        <ChatInput
+          onSend={sendMessage}
+          disabled={isStreaming}
+          providers={providers}
+          selectedProvider={selectedProvider}
+          onProviderChange={setSelectedProvider}
+        />
+      </div>
     );
   }
 

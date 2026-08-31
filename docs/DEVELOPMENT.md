@@ -223,18 +223,12 @@ def _weighted_average_score(scores, weights):
 | `test` | 測試 |
 | `chore` | 雜項 |
 
-### 6.3 Pre-commit 鉤子
-
-`.pre-commit-config.yaml` 配置 pre-commit 鉤子；`.github/gitleaks.toml` 掃密鑰。
-
-### 6.4 勿提交
+### 6.3 勿提交
 
 - `.env`（含密碼）
-- `java/preference.json`（運行時產物）
 - `agent/data/`（運行時記憶：Milvus + checkpoint + 錯誤庫）
 - `agent/.env`
-
-CI 見 `.github/workflows/`。
+- `dist/`（Docker 構建產物）
 
 ---
 

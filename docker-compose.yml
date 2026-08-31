@@ -1,124 +1,117 @@
-# 量化交易工作台 — Docker Compose 全棧部署
-# 使用: docker-compose up -d
+# 量化交易工作台 — Docker Compose 部署
+# 使用: docker compose up -d
 #
 # 服務:
-#   mysql    — 數據庫 (3306)
 #   java     — 後端 API (8090)
 #   next     — 前端 (3010)
-#   agent    — AI 優化服務 (8100)
+#   agent    — AI 優化服務 + a-share-mcp 子服務 (8100)
 #
-# 啟動順序由 depends_on 控制，但首次啟動需等待 MySQL 初始化完成。
+# ⚠️ MySQL 使用宿主機已有的 MySQL（非容器），Java 通過 host.docker.internal 連接。
+#    宿主機 MySQL 需允許 Docker 網段（172.16.0.0/12）連接。
+#    監控服務（prometheus/grafana）已移除以節省 4GB 服務器內存。
 
 version: "3.9"
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: tw-mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
-      MYSQL_DATABASE: ${DB_NAME:-a_stock_baostock}
-      MYSQL_CHARACTER_SET_SERVER: utf8mb4
-      MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    networks:
-      - tw-network
-
+  # ===== 後端 API =====
   java:
-    build: ./java
+    image: tw-java:latest
     container_name: tw-java
-    depends_on:
-      mysql:
-        condition: service_healthy
     environment:
-      DB_HOST: mysql
+      # 連接宿主機 MySQL（非容器 MySQL）
+      DB_HOST: host.docker.internal
       DB_PORT: 3306
       DB_USER: root
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
       DB_NAME: ${DB_NAME:-a_stock_baostock}
       SERVER_PORT: 8090
       SERVER_CONTEXT_PATH: /TradingWorkstation
+      # API 安全（生產環境建議啟用）
+      SECURITY_ENABLED: ${SECURITY_ENABLED:-false}
+      API_KEY: ${API_KEY:-}
+      # 同步配置（Docker 內不自動同步，由宿主機 cron 執行）
+      SYNC_DAILY_ENABLED: "false"
+      SYNC_CATCHUP_ON_STARTUP: "false"
+      SYNC_QUARTERLY_REFRESH: "false"
+      # CORS
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3010}
+      # JVM 內存（4GB 服務器適配）
+      JAVA_OPTS: "-Xmx512m -Xms256m -XX:+UseG1GC"
     ports:
       - "8090:8090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - tw-network
     restart: unless-stopped
 
+  # ===== 前端 =====
   next:
-    build: ./next
+    image: tw-next:latest
     container_name: tw-next
     depends_on:
       - java
     environment:
+      # 後端地址（容器間通信，不帶 basePath 前綴，rewrite 自動補）
       BACKEND_HOST: http://java:8090
+      # Agent 地址（容器間通信）
+      AGENT_HOST: http://agent:8100
+      NODE_ENV: production
     ports:
       - "3010:3010"
     networks:
       - tw-network
     restart: unless-stopped
 
+  # ===== Agent 服務（含 a-share-mcp 子服務）=====
   agent:
-    build: ./agent
+    image: tw-agent:latest
     container_name: tw-agent
     depends_on:
       - java
     environment:
+      # 後端 API（帶 /TradingWorkstation 前綴）
       BACKEND_API_URL: http://java:8090/TradingWorkstation
+      BACKEND_API_KEY: ${API_KEY:-}
+      # Agent 自身 API Key
+      API_KEY: ${API_KEY:-}
+      # LLM API Keys（從 .env 注入）
       DEVIN_API_KEY: ${DEVIN_API_KEY:-}
       QODER_PERSONAL_ACCESS_TOKEN: ${QODER_PERSONAL_ACCESS_TOKEN:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      GLM_API_KEY: ${GLM_API_KEY:-}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      # 聊天工具 API Keys
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      BAIDU_QIANFAN_API_KEY: ${BAIDU_QIANFAN_API_KEY:-}
+      # MCP 服務
+      FTSHARE_MCP_URL: ${FTSHARE_MCP_URL:-https://market.ft.tech/gateway/mcp}
+      # a-share-mcp 容器內路徑（Dockerfile 中已設置，此處顯式聲明）
+      ASHARE_MCP_DIR: /opt/a-share-mcp
+      A_SHARE_MCP_PORT: "8101"
+      # 新聞同步
+      NEWS_SYNC_ENABLED: ${NEWS_SYNC_ENABLED:-true}
+      NEWS_SYNC_INTERVAL: ${NEWS_SYNC_INTERVAL:-360}
+      NEWS_SYNC_CATCHUP_DAYS: ${NEWS_SYNC_CATCHUP_DAYS:-7}
+      NEWS_SYNC_CHANNELS: ${NEWS_SYNC_CHANNELS:-all}
+      NEWS_SYNC_CATCHUP_ON_STARTUP: ${NEWS_SYNC_CATCHUP_ON_STARTUP:-true}
+      # 環境標識
+      ENVIRONMENT: production
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "8100:8100"
     volumes:
+      # Agent 數據（Milvus Lite 向量庫 + 狀態文件）
       - agent_data:/app/data
+      # Agent 日誌
       - agent_logs:/app/logs
     networks:
       - tw-network
     restart: unless-stopped
 
-  # ===== 監控 =====
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: tw-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./docs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    networks:
-      - tw-network
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: tw-grafana
-    depends_on:
-      - prometheus
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set in .env}
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./docs/grafana-agent-dashboard.json:/etc/grafana/provisioning/dashboards/tw-agent.json:ro
-    networks:
-      - tw-network
-    restart: unless-stopped
-
 volumes:
-  mysql_data:
   agent_data:
   agent_logs:
-  prometheus_data:
-  grafana_data:
 
 networks:
   tw-network:

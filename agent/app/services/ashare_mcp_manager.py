@@ -19,9 +19,12 @@ from pathlib import Path
 
 logger = logging.getLogger("agent.services.ashare_mcp")
 
-# a-share-mcp 項目目錄（相對於 agent 目錄的上兩級）
+# a-share-mcp 項目目錄：
+# - 本地開發：相對於 agent 目錄的上兩級（項目根目錄 / a-share-mcp）
+# - Docker 部署：通過 ASHARE_MCP_DIR 環境變量覆蓋（如 /opt/a-share-mcp）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_ASHARE_MCP_DIR = _PROJECT_ROOT / "a-share-mcp"
+_ASHARE_MCP_ENV = os.environ.get("ASHARE_MCP_DIR", "").strip()
+_ASHARE_MCP_DIR = Path(_ASHARE_MCP_ENV) if _ASHARE_MCP_ENV else _PROJECT_ROOT / "a-share-mcp"
 _DEFAULT_PORT = 8101
 # baostock 首次連接較慢，需要較長的就緒等待時間
 _READY_TIMEOUT = 30.0

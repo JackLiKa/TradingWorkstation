@@ -951,3 +951,169 @@ async def list_quality_rules():
     ]
     return {"status": "SUCCESS", "data": rules}
 
+
+# ===== 日誌查看（供前端日誌頁面聚合）=====
+
+
+@router.get("/logs/recent")
+async def get_recent_logs(limit: int = 100):
+    """獲取最近的 Agent 服務日誌（從 agent.log 文件讀取最後 N 行）。
+
+    Args:
+        limit: 返回的最大行數（默認 100）
+
+    Returns:
+        dict: 日誌條目列表，每條包含 timestamp/level/logger/message/raw
+    """
+    import re
+    from pathlib import Path
+
+    log_file = Path(__file__).resolve().parent.parent.parent / "logs" / "agent.log"
+    if not log_file.exists():
+        return {"entries": [], "file": str(log_file), "exists": False}
+
+    # 讀取最後 N 行
+    lines = _tail_file(log_file, limit)
+
+    # 解析日誌行：格式 "2026-08-29 02:30:16 [INFO] agent.api: message"
+    pattern = re.compile(
+        r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] ([^:]+): (.*)$"
+    )
+
+    entries = []
+    for i, line in enumerate(lines):
+        line = line.rstrip("\n\r")
+        m = pattern.match(line)
+        if m:
+            entries.append({
+                "id": f"agent:{i}",
+                "source": "agent",
+                "timestamp": m.group(1),
+                "level": m.group(2),
+                "logger": m.group(3).strip(),
+                "message": m.group(4),
+                "raw": line,
+            })
+        else:
+            # 無法解析的行（可能是多行堆棧跟蹤的續行）
+            if entries:
+                entries[-1]["raw"] += "\n" + line
+            else:
+                entries.append({
+                    "id": f"agent:{i}",
+                    "source": "agent",
+                    "timestamp": "",
+                    "level": "INFO",
+                    "logger": "",
+                    "message": line,
+                    "raw": line,
+                })
+
+    # 倒序（最新的在前）
+    entries.reverse()
+    return {"entries": entries, "file": str(log_file), "exists": True}
+
+
+@router.get("/logs/stream")
+async def stream_logs():
+    """SSE 實時推送 Agent 日誌新行。
+
+    每 2 秒檢查一次 agent.log 文件是否有新增行，有則推送。
+    """
+    import asyncio
+    import json
+    import re
+    from pathlib import Path
+
+    from fastapi.responses import StreamingResponse
+
+    log_file = Path(__file__).resolve().parent.parent.parent / "logs" / "agent.log"
+    pattern = re.compile(
+        r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] ([^:]+): (.*)$"
+    )
+
+    async def event_generator():
+        """SSE 事件生成器 — 輪詢日誌文件新增行。"""
+        last_pos = 0
+        if log_file.exists():
+            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(0, 2)  # 跳到文件末尾
+                last_pos = f.tell()
+
+        while True:
+            try:
+                if not log_file.exists():
+                    await asyncio.sleep(2)
+                    continue
+
+                with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(last_pos)
+                    new_lines = f.readlines()
+                    last_pos = f.tell()
+
+                for line in new_lines:
+                    line = line.rstrip("\n\r")
+                    if not line:
+                        continue
+                    m = pattern.match(line)
+                    if m:
+                        entry = {
+                            "id": f"agent:{last_pos}",
+                            "source": "agent",
+                            "timestamp": m.group(1),
+                            "level": m.group(2),
+                            "logger": m.group(3).strip(),
+                            "message": m.group(4),
+                            "raw": line,
+                        }
+                    else:
+                        entry = {
+                            "id": f"agent:{last_pos}",
+                            "source": "agent",
+                            "timestamp": "",
+                            "level": "INFO",
+                            "logger": "",
+                            "message": line,
+                            "raw": line,
+                        }
+                    yield f"data: {json.dumps(entry, ensure_ascii=False)}\n\n"
+
+                await asyncio.sleep(2)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _tail_file(path: "Path", n: int) -> list[str]:
+    """高效讀取文件最後 N 行。"""
+    try:
+        with open(path, "rb") as f:
+            # 從文件末尾向前讀
+            f.seek(0, 2)
+            file_size = f.tell()
+            block_size = 1024
+            blocks = []
+            pos = file_size
+            while pos > 0 and sum(len(b) for b in blocks) < n * 200:
+                read_size = min(block_size, pos)
+                pos -= read_size
+                f.seek(pos)
+                blocks.insert(0, f.read(read_size))
+            all_text = b"".join(blocks).decode("utf-8", errors="replace")
+            lines = all_text.splitlines()
+            return lines[-n:] if len(lines) > n else lines
+    except Exception:
+        return []
+

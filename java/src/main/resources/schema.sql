@@ -154,3 +154,38 @@ CREATE TABLE IF NOT EXISTS daily_market_digest (
     UNIQUE KEY uk_daily_digest_date (trade_date),
     INDEX idx_daily_digest_generated (generated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 盤前預計算統計表：每交易日 18:00 定時任務預計算波動排行等指標。
+-- 前台直接讀取預計算結果，毫秒級返回。
+CREATE TABLE IF NOT EXISTS market_premarket_stats (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    trade_date      DATE         NOT NULL,
+    stat_type       VARCHAR(32)  NOT NULL,
+    stat_key        VARCHAR(64)  NOT NULL,
+    stat_value      TEXT,
+    `rank`          INT,
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_date_type_key (trade_date, stat_type, stat_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- HTTP 請求日誌表：記錄每個 API 請求的方法/路徑/狀態碼/IP/耗時。
+-- 用於日誌頁面的「系統請求」分類，30 天滑動窗口自動清理。
+CREATE TABLE IF NOT EXISTS request_log (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    method          VARCHAR(10)  NOT NULL,
+    request_path    VARCHAR(500) NOT NULL,
+    query_string    VARCHAR(1000),
+    status_code     INT,
+    client_ip       VARCHAR(64),
+    duration_ms     INT,
+    content_length  BIGINT,
+    user_agent      VARCHAR(500),
+    error           VARCHAR(1000),
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    INDEX idx_request_log_created (created_at),
+    INDEX idx_request_log_path (request_path),
+    INDEX idx_request_log_ip (client_ip)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

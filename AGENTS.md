@@ -527,6 +527,103 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8100  # 运行
 python ingestion/baostock_ingest.py --codes sh.600000 --start 2026-08-01 --end 2026-08-14
 ```
 
+## Docker 部署（本地构建 → 云服务器运行）
+
+### 架构
+
+```
+本地开发机                         云服务器
+┌─────────────────┐              ┌──────────────────────────┐
+│  ./build.sh     │   scp tar    │  deploy-docker.sh        │
+│  构建 3 镜像    │ ──────────→  │  docker load + compose   │
+│  导出 tar.gz    │              │  mysql/java/next/agent   │
+└─────────────────┘              └──────────────────────────┘
+```
+
+- **本地构建**：`./build.sh`（需要 Docker，构建 Java/Next/Agent 三个镜像，导出 tar.gz）
+- **服务器部署**：`sudo bash deploy-docker.sh <tar.gz> [version]`（加载镜像 + docker-compose up）
+- **数据采集**：宿主机 cron 定时运行 `ingestion/baostock_ingest.py`，直连 MySQL 容器 3306 端口
+- **a-share-mcp**：打包进 Agent 镜像（`/opt/a-share-mcp`），Agent 启动时自动拉起子进程，与本地开发行为一致
+
+### 文件清单
+
+| 文件 | 用途 |
+|------|------|
+| `build.sh` | 本地一键构建所有 Docker 镜像 + 导出 tar.gz |
+| `deploy-docker.sh` | 云服务器一键部署（加载镜像 + 启动服务 + 健康检查） |
+| `docker-compose.yml` | 全栈编排（mysql/java/next/agent + prometheus/grafana） |
+| `docker/init.sql` | MySQL 容器首次启动建表（行情表 + ai_call_log + snapshot） |
+| `java/Dockerfile` | Java 后端多阶段构建（Maven → JRE Alpine） |
+| `next/Dockerfile` | Next.js 多阶段构建（npm → standalone） |
+| `agent/Dockerfile` | Agent + a-share-mcp + uv 自包含镜像 |
+
+### 完整部署流程
+
+```bash
+# ===== 1. 本地构建镜像 =====
+cd "A:\project\Trading Workstation"
+bash build.sh
+# 输出: dist/tw-images-<version>.tar.gz
+
+# ===== 2. 传输到服务器 =====
+scp dist/tw-images-*.tar.gz ubuntu@<server-ip>:/tmp/
+
+# ===== 3. 服务器部署 =====
+ssh ubuntu@<server-ip>
+sudo bash deploy-docker.sh /tmp/tw-images-*.tar.gz
+# 脚本自动: 克隆仓库 → 生成 .env → 加载镜像 → 启动服务 → 健康检查
+
+# ===== 4. 配置数据采集 cron（宿主机）=====
+# 编辑 crontab
+crontab -e
+# 添加（每交易日 16:30 增量更新）
+30 16 * * 1-5 cd /opt/Trading-Workstation && python ingestion/baostock_ingest.py --mode incremental --adjustflags 1,2,3 --index >> /var/log/tw-sync.log 2>&1
+
+# ===== 5. 更新部署（后续迭代）=====
+# 本地重新构建
+bash build.sh
+# 传输 + 服务器更新
+scp dist/tw-images-*.tar.gz ubuntu@<server-ip>:/tmp/
+ssh ubuntu@<server-ip> "sudo bash /opt/Trading-Workstation/deploy-docker.sh /tmp/tw-images-*.tar.gz"
+```
+
+### Docker 环境变量
+
+`.env` 文件中 Docker 部署专用变量（`docker-compose.yml` 读取）：
+
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| `DB_PASSWORD` | ✅ | MySQL root 密码 |
+| `API_KEY` | 推荐 | API 认证密钥（前后端 + Agent 共用） |
+| `GRAFANA_PASSWORD` | ✅ | Grafana 管理员密码 |
+| `DEVIN_API_KEY` | 至少一个 | LLM API Key（Agent 优化循环需要） |
+| `DEEPSEEK_API_KEY` | | DeepSeek API Key |
+| `GLM_API_KEY` | | 智谱 GLM API Key |
+| `QWEN_API_KEY` | | 通义千问 API Key |
+| `EXA_API_KEY` | 可选 | Exa 搜索 API Key（聊天工具） |
+| `NEWS_SYNC_ENABLED` | | 新闻自动同步开关（默认 true） |
+
+### 常用运维命令
+
+```bash
+# 查看服务状态
+docker compose ps
+
+# 查看日志
+docker compose logs -f java
+docker compose logs -f agent
+docker compose logs -f next
+
+# 重启单个服务
+docker compose restart agent
+
+# 停止全部
+docker compose down
+
+# 停止并清除数据卷（⚠️ 会删除所有数据）
+docker compose down -v
+```
+
 ## 关键约定
 
 - **统一响应**：所有 API 返回 `ApiResponse<T>` = `{success, code, message, data}`
