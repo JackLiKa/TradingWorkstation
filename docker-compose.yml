@@ -6,20 +6,46 @@
 #   next     — 前端 (3010)
 #   agent    — AI 優化服務 + a-share-mcp 子服務 (8100)
 #
-# ⚠️ MySQL 使用宿主機已有的 MySQL（非容器），Java 通過 host.docker.internal 連接。
-#    宿主機 MySQL 需允許 Docker 網段（172.16.0.0/12）連接。
-#    監控服務（prometheus/grafana）已移除以節省 4GB 服務器內存。
+# MySQL 使用 Docker 容器，數據持久化到 mysql_data 卷。
+# 監控服務（prometheus/grafana）已移除以節省 4GB 服務器內存。
 
 version: "3.9"
 
 services:
+  # ===== MySQL 數據庫 =====
+  mysql:
+    image: mysql:8.0
+    mem_limit: 512m
+    container_name: tw-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      MYSQL_DATABASE: ${DB_NAME:-a_stock_baostock}
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --innodb-buffer-pool-size=256M
+    networks:
+      - tw-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   # ===== 後端 API =====
   java:
-    image: tw-java:latest
+    image: ccr.ccs.tencentyun.com/jacklika/tw-java:latest
+    mem_limit: 448m
     container_name: tw-java
     environment:
-      # 連接宿主機 MySQL（非容器 MySQL）
-      DB_HOST: host.docker.internal
+      # 連接 Docker 容器 MySQL
+      DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: root
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
@@ -36,23 +62,24 @@ services:
       # CORS
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3010}
       # JVM 內存（4GB 服務器適配）
-      JAVA_OPTS: "-Xmx512m -Xms256m -XX:+UseG1GC"
+      JAVA_OPTS: "-Xmx384m -Xms128m -XX:+UseG1GC"
     ports:
       - "8090:8090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      mysql:
+        condition: service_healthy
     networks:
       - tw-network
     restart: unless-stopped
 
   # ===== 前端 =====
   next:
-    image: tw-next:latest
+    image: ccr.ccs.tencentyun.com/jacklika/tw-next:latest
+    mem_limit: 128m
     container_name: tw-next
     depends_on:
       - java
     environment:
-      # 後端地址（容器間通信，不帶 basePath 前綴，rewrite 自動補）
       BACKEND_HOST: http://java:8090
       # Agent 地址（容器間通信）
       AGENT_HOST: http://agent:8100
@@ -65,10 +92,14 @@ services:
 
   # ===== Agent 服務（含 a-share-mcp 子服務）=====
   agent:
-    image: tw-agent:latest
+    image: ccr.ccs.tencentyun.com/jacklika/tw-agent:latest
+    mem_limit: 256m
     container_name: tw-agent
     depends_on:
-      - java
+      java:
+        condition: service_started
+      mysql:
+        condition: service_healthy
     environment:
       # 後端 API（帶 /TradingWorkstation 前綴）
       BACKEND_API_URL: http://java:8090/TradingWorkstation
@@ -112,6 +143,7 @@ services:
 volumes:
   agent_data:
   agent_logs:
+  mysql_data:
 
 networks:
   tw-network:
