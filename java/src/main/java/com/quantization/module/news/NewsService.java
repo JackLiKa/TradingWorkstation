@@ -5,6 +5,7 @@ import com.quantization.module.news.dto.FinancialNewsDto;
 import com.quantization.module.news.dto.NewsBatchUpsertRequest;
 import com.quantization.module.news.dto.NewsSyncResultDto;
 import lombok.extern.slf4j.Slf4j;
+import jakarta.persistence.EntityManager;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -31,7 +32,10 @@ public class NewsService {
 
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    private static final int FLUSH_BATCH_SIZE = 50;
+
     private final FinancialNewsRepository repository;
+    private final EntityManager entityManager;
 
     /**
      * 计算标题+摘要的 SHA-256 哈希值，用于内容级去重。
@@ -50,8 +54,9 @@ public class NewsService {
         }
     }
 
-    public NewsService(FinancialNewsRepository repository) {
+    public NewsService(FinancialNewsRepository repository, EntityManager entityManager) {
         this.repository = repository;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -177,6 +182,7 @@ public class NewsService {
         int stored = 0;
         int duplicated = 0;
         int failed = 0;
+        int processed = 0;
         for (NewsBatchUpsertRequest.NewsItemInput item : items) {
             try {
                 String uri = item.uri();
@@ -226,6 +232,12 @@ public class NewsService {
             } catch (Exception e) {
                 log.warn("[news] 新聞入庫失敗: {}", e.getMessage());
                 failed++;
+            }
+            // 定期刷新並清除 Hibernate Session 緩存，防止內存累積
+            processed++;
+            if (processed % FLUSH_BATCH_SIZE == 0) {
+                repository.flush();
+                entityManager.clear();
             }
         }
         log.info("[news] 批量 upsert: {} 條請求, {} 新存入, {} 重複, {} 失敗",

@@ -20,8 +20,8 @@ from app.core.metrics import record_backend_call
 logger = logging.getLogger("agent.backend")
 
 # 重試配置
-MAX_RETRIES = 3
-RETRY_BASE_DELAY = 1.0  # 基礎延遲（秒），指數退避: 1s, 2s, 4s
+MAX_RETRIES = 1
+RETRY_BASE_DELAY = 2.0  # 基礎延遲（秒），只重試 1 次
 
 
 class BackendClient:
@@ -37,8 +37,8 @@ class BackendClient:
         self._base_url = settings.backend_api_url
         # 共享連接池（限制 20 並發連接，復用 TCP 連接）
         self._client = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-            timeout=httpx.Timeout(600.0, connect=10.0),
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=3),
+            timeout=httpx.Timeout(30.0, connect=10.0),
         )
 
     async def _request_with_retry(
@@ -539,6 +539,24 @@ class BackendClient:
         except Exception as e:
             logger.warning(f"獲取行業列表失敗: {e}")
             return []
+
+    async def get_industry_stocks(self, params: dict) -> dict[str, Any]:
+        """輕量查詢：根據行業分類代碼或關鍵詞查詢股票 code+name。
+        
+        投影查詢，只返回 code 和 name，不加載完整實體。
+        params: {"industryCodes": "C38,C37"} 或 {"keyword": "電氣機械"}
+        """
+        try:
+            data = await self._request_with_retry(
+                "GET",
+                f"{self._base_url}/api/dashboard/industry/stocks",
+                params=params,
+                timeout=15,
+            )
+            return data
+        except Exception as e:
+            logger.warning(f"查詢行業股票失敗: {e}")
+            return {"success": False, "data": [], "message": str(e)}
 
     async def health(self) -> bool:
         """檢查後端是否可用（帶超時，不重試）。"""

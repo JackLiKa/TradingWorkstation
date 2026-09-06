@@ -352,6 +352,8 @@ export function FloatingChatCard() {
           case 'tool_start':
             setThinkingMessage('');
             setActiveToolCalls(prev => [...prev, { tool: event.tool, status: 'running' }]);
+            fullContent += `\n[[TOOL:${event.tool}:running]]\n`;
+            setStreamingContent(fullContent);
             break;
           case 'tool_end':
             setActiveToolCalls(prev =>
@@ -361,11 +363,27 @@ export function FloatingChatCard() {
                   : tc
               )
             );
+            fullContent += `\n[[TOOL:${event.tool}:${event.success ? 'done' : 'error'}]]\n`;
+            setStreamingContent(fullContent);
             break;
           case 'content':
             setThinkingMessage('');
             fullContent += event.text;
             setStreamingContent(fullContent);
+            break;
+          case 'progress':
+            setThinkingMessage(event.text);
+            break;
+          case 'title_update':
+            try {
+              if (conv.id) {
+                await chatApi.updateConversation(conv.id, event.title);
+                setCurrentConversation(prev => prev ? { ...prev, title: event.title } : prev);
+                await loadConversations();
+              }
+            } catch (e) {
+              console.error('更新對話標題失敗:', e);
+            }
             break;
           case 'done':
             provider = event.provider;
@@ -383,8 +401,9 @@ export function FloatingChatCard() {
       if (fullContent) {
         try {
           const citationsJson = JSON.stringify(allCitations);
+          const cleanContent = fullContent.replace(/\n\[\[TOOL:.+:(running|done|error)\]\]\n/g, '');
           const assistantMsg = await chatApi.saveAssistantReply(conv.id, {
-            content: fullContent,
+            content: cleanContent,
             provider,
             modelName: model,
             citationsJson,

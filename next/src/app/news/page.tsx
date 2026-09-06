@@ -43,6 +43,27 @@ const CHANNELS = [
 
 const PAGE_SIZE = 20;
 
+/** 將 UTC 時間字符串轉換為北京時間（UTC+8）顯示格式 YYYY-MM-DD HH:MM */
+function utcToBeijing(utcStr: string): string {
+  if (!utcStr) return '';
+  // 兼容 "YYYY-MM-DD HH:MM:SS" 和 "YYYY-MM-DDTHH:MM:SS" 格式
+  const normalized = utcStr.replace('T', ' ');
+  const parts = normalized.split(' ');
+  if (parts.length < 2) return utcStr.slice(0, 10);
+  const [datePart, timePart] = parts;
+  const [y, m, d] = datePart.split('-').map(Number);
+  const [h, min] = timePart.split(':').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d, h, min || 0));
+  // 加 8 小時得到北京時間
+  date.setUTCHours(date.getUTCHours() + 8);
+  const by = date.getUTCFullYear();
+  const bm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const bd = String(date.getUTCDate()).padStart(2, '0');
+  const bh = String(date.getUTCHours()).padStart(2, '0');
+  const bmin = String(date.getUTCMinutes()).padStart(2, '0');
+  return `${by}-${bm}-${bd} ${bh}:${bmin}`;
+}
+
 export default function NewsPage() {
   const [activeTab, setActiveTab] = useState<TabKey>('database');
 
@@ -166,8 +187,13 @@ export default function NewsPage() {
     }
   };
 
+  // 數據庫新聞總條數
+  const { data: dbCount } = useSWR('news-db-count', () => newsDbApi.count(), {
+    revalidateOnFocus: false,
+  });
+
   // 分頁信息
-  const totalElements = dbNews.length;
+  const totalElements = dbCount ?? 0;
 
   return (
     <div className="space-y-6">
@@ -454,7 +480,7 @@ function DbNewsCard({ news }: { news: DbNewsItem }) {
           <div className="flex items-center gap-2 mt-1.5 text-xs text-muted">
             <span>{news.source}</span>
             {news.publishedAt && <span>·</span>}
-            {news.publishedAt && <span>{news.publishedAt.slice(0, 16).replace('T', ' ')}</span>}
+            {news.publishedAt && <span>{utcToBeijing(news.publishedAt)}</span>}
             {news.channel && <span>·</span>}
             {news.channel && <Badge variant="info">{news.channel}</Badge>}
           </div>
@@ -485,7 +511,7 @@ function LiveNewsCard({ news, showSimilarity = false }: { news: WallstreetcnNews
           <div className="flex items-center gap-2 mt-1.5 text-xs text-muted">
             <span>{news.source}</span>
             {news.date && <span>·</span>}
-            {news.date && <span>{news.date.slice(0, 10)}</span>}
+            {news.date && <span>{utcToBeijing(news.date).slice(0, 10)}</span>}
             {news.channel && <span>·</span>}
             {news.channel && <Badge variant="info">{news.channel}</Badge>}
             {showSimilarity && news.similarity !== undefined && (

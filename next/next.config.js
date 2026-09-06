@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // 禁用響應壓縮 — SSE 流式響應被 gzip 壓縮後瀏覽器無法逐塊讀取
+  compress: false,
   // 全局路由前綴：所有頁面和 API 代理都帶 /TradingWorkstation 前綴
   // 頁面：/TradingWorkstation/agent、/TradingWorkstation/screener 等
   // API 代理：/TradingWorkstation/api/* → 後端 /TradingWorkstation/api/*

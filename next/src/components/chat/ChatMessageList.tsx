@@ -249,6 +249,36 @@ function renderMarkdown(text: string): React.ReactNode {
       continue;
     }
 
+    // 工具调用内联标记 [[TOOL:工具名:状态]]
+    const toolMatch = line.match(/^\[\[TOOL:(.+):(running|done|error)\]\]$/);
+    if (toolMatch) {
+      const [, toolName, status] = toolMatch;
+      const displayName = TOOL_NAME_MAP[toolName] || toolName;
+      elements.push(
+        <div
+          key={`tool-${i}`}
+          className={cn(
+            'flex items-center gap-1.5 text-xs px-2 py-1 rounded my-1 transition-colors',
+            status === 'running' && 'bg-blue-500/10 text-blue-400',
+            status === 'done' && 'bg-green-500/10 text-green-400',
+            status === 'error' && 'bg-red-500/10 text-red-400'
+          )}
+        >
+          <Wrench className="w-3 h-3 flex-shrink-0" />
+          <span className="truncate">{displayName}</span>
+          {status === 'running' && (
+            <span className="flex items-center gap-1 ml-auto text-blue-400/70">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              <span className="text-[10px]">查詢中</span>
+            </span>
+          )}
+          {status === 'done' && <CheckCircle2 className="w-3 h-3 ml-auto flex-shrink-0" />}
+          {status === 'error' && <XCircle className="w-3 h-3 ml-auto flex-shrink-0" />}
+        </div>
+      );
+      continue;
+    }
+
     // 普通段落
     elements.push(
       <p key={`p-${i}`} className="text-xs text-slate-300 leading-relaxed">
@@ -345,10 +375,6 @@ export function ChatMessageList({ messages, streamingContent, activeToolCalls, t
             <Bot className="w-4 h-4 text-accent" />
           </div>
           <div className="flex-1 max-w-[85%] bg-bg-hover rounded-lg p-2">
-            {thinkingMessage && !streamingContent && (
-              <ThinkingIndicator message={thinkingMessage} />
-            )}
-            <ToolCallStatus toolCalls={activeToolCalls} />
             {streamingContent && (
               <div className="prose prose-sm prose-invert max-w-none">
                 {renderMarkdown(streamingContent)}
@@ -359,6 +385,10 @@ export function ChatMessageList({ messages, streamingContent, activeToolCalls, t
                 />
               </div>
             )}
+            {thinkingMessage && (
+              <ThinkingIndicator message={thinkingMessage} />
+            )}
+            <ToolCallStatus toolCalls={activeToolCalls} />
           </div>
         </div>
       )}

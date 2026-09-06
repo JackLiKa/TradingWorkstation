@@ -10,7 +10,8 @@
  * - 消息數（如有）
  */
 
-import { Trash2, MessageSquare, Clock, Cpu, MessageCircle } from 'lucide-react';
+import { useState } from 'react';
+import { Trash2, Check, X, MessageSquare, Clock, Cpu, MessageCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ChatConversation } from '@/lib/api/chat';
 
@@ -47,7 +48,6 @@ function formatRelativeTime(dateStr: string): string {
   if (diffHour < 24) return `${diffHour} 小時前`;
   if (diffDay === 1) return '昨天';
   if (diffDay < 7) return `${diffDay} 天前`;
-  // 超過 7 天顯示日期
   return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
 }
 
@@ -64,6 +64,8 @@ function formatFullTime(dateStr: string): string {
 }
 
 export function ConversationList({ conversations, currentId, onSelect, onDelete }: ConversationListProps) {
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
   if (conversations.length === 0) {
     return (
       <div className="text-center text-xs text-muted py-8">
@@ -74,9 +76,10 @@ export function ConversationList({ conversations, currentId, onSelect, onDelete 
 
   return (
     <div className="space-y-1 px-2 pb-2">
-      {conversations.map(conv => {
+      {conversations.map((conv) => {
         const providerLabel = conv.provider ? PROVIDER_LABELS[conv.provider] || conv.provider : null;
         const isActive = currentId === conv.id;
+        const isConfirming = confirmDeleteId === conv.id;
 
         return (
           <div
@@ -93,12 +96,10 @@ export function ConversationList({ conversations, currentId, onSelect, onDelete 
             <MessageSquare className={cn('w-3.5 h-3.5 flex-shrink-0 mt-0.5', isActive ? 'text-accent' : 'text-muted')} />
 
             <div className="flex-1 min-w-0">
-              {/* 標題 */}
               <div className="text-xs font-medium truncate text-slate-200">
                 {conv.title || '未命名對話'}
               </div>
 
-              {/* 時間 + 供應商 */}
               <div className="flex items-center gap-2 mt-1 text-[10px] text-muted">
                 <span className="flex items-center gap-0.5" title={formatFullTime(conv.updatedAt)}>
                   <Clock className="w-2.5 h-2.5" />
@@ -113,16 +114,43 @@ export function ConversationList({ conversations, currentId, onSelect, onDelete 
               </div>
             </div>
 
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(conv.id);
-              }}
-              className="opacity-0 group-hover:opacity-100 text-muted hover:text-red-400 transition-opacity flex-shrink-0 mt-0.5"
-              title="刪除對話"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
+            {isConfirming && (
+              <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(conv.id);
+                    setConfirmDeleteId(null);
+                  }}
+                  className="text-red-400 hover:text-red-500 transition-colors"
+                  title="確認刪除"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDeleteId(null);
+                  }}
+                  className="text-muted hover:text-slate-200 transition-colors"
+                  title="取消"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+            {!isConfirming && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDeleteId(conv.id);
+                }}
+                className="opacity-0 group-hover:opacity-100 text-muted hover:text-red-400 transition-opacity flex-shrink-0 mt-0.5"
+                title="刪除對話"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         );
       })}

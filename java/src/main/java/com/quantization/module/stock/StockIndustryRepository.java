@@ -1,5 +1,6 @@
 package com.quantization.module.stock;
 
+import com.quantization.module.stock.dto.StockCodeNameDto;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -38,4 +39,39 @@ public interface StockIndustryRepository extends JpaRepository<StockIndustryEnti
             AND s1.code IN :codes
             """)
     List<Object[]> findLatestIndustriesByCode(@Param("codes") List<String> codes);
+
+    /**
+     * 投影查詢：根據行業分類代碼查詢股票 code+name（輕量，不加載完整實體）。
+     * 行業代碼如 C38 嵌在 industry 字段中（如「C38電氣機械和器材製造業」），
+     * 使用 LIKE 匹配前綴。
+     */
+    @Query("""
+            SELECT DISTINCT new com.quantization.module.stock.dto.StockCodeNameDto(s.code, s.codeName)
+            FROM StockIndustryEntity s
+            WHERE (s.industry LIKE CONCAT(:prefix1, '%')
+            OR s.industry LIKE CONCAT(:prefix2, '%')
+            OR s.industry LIKE CONCAT(:prefix3, '%')
+            OR s.industry LIKE CONCAT(:prefix4, '%')
+            OR s.industry LIKE CONCAT(:prefix5, '%'))
+            AND s.codeName IS NOT NULL AND s.codeName <> ''
+            ORDER BY s.code
+            """)
+    List<StockCodeNameDto> findCodeNameByIndustryClassification(
+            @Param("prefix1") String prefix1,
+            @Param("prefix2") String prefix2,
+            @Param("prefix3") String prefix3,
+            @Param("prefix4") String prefix4,
+            @Param("prefix5") String prefix5);
+
+    /**
+     * 投影查詢：根據行業名稱關鍵詞查詢股票 code+name。
+     */
+    @Query("""
+            SELECT DISTINCT new com.quantization.module.stock.dto.StockCodeNameDto(s.code, s.codeName)
+            FROM StockIndustryEntity s
+            WHERE s.industry LIKE %:keyword%
+            AND s.codeName IS NOT NULL AND s.codeName <> ''
+            ORDER BY s.code
+            """)
+    List<StockCodeNameDto> findCodeNameByIndustryContaining(@Param("keyword") String keyword);
 }

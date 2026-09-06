@@ -8,12 +8,13 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       pool-name: QuantHikari
-      maximum-pool-size: 20
-      minimum-idle: 5
+      maximum-pool-size: 5
+      minimum-idle: 2
       connection-timeout: 10000
-      idle-timeout: 300000
-      max-lifetime: 1800000
+      idle-timeout: 30000
+      max-lifetime: 600000
       connection-test-query: SELECT 1
+      leak-detection-threshold: 30000
   jpa:
     open-in-view: false
     hibernate:
@@ -45,7 +46,7 @@ app:
   title: ${APP_TITLE:量化交易工作台}
   query-defaults:
     adjustflag: ${DEFAULT_ADJUSTFLAG:3}
-    limit: ${DEFAULT_LIMIT:200}
+    limit: ${DEFAULT_LIMIT:50}
     lookback-days: ${LOOKBACK_DAYS:180}
   cache:
     summary-ttl-seconds: ${CACHE_SUMMARY_TTL_SECONDS:60}
@@ -109,10 +110,27 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus,metrics
   endpoint:
     health:
       show-details: when_authorized
+  metrics:
+    tags:
+      application: ${spring.application.name:trading-workstation}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: false
+      percentiles:
+        http.server.requests: 0.5,0.95,0.99
+    enable:
+      all: true
+      http.server.requests: false
+      tomcat: false
+      jdbc: false
+      hikari: false
+      process: true
+      jvm: true
+      system: true
 
 # 抑制 Spring Data PageImpl 序列化警告（當前扁平 JSON 結構穩定且前端已適配）
 logging:

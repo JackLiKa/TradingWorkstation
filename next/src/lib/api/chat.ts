@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file AI 聊天 API 客戶�?�?對話 CRUD �?Java 後端，流式聊天走 Agent SSE�? */
 
 import { apiPost, apiFetch, apiDelete, apiPatch } from './client';
@@ -85,6 +85,16 @@ export interface SSEThinking {
   message: string;
 }
 
+export interface SSEProgress {
+  type: 'progress';
+  text: string;
+}
+
+export interface SSETitleUpdate {
+  type: 'title_update';
+  title: string;
+}
+
 export interface SSEDone {
   type: 'done';
   provider: string;
@@ -99,7 +109,7 @@ export interface SSEError {
   message: string;
 }
 
-export type SSEEvent = SSEToolStart | SSEToolEnd | SSEContent | SSEThinking | SSEDone | SSEError;
+export type SSEEvent = SSEToolStart | SSEToolEnd | SSEContent | SSEThinking | SSEProgress | SSETitleUpdate | SSEDone | SSEError;
 
 // ===== Java 後端 API（對�?CRUD�?====
 

@@ -7,6 +7,7 @@ import com.quantization.module.chat.dto.ChatSaveReplyRequest;
 import com.quantization.module.chat.dto.ChatSendRequest;
 import com.quantization.module.chat.dto.ChatUpdateRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -120,6 +121,7 @@ public class ChatService {
     }
 
     /** 删除对话（级联删除消息） */
+    @Transactional
     public void deleteConversation(Long id) {
         messageRepo.deleteByConversationId(id);
         conversationRepo.deleteById(id);

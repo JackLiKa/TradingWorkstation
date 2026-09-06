@@ -770,6 +770,9 @@ async def sync_news_to_vector_store(
 ) -> dict[str, int]:
     """抓取新聞並存入向量庫 + MySQL（用於定時同步任務）。
 
+    採用分頻道流式處理：每個頻道抓取後立即寫入向量庫+MySQL並釋放，
+    避免全量數據在內存中積壓。
+
     Args:
         channel: 頻道（a-stock/global/all）
         limit: 抓取條數上限（channel=all 時忽略，抓取全量）
@@ -777,40 +780,82 @@ async def sync_news_to_vector_store(
     Returns:
         dict: {"fetched": N, "stored": N, "duplicated": N, "failed": N}
     """
-    # 抓取新聞
+    total_fetched = 0
+    total_filtered = 0
+    total_stored = 0
+    total_duplicated = 0
+    total_failed = 0
+    total_mysql_stored = 0
+    total_mysql_duplicated = 0
+
     if channel == "all":
-        # 全量同步：所有頻道 + 頭條 + 熱文 + 快訊
-        raw_articles = await wallstreetcn_client.fetch_all_channels(limit_per_channel=50)
+        # 分頻道流式處理：逐頻道抓取→過濾→寫入→釋放
+        all_channels = ["a-stock", "global", "us-stock", "hk-stock", "forex", "commodity"]
+        for ch in all_channels:
+            try:
+                raw_articles = await wallstreetcn_client.fetch_latest_articles(ch, limit=50)
+                fetched_count = len(raw_articles)
+                articles = filter_news_items(raw_articles, source_type="article")
+                filtered_count = fetched_count - len(articles)
+
+                result = store_news_batch(articles)
+                mysql_result = await _upsert_to_mysql(articles)
+
+                total_fetched += fetched_count
+                total_filtered += filtered_count
+                total_stored += result["stored"]
+                total_duplicated += result["duplicated"]
+                total_failed += result["failed"]
+                total_mysql_stored += mysql_result.get("stored", 0)
+                total_mysql_duplicated += mysql_result.get("duplicated", 0)
+
+                # 釋放當前頻道數據
+                del raw_articles, articles
+            except Exception as e:
+                logger.warning(f"[news_store] 同步頻道 {ch} 失敗: {e}")
     elif channel == "a-stock":
         # A 股聚焦：A 股 + 全球 + 快訊 + 熱文
-        # truncate=False — 同步入庫時不截斷，保留全部去重後的新聞
         raw_articles = await wallstreetcn_client.fetch_a_stock_focused(limit=limit, truncate=False)
+        fetched_count = len(raw_articles)
+        articles = filter_mixed_news(raw_articles)
+        filtered_count = fetched_count - len(articles)
+
+        result = store_news_batch(articles)
+        mysql_result = await _upsert_to_mysql(articles)
+
+        total_fetched = fetched_count
+        total_filtered = filtered_count
+        total_stored = result["stored"]
+        total_duplicated = result["duplicated"]
+        total_failed = result["failed"]
+        total_mysql_stored = mysql_result.get("stored", 0)
+        total_mysql_duplicated = mysql_result.get("duplicated", 0)
     else:
         # 單頻道
         raw_articles = await wallstreetcn_client.fetch_latest_articles(channel, limit=limit)
-
-    # 財經關鍵詞過濾 — 丟棄噪音（7x24 快訊無關鍵詞的、廣告、非財經內容）
-    fetched_count = len(raw_articles)
-    if channel in ("all", "a-stock"):
-        articles = filter_mixed_news(raw_articles)
-    else:
+        fetched_count = len(raw_articles)
         articles = filter_news_items(raw_articles, source_type="article")
-    filtered_count = fetched_count - len(articles)
+        filtered_count = fetched_count - len(articles)
 
-    # 1. 存入向量庫
-    result = store_news_batch(articles)
+        result = store_news_batch(articles)
+        mysql_result = await _upsert_to_mysql(articles)
 
-    # 2. 同時寫入 MySQL（通過 Java 後端 API）
-    mysql_result = await _upsert_to_mysql(articles)
+        total_fetched = fetched_count
+        total_filtered = filtered_count
+        total_stored = result["stored"]
+        total_duplicated = result["duplicated"]
+        total_failed = result["failed"]
+        total_mysql_stored = mysql_result.get("stored", 0)
+        total_mysql_duplicated = mysql_result.get("duplicated", 0)
 
     return {
-        "fetched": fetched_count,
-        "filtered": filtered_count,
-        "stored": result["stored"],
-        "duplicated": result["duplicated"],
-        "failed": result["failed"],
-        "mysql_stored": mysql_result.get("stored", 0),
-        "mysql_duplicated": mysql_result.get("duplicated", 0),
+        "fetched": total_fetched,
+        "filtered": total_filtered,
+        "stored": total_stored,
+        "duplicated": total_duplicated,
+        "failed": total_failed,
+        "mysql_stored": total_mysql_stored,
+        "mysql_duplicated": total_mysql_duplicated,
     }
 
 
@@ -852,26 +897,60 @@ async def catchup_news(
     existing_set = set(_uri_cache)
     logger.info(f"[news_store] 已有 {len(existing_set)} 個 URI 用於去重")
 
-    all_articles: list[dict[str, Any]] = []
     seen_uris: set[str] = set()
+    total_fetched = 0
+    total_filtered = 0
+    total_stored = 0
+    total_duplicated = 0
+    total_failed = 0
+    total_mysql_stored = 0
+    total_mysql_duplicated = 0
 
+    # 分頻道流式處理：每個頻道抓取後立即過濾+寫入+釋放
     for channel in channels:
         try:
-            articles = await wallstreetcn_client.fetch_articles_catchup(
+            raw_articles = await wallstreetcn_client.fetch_articles_catchup(
                 channel=channel,
                 max_pages=max_pages_per_channel,
                 existing_uris=existing_set,
                 cutoff_date=cutoff_date,
             )
-            for a in articles:
+            # 頻道內去重
+            channel_articles = []
+            for a in raw_articles:
                 uri = a.get("uri", "")
                 if uri and uri not in seen_uris:
                     seen_uris.add(uri)
-                    all_articles.append(a)
+                    channel_articles.append(a)
+
+            if not channel_articles:
+                continue
+
+            # 過濾噪音
+            fetched_count = len(channel_articles)
+            articles = filter_news_items(channel_articles, source_type="article")
+            filtered_count = fetched_count - len(articles)
+
+            # 寫入向量庫
+            result = store_news_batch(articles)
+
+            # 寫入 MySQL
+            mysql_result = await _upsert_to_mysql(articles)
+
+            total_fetched += fetched_count
+            total_filtered += filtered_count
+            total_stored += result["stored"]
+            total_duplicated += result["duplicated"]
+            total_failed += result["failed"]
+            total_mysql_stored += mysql_result.get("stored", 0)
+            total_mysql_duplicated += mysql_result.get("duplicated", 0)
+
+            # 釋放當前頻道數據
+            del raw_articles, channel_articles, articles
         except Exception as e:
             logger.warning(f"[news_store] 補抓頻道 {channel} 失敗: {e}")
 
-    if not all_articles:
+    if total_fetched == 0:
         logger.info("[news_store] 補抓完成: 無新新聞")
         return {
             "channels": len(channels),
@@ -885,35 +964,22 @@ async def catchup_news(
             "duration_seconds": round(_time.time() - start, 1),
         }
 
-    # 財經關鍵詞過濾 — 補抓的新聞也需要過濾噪音
-    fetched_count = len(all_articles)
-    all_articles = filter_news_items(all_articles, source_type="article")
-    filtered_count = fetched_count - len(all_articles)
-    if filtered_count > 0:
-        logger.info(f"[news_store] 補抓新聞過濾: {fetched_count} → {len(all_articles)} 條（丟棄 {filtered_count} 條噪音）")
-
-    # 存入向量庫
-    result = store_news_batch(all_articles)
-
-    # 寫入 MySQL
-    mysql_result = await _upsert_to_mysql(all_articles)
-
     duration = round(_time.time() - start, 1)
     logger.info(
-        f"[news_store] 補抓完成: {len(all_articles)} 條新新聞, "
-        f"向量庫 stored={result['stored']}, MySQL stored={mysql_result.get('stored', 0)}, "
+        f"[news_store] 補抓完成: {total_fetched} 條新新聞, "
+        f"向量庫 stored={total_stored}, MySQL stored={total_mysql_stored}, "
         f"耗時 {duration}s"
     )
 
     return {
         "channels": len(channels),
-        "fetched": fetched_count,
-        "filtered": filtered_count,
-        "stored": result["stored"],
-        "duplicated": result["duplicated"],
-        "failed": result["failed"],
-        "mysql_stored": mysql_result.get("stored", 0),
-        "mysql_duplicated": mysql_result.get("duplicated", 0),
+        "fetched": total_fetched,
+        "filtered": total_filtered,
+        "stored": total_stored,
+        "duplicated": total_duplicated,
+        "failed": total_failed,
+        "mysql_stored": total_mysql_stored,
+        "mysql_duplicated": total_mysql_duplicated,
         "duration_seconds": duration,
     }
 
@@ -921,6 +987,7 @@ async def catchup_news(
 async def _upsert_to_mysql(articles: list[dict[str, Any]]) -> dict[str, int]:
     """將新聞批量寫入 MySQL（通過 Java 後端 /api/news/batch 端點）。
 
+    採用分片發送：每 50 條一批，發送後立即釋放，避免內存積壓。
     失敗時靜默處理，不影響向量庫同步結果。
     """
     if not articles:
@@ -933,42 +1000,61 @@ async def _upsert_to_mysql(articles: list[dict[str, Any]]) -> dict[str, int]:
         backend_url = os.environ.get(
             "BACKEND_API_URL", "http://localhost:8090/TradingWorkstation"
         )
-        items = [
-            {
-                "uri": a.get("uri", ""),
-                "title": a.get("title", ""),
-                "summary": a.get("summary", ""),
-                "content": a.get("content", ""),
-                "source": a.get("source", "華爾街見聞"),
-                "author": a.get("author", ""),
-                "channel": a.get("channel", ""),
-                "date": a.get("date", ""),
-                "url": a.get("url", ""),
-                "imageUrl": a.get("image_url", ""),
-            }
-            for a in articles
-            if a.get("uri") and a.get("title")
-        ]
-        if not items:
-            return {"stored": 0, "duplicated": 0, "failed": 0}
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{backend_url}/api/news/batch",
-                json={"items": items},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            result_data = data.get("data", {})
-            logger.info(
-                f"[news_store] MySQL 寫入: stored={result_data.get('stored', 0)}, "
-                f"duplicated={result_data.get('duplicated', 0)}"
-            )
-            return {
-                "stored": result_data.get("stored", 0),
-                "duplicated": result_data.get("duplicated", 0),
-                "failed": result_data.get("failed", 0),
-            }
+        BATCH_SIZE = 50
+        total_stored = 0
+        total_duplicated = 0
+        total_failed = 0
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for i in range(0, len(articles), BATCH_SIZE):
+                batch = articles[i : i + BATCH_SIZE]
+                items = [
+                    {
+                        "uri": a.get("uri", ""),
+                        "title": a.get("title", ""),
+                        "summary": a.get("summary", ""),
+                        "content": a.get("content", ""),
+                        "source": a.get("source", "華爾街見聞"),
+                        "author": a.get("author", ""),
+                        "channel": a.get("channel", ""),
+                        "date": a.get("date", ""),
+                        "url": a.get("url", ""),
+                        "imageUrl": a.get("image_url", ""),
+                    }
+                    for a in batch
+                    if a.get("uri") and a.get("title")
+                ]
+                if not items:
+                    continue
+
+                try:
+                    resp = await client.post(
+                        f"{backend_url}/api/news/batch",
+                        json={"items": items},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    result_data = data.get("data", {})
+                    total_stored += result_data.get("stored", 0)
+                    total_duplicated += result_data.get("duplicated", 0)
+                    total_failed += result_data.get("failed", 0)
+                except Exception as e:
+                    logger.warning(f"[news_store] MySQL 批次 {i//BATCH_SIZE + 1} 寫入失敗: {e}")
+                    total_failed += len(items)
+
+                # 釋放當前批次數據
+                del batch, items
+
+        logger.info(
+            f"[news_store] MySQL 寫入完成: stored={total_stored}, "
+            f"duplicated={total_duplicated}, failed={total_failed}"
+        )
+        return {
+            "stored": total_stored,
+            "duplicated": total_duplicated,
+            "failed": total_failed,
+        }
     except Exception as e:
         logger.warning(f"[news_store] MySQL 寫入失敗（不影響向量庫同步）: {e}")
         return {"stored": 0, "duplicated": 0, "failed": len(articles)}
