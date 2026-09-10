@@ -3,6 +3,7 @@ package com.quantization.module.log;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 
@@ -22,6 +23,7 @@ public class RequestLogCleanupScheduler {
 
     /** 每日凌晨 3:00 清理 30 天前的請求日誌 */
     @Scheduled(cron = "0 0 3 * * *")
+    @Transactional
     public void cleanupOldLogs() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(30);
         try {

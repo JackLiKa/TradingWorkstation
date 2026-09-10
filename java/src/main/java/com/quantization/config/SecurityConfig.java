@@ -79,13 +79,12 @@ public class SecurityConfig {
                                         FilterChain filterChain) throws ServletException, IOException {
             String providedKey = request.getHeader("X-API-Key");
             if (providedKey != null && providedKey.equals(expectedApiKey)) {
-                // 認證成功：設置匿名認證令牌（已通過 API Key 驗證）
-                SecurityContextHolder.getContext().setAuthentication(
-                    new AnonymousAuthenticationToken(
-                        "apiKey", "apiKeyUser",
-                        List.of(new SimpleGrantedAuthority("ROLE_USER"))
-                    )
+                // 認證成功：設置已認證令牌（使用 UsernamePasswordAuthenticationToken 確保被 Spring Security 視為已認證）
+                var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                    "apiKeyUser", null,
+                    List.of(new SimpleGrantedAuthority("ROLE_USER"))
                 );
+                SecurityContextHolder.getContext().setAuthentication(auth);
                 filterChain.doFilter(request, response);
             } else {
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);

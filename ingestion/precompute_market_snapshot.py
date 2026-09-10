@@ -114,28 +114,39 @@ def _get_latest_trade_date(conn) -> str | None:
 
 
 def _compute_market_overview(conn, trade_date: str) -> dict:
-    """計算市場概覽快照。"""
+    """計算市場概覽快照。
+
+    增強版：查詢 index_daily 前先檢查表是否有數據，為空時輸出警告。
+    """
     overview = {"trade_date": trade_date, "indices": [], "breadth": {}, "summary": {}}
 
     with conn.cursor() as cur:
-        # 指數數據（主要指數）
-        cur.execute(
-            """
-            SELECT code, date, open, high, low, close, volume, amount, pctChg
-            FROM index_daily
-            WHERE date = %s AND frequency = 'day'
-            AND code IN ('sh.000001', 'sz.399001', 'sz.399006', 'sh.000300', 'sh.000016', 'sh.000688')
-            ORDER BY code
-            """,
-            (trade_date,),
-        )
-        for row in cur.fetchall():
-            overview["indices"].append({
-                "code": row["code"],
-                "close": float(row["close"]) if row["close"] else 0,
-                "pctChg": float(row["pctChg"]) if row["pctChg"] else 0,
-                "amount": float(row["amount"]) if row["amount"] else 0,
-            })
+        # 前置檢查：index_daily 表是否有數據
+        cur.execute("SELECT COUNT(*) AS cnt FROM index_daily")
+        index_total = cur.fetchone()["cnt"]
+        if index_total == 0:
+            logger.warning(f"[預計算] index_daily 表為空，總覽頁面指數數據將缺失")
+        else:
+            # 指數數據（主要指數）
+            cur.execute(
+                """
+                SELECT code, date, open, high, low, close, volume, amount, pctChg
+                FROM index_daily
+                WHERE date = %s AND frequency = 'day'
+                AND code IN ('sh.000001', 'sz.399001', 'sz.399006', 'sh.000300', 'sh.000016', 'sh.000688')
+                ORDER BY code
+                """,
+                (trade_date,),
+            )
+            for row in cur.fetchall():
+                overview["indices"].append({
+                    "code": row["code"],
+                    "close": float(row["close"]) if row["close"] else 0,
+                    "pctChg": float(row["pctChg"]) if row["pctChg"] else 0,
+                    "amount": float(row["amount"]) if row["amount"] else 0,
+                })
+            if not overview["indices"]:
+                logger.warning(f"[預計算] index_daily 中無 {trade_date} 的指數數據")
 
         # 市場廣度（漲跌家數）
         cur.execute(
@@ -387,12 +398,23 @@ def run_precompute(target_date: str | None = None, auto: bool = False) -> int:
 
         logger.info(f"[預計算] 開始計算 {trade_date} 的行情快照...")
 
+        # 前置檢查：index_daily 表是否有數據
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM index_daily")
+            index_count = cur.fetchone()["cnt"]
+        if index_count == 0:
+            logger.warning("[預計算] index_daily 表為空，總覽頁面將缺少指數數據，請先修復指數數據同步")
+
         # 1. 市場概覽
         try:
             overview = _compute_market_overview(conn, trade_date)
             _save_snapshot(conn, trade_date, "market_overview", overview)
-            logger.info(f"[預計算] 市場概覽: {len(overview['indices'])} 指數, "
-                        f"漲{overview['breadth'].get('rising', 0)}/跌{overview['breadth'].get('falling', 0)}")
+            if not overview.get("indices"):
+                logger.warning(f"[預計算] 市場概覽: 指數數據為空（index_daily 無 {trade_date} 數據），"
+                               f"僅保存漲跌廣度。漲{overview['breadth'].get('rising', 0)}/跌{overview['breadth'].get('falling', 0)}")
+            else:
+                logger.info(f"[預計算] 市場概覽: {len(overview['indices'])} 指數, "
+                            f"漲{overview['breadth'].get('rising', 0)}/跌{overview['breadth'].get('falling', 0)}")
         except Exception as e:
             logger.warning(f"[預計算] 市場概覽計算失敗: {e}")
 

@@ -180,6 +180,7 @@ def _sync_stocks(
         else:
             stock_start = start
 
+        retried = False
         try:
             for row in _fetch_stock(code, stock_start, end, adjustflag):
                 batch.append(row)
@@ -200,15 +201,38 @@ def _sync_stocks(
                             "adjustflag": adjustflag,
                         })
         except Exception as e:
-            failed += 1
-            if _PROGRESS_JSON:
-                _emit_progress_json({
-                    "type": "error",
-                    "code": code,
-                    "message": str(e),
-                })
-            _log(f"[error] {code} 拉取失敗: {e}", flush=True)
-            continue
+            if not retried:
+                _log(f"[warn] {code} 拉取異常: {e}，嘗試重連並重試...", flush=True)
+                try:
+                    _ensure_login()
+                    retried = True
+                    for row in _fetch_stock(code, stock_start, end, adjustflag):
+                        batch.append(row)
+                        if len(batch) >= batch_size:
+                            _upsert_stock_batch(cursor, batch)
+                            conn.commit()
+                            total += len(batch)
+                            batch.clear()
+                except Exception as e2:
+                    failed += 1
+                    if _PROGRESS_JSON:
+                        _emit_progress_json({
+                            "type": "error",
+                            "code": code,
+                            "message": str(e2),
+                        })
+                    _log(f"[error] {code} 重試後仍失敗: {e2}", flush=True)
+                    continue
+            else:
+                failed += 1
+                if _PROGRESS_JSON:
+                    _emit_progress_json({
+                        "type": "error",
+                        "code": code,
+                        "message": str(e),
+                    })
+                _log(f"[error] {code} 拉取失敗: {e}", flush=True)
+                continue
 
         # 每處理 100 隻股票打印進度
         if (i + 1) % 100 == 0:
@@ -258,6 +282,21 @@ def _sync_indexes(
     failed = 0
     batch: list[tuple] = []
     total_codes = len(codes)
+
+    # 指數同步前強制重新登錄 baostock，確保連接可用
+    _log("[info] 指數同步前重新登錄 baostock...", flush=True)
+    try:
+        _ensure_login()
+    except Exception as e:
+        _log(f"[warn] 指數同步前重連失敗: {e}，嘗試直接登錄...", flush=True)
+        try:
+            bs.logout()
+        except Exception:
+            pass
+        if not _login_baostock():
+            _log("[error] 指數同步前登錄失敗，跳過指數同步", flush=True)
+            cursor.close()
+            return 0
 
     for i, code in enumerate(codes):
         if incremental:
@@ -440,25 +479,41 @@ def _run_cli(args) -> int:
 
     # === 數據更新完成後觸發行情預計算 ===
     if grand_total > 0:
-        _log(f"\n{'=' * 60}")
-        _log(f"開始行情預計算（生成分析快照）")
-        _log(f"{'=' * 60}")
+        # 前置檢查：確認 index_daily 表有數據，否則預計算會生成不完整快照
+        precheck_conn = _connect()
         try:
-            import subprocess
-            precompute_script = str(Path(__file__).resolve().parent / "precompute_market_snapshot.py")
-            result = subprocess.run(
-                [sys.executable, precompute_script, "--auto"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=300,
-            )
-            if result.returncode == 0:
-                _log("[預計算] 行情快照已生成")
-            else:
-                _log(f"[預計算] 預計算失敗（不影響數據同步結果）: {result.stderr[:200]}")
-        except Exception as e:
-            _log(f"[預計算] 觸發失敗（不影響數據同步結果）: {e}")
+            precheck_cursor = precheck_conn.cursor()
+            precheck_cursor.execute("SELECT COUNT(*) FROM index_daily")
+            index_count = precheck_cursor.fetchone()[0]
+            precheck_cursor.close()
+        finally:
+            precheck_conn.close()
+
+        if index_count == 0:
+            _log(f"\n{'=' * 60}")
+            _log(f"[警告] index_daily 表為空（0 條記錄），總覽頁面將缺少指數數據")
+            _log(f"[警告] 跳過行情預計算，請先手動修復指數數據同步")
+            _log(f"{'=' * 60}")
+        else:
+            _log(f"\n{'=' * 60}")
+            _log(f"開始行情預計算（生成分析快照），index_daily 有 {index_count} 條記錄")
+            _log(f"{'=' * 60}")
+            try:
+                import subprocess
+                precompute_script = str(Path(__file__).resolve().parent / "precompute_market_snapshot.py")
+                result = subprocess.run(
+                    [sys.executable, precompute_script, "--auto"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=300,
+                )
+                if result.returncode == 0:
+                    _log("[預計算] 行情快照已生成")
+                else:
+                    _log(f"[預計算] 預計算失敗（不影響數據同步結果）: {result.stderr[:200]}")
+            except Exception as e:
+                _log(f"[預計算] 觸發失敗（不影響數據同步結果）: {e}")
 
     return 0
 

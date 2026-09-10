@@ -1,6 +1,7 @@
 package com.quantization.module.stock;
 
 import com.quantization.common.util.CodeUtils;
+import lombok.extern.slf4j.Slf4j;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Tuple;
@@ -21,6 +22,7 @@ import java.util.List;
  * 包含数据库连通性检查、汇总指标、表格搜索、K线加载、波动榜、区间查询和搜索建议等。
  * </p>
  */
+@Slf4j
 public class StockDailyRepositoryImpl implements StockDailyRepositoryCustom {
 
     @PersistenceContext
@@ -269,7 +271,21 @@ public class StockDailyRepositoryImpl implements StockDailyRepositoryCustom {
         }
         cq.where(preds.toArray(new Predicate[0]));
         cq.orderBy(cb.asc(r.get("code")), cb.asc(r.get("tradeDate")));
-        return em.createQuery(cq).getResultList();
+        // 安全護欄：限制最大返回行數，防止超大日期範圍的全量查詢導致堆內存溢出（OOM）
+        // 上限 80 萬行：覆蓋選股器全市場 320 天回看（約 53 萬行）的正常需求
+        int maxRows = 800_000;
+        var query = em.createQuery(cq);
+        // 只讀模式 + 批量抓取：實體不保留臟檢查快照，顯著降低大結果集的堆內存開銷
+        query.setHint("org.hibernate.readOnly", true);
+        query.setHint("org.hibernate.jdbc.fetch_size", 1000);
+        query.setMaxResults(maxRows + 1);
+        List<StockDailyEntity> result = query.getResultList();
+        if (result.size() > maxRows) {
+            log.warn("[recordsInRange] 查詢結果超過 {} 行上限，已截斷（start={}, end={}, adjustflag={}, codes={}）",
+                    maxRows, start, end, adjustflag, codes == null ? "全部" : codes.size() + "隻");
+            result = result.subList(0, maxRows);
+        }
+        return result;
     }
 
     private List<Predicate> basePredicates(CriteriaBuilder cb, Root<StockDailyEntity> r, StockDailyQuery query) {

@@ -363,7 +363,7 @@ export function FloatingChatCard() {
                   : tc
               )
             );
-            fullContent += `\n[[TOOL:${event.tool}:${event.success ? 'done' : 'error'}]]\n`;
+            fullContent = fullContent.replace(`[[TOOL:${event.tool}:running]]`, `[[TOOL:${event.tool}:${event.success ? 'done' : 'error'}]]`);
             setStreamingContent(fullContent);
             break;
           case 'content':

@@ -40,6 +40,13 @@ DEFAULT_INDEX_CODES = [
 
 ADJUSTFLAG_MAP = {1: "後復權", 2: "前復權", 3: "不復權"}
 
+# 網絡錯誤關鍵詞，出現時需要重新登錄 baostock
+_NETWORK_ERROR_KEYWORDS = (
+    "用户未登", "未登錄", "Broken pipe", "Connection reset",
+    "Connection aborted", "Connection refused", "Connection closed",
+    "EOF occurred", "Max retries exceeded",
+)
+
 
 # ============================================================================
 # 數據解析輔助
@@ -124,15 +131,29 @@ def _login_baostock(max_retries: int = 3) -> bool:
 
 
 def _ensure_login() -> None:
-    """檢查 Baostock 登錄狀態，必要時重新登錄。"""
-    rs = bs.query_all_stock(day=datetime.now().strftime("%Y-%m-%d"))
-    if rs.error_code != "0":
-        try:
-            bs.logout()
-        except Exception:
+    """檢查 Baostock 登錄狀態，必要時重新登錄。
+
+    增強版：用 try/except 包裹檢測邏輯，網絡異常時直接重新登錄而非拋出 RuntimeError。
+    """
+    try:
+        rs = bs.query_all_stock(day=datetime.now().strftime("%Y-%m-%d"))
+        if rs.error_code == "0":
+            return  # 登錄狀態正常
+        # 檢測到非正常狀態，檢查是否為網絡錯誤
+        err_msg = rs.error_msg or ""
+        if not any(kw in err_msg for kw in _NETWORK_ERROR_KEYWORDS):
+            # 非網絡錯誤但也非正常，嘗試重新登錄
             pass
-        if not _login_baostock():
-            raise RuntimeError("baostock 重新登錄失敗")
+    except Exception:
+        # query_all_stock 本身拋出異常（如 Broken pipe），直接重新登錄
+        pass
+    # 執行重新登錄
+    try:
+        bs.logout()
+    except Exception:
+        pass
+    if not _login_baostock():
+        raise RuntimeError("baostock 重新登錄失敗")
 
 
 # ============================================================================
@@ -140,12 +161,24 @@ def _ensure_login() -> None:
 # ============================================================================
 
 def _fetch_stock(code: str, start: str, end: str, adjustflag: int) -> Iterable[tuple]:
-    """從 Baostock 獲取股票日線數據。"""
-    rs = bs.query_history_k_data_plus(
-        code, FIELDS, start_date=start, end_date=end, frequency="d", adjustflag=str(adjustflag)
-    )
+    """從 Baostock 獲取股票日線數據。
+
+    增強版：對所有網絡錯誤（Broken pipe、Connection reset 等）觸發重連。
+    """
+    try:
+        rs = bs.query_history_k_data_plus(
+            code, FIELDS, start_date=start, end_date=end, frequency="d", adjustflag=str(adjustflag)
+        )
+    except Exception as e:
+        # query 本身拋出異常（如 Broken pipe），嘗試重連後重試一次
+        print(f"[warn] {code}: 查詢異常 {e}，嘗試重連...", file=sys.stderr)
+        _ensure_login()
+        rs = bs.query_history_k_data_plus(
+            code, FIELDS, start_date=start, end_date=end, frequency="d", adjustflag=str(adjustflag)
+        )
     if rs.error_code != "0":
-        if "用户未登" in rs.error_msg or "未登錄" in rs.error_msg:
+        err_msg = rs.error_msg or ""
+        if any(kw in err_msg for kw in _NETWORK_ERROR_KEYWORDS):
             _ensure_login()
             rs = bs.query_history_k_data_plus(
                 code, FIELDS, start_date=start, end_date=end, frequency="d", adjustflag=str(adjustflag)
@@ -168,12 +201,24 @@ def _fetch_stock(code: str, start: str, end: str, adjustflag: int) -> Iterable[t
 
 
 def _fetch_index(code: str, start: str, end: str) -> Iterable[tuple]:
-    """從 Baostock 獲取指數日線數據。"""
-    rs = bs.query_history_k_data_plus(
-        code, INDEX_FIELDS, start_date=start, end_date=end, frequency="d"
-    )
+    """從 Baostock 獲取指數日線數據。
+
+    增強版：對所有網絡錯誤（Broken pipe、Connection reset 等）觸發重連。
+    """
+    try:
+        rs = bs.query_history_k_data_plus(
+            code, INDEX_FIELDS, start_date=start, end_date=end, frequency="d"
+        )
+    except Exception as e:
+        # query 本身拋出異常（如 Broken pipe），嘗試重連後重試一次
+        print(f"[warn] index {code}: 查詢異常 {e}，嘗試重連...", file=sys.stderr)
+        _ensure_login()
+        rs = bs.query_history_k_data_plus(
+            code, INDEX_FIELDS, start_date=start, end_date=end, frequency="d"
+        )
     if rs.error_code != "0":
-        if "用户未登" in rs.error_msg or "未登錄" in rs.error_msg:
+        err_msg = rs.error_msg or ""
+        if any(kw in err_msg for kw in _NETWORK_ERROR_KEYWORDS):
             _ensure_login()
             rs = bs.query_history_k_data_plus(
                 code, INDEX_FIELDS, start_date=start, end_date=end, frequency="d"

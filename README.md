@@ -137,6 +137,39 @@ curl http://localhost:8100/api/agent/health                     # → {"availabl
 
 > **首次使用需導入數據**：`pip install -r ingestion/requirements.txt` → `python ingestion/baostock_ingest.py`（選菜單 11 增量更新全部）。詳見 [`ingestion/README.md`](./ingestion/README.md)。
 
+## 安全加固與 AI 防護（2026-09 更新）
+
+### 生產環境安全加固
+
+- **API Key 認證**：Java 後端（Spring Security `ApiKeyFilter`，`X-API-Key` 請求頭）與 Agent（FastAPI 中間件）均已啟用；nginx 反代自動注入認證頭，前端零改動
+- **防火牆（ufw）**：僅放行 22/80/3010/3000，後端與監控端口（8090/8100/9090/9100/9104）僅限內網訪問
+- **MySQL 綁定**：3306 與 33060 均綁定 127.0.0.1，杜絕公網直連
+- **SSH 加固**：`PermitRootLogin no` + 僅密鑰登錄 + fail2ban
+- **敏感文件權限**：所有 `.env` 收緊為 600
+
+### AI 聊天安全防護（Prompt 注入縱深防禦）
+
+- **角色邊界約束**：系統提示詞明確拒絕非投研問題（模型身份、技術細節、非金融領域）
+- **數據時效性檢測**：行情分析前必須檢查數據庫最新交易日；收盤後數據未入庫時主動聲明，杜絕用過舊數據冒充今日行情
+- **降級透明化**：工具失敗時必須告知用戶，嚴禁靜默降級
+- **工具參數鉗制**：`days ∈ [1,60]`、`limit ∈ [1,100]`，防止誘導大查詢 OOM
+- **工具調用預算**：`MAX_TOOL_ROUNDS = 15`（原 100），防成本攻擊
+- **工具結果截斷**：單次結果上限 32KB，防上下文爆炸
+- **內容包裹標記**：外部新聞以 `<untrusted_data>` 標籤隔離，聲明其中指令不得執行
+- **規則覆核清單**：回答前 9 項硬性檢查（數據真實性/來源標註/合規/時效/降級透明等）
+
+### 穩定性修復
+
+- `RequestLogCleanupScheduler` 補充 `@Transactional`，修復每日 03:00 清理任務事務缺失
+- `recordsInRange` 查詢增加 80 萬行安全護欄 + Hibernate 只讀模式 + fetch_size=1000，修復選股器全市場查詢 OOM
+- JVM 堆從 768m 提升至 1024m；`trading-agent` 修復 `Restart=always` 與 PATH 環境變量
+
+### 聊天 UI 改造（Codex/ChatGPT 風格）
+
+- 消息氣泡區分（用戶藍色/AI 深色）、代碼塊語法高亮 + 複製按鈕 + 語言標籤
+- 工具調用可折疊面板、流式打字光標、Markdown 增強（引用塊/有序列表/行內代碼）
+- 引用來源卡片化展示（序號徽章 + 分層信息 + 可點擊跳轉）
+
 ## 架構概覽
 
 4 個自研服務 + 1 個數據庫 + 1 個可選 MCP 服務 + 可選監控棧，後端按業務域拆分為 **16 個模塊**：
