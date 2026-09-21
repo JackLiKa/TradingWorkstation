@@ -6,7 +6,7 @@
  * 流式輸出時顯示思考動畫 + 工具調用實時狀態。
  */
 
-import { Bot, User, Wrench, Loader2, CheckCircle2, XCircle, ExternalLink, Brain, Sparkles } from 'lucide-react';
+import { Wrench, Loader2, CheckCircle2, XCircle, ExternalLink, Brain, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ChatMessage as ChatMessageType, Citation } from '@/lib/api/chat';
 
@@ -334,61 +334,64 @@ function renderInline(text: string): React.ReactNode {
   return parts;
 }
 
+/** 流式展示時過濾內聯工具標記 [[TOOL:...]] — 工具狀態由 ToolCallStatus 統一展示，避免文字上下重複顯示（歷史消息仍保留內聯標記便於回看）*/
+function stripToolMarkers(text: string): string {
+  return text.replace(/\n?\[\[TOOL:[^\]]+\]\]\n?/g, '');
+}
+
 export function ChatMessageList({ messages, streamingContent, activeToolCalls, thinkingMessage }: ChatMessageListProps) {
   return (
     <>
       {messages.map(msg => {
         const isUser = msg.role === 'user';
         const citations = parseCitations(msg.citationsJson);
+        // ChatGPT 風格：用戶消息右對齊灰色氣泡；AI 消息左對齊無氣泡全寬排版
+        // 響應式：移動端氣泡更寬（85%）、桌面端適中（70%），間距與字號分級適配
         return (
-          <div
-            key={msg.id}
-            className={cn('flex gap-2', isUser ? 'flex-row-reverse' : 'flex-row')}
-          >
-            <div className={cn('flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center',
-              isUser ? 'bg-blue-500/20' : 'bg-accent/20'
-            )}>
-              {isUser ? <User className="w-4 h-4 text-blue-400" /> : <Bot className="w-4 h-4 text-accent" />}
-            </div>
-            <div className={cn('flex-1 max-w-[85%]',
-              isUser ? 'bg-blue-500/10 rounded-lg p-2' : 'bg-bg-hover rounded-lg p-2'
-            )}>
-              {isUser ? (
-                <p className="text-xs text-slate-200 whitespace-pre-wrap">{msg.content}</p>
-              ) : (
-                <>
-                  <div className="prose prose-sm prose-invert max-w-none">
-                    {renderMarkdown(msg.content)}
-                  </div>
-                  <CitationsDisplay citations={citations} />
-                </>
-              )}
-            </div>
+          <div key={msg.id} className={cn('flex w-full mb-5 last:mb-2', isUser ? 'justify-end' : 'justify-start')}>
+            {isUser ? (
+              <div className="max-w-[85%] sm:max-w-[75%] md:max-w-[70%] rounded-3xl rounded-br-lg bg-[#323232] px-4 py-2.5 shadow-sm">
+                <p className="text-sm leading-relaxed text-slate-50 whitespace-pre-wrap break-words">{msg.content}</p>
+              </div>
+            ) : (
+              <div className="w-full">
+                <div className="prose prose-sm prose-invert max-w-none text-slate-100
+                  prose-p:leading-relaxed prose-p:my-2 prose-headings:mb-2 prose-headings:mt-3
+                  prose-pre:bg-[#0d0d0d] prose-pre:border prose-pre:border-white/10 prose-pre:rounded-xl
+                  prose-code:text-[13px] prose-code:before:content-none prose-code:after:content-none
+                  prose-li:my-0.5 prose-table:text-[13px]">
+                  {renderMarkdown(msg.content)}
+                </div>
+                <CitationsDisplay citations={citations} />
+              </div>
+            )}
           </div>
         );
       })}
 
-      {/* 流式輸出中的 AI 回覆 + 打字機光標 */}
+      {/* 流式輸出中的 AI 回覆 + 打字機光標（ChatGPT 風格：無氣泡全寬排版）*/}
       {(streamingContent || activeToolCalls.length > 0 || thinkingMessage) && (
-        <div className="flex gap-2 flex-row">
-          <div className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-accent/20">
-            <Bot className="w-4 h-4 text-accent" />
-          </div>
-          <div className="flex-1 max-w-[85%] bg-bg-hover rounded-lg p-2">
-            {streamingContent && (
-              <div className="prose prose-sm prose-invert max-w-none">
-                {renderMarkdown(streamingContent)}
-                {/* 打字機閃爍光標 — 流式輸出進行中時顯示 */}
-                <span
-                  className="inline-block w-0.5 h-3.5 bg-accent ml-0.5 align-text-bottom animate-pulse"
-                  style={{ animationDuration: '0.8s' }}
-                />
-              </div>
-            )}
+        <div className="flex w-full justify-start mb-5">
+          <div className="w-full">
             {thinkingMessage && (
               <ThinkingIndicator message={thinkingMessage} />
             )}
+            {/* 工具調用狀態統一在內容上方展示；流式文本中的內聯標記已過濾，不再重複 */}
             <ToolCallStatus toolCalls={activeToolCalls} />
+            {streamingContent && (
+              <div className="prose prose-sm prose-invert max-w-none text-slate-100
+                prose-p:leading-relaxed prose-p:my-2 prose-headings:mb-2 prose-headings:mt-3
+                prose-pre:bg-[#0d0d0d] prose-pre:border prose-pre:border-white/10 prose-pre:rounded-xl
+                prose-code:text-[13px] prose-code:before:content-none prose-code:after:content-none
+                prose-li:my-0.5 prose-table:text-[13px]">
+                {renderMarkdown(stripToolMarkers(streamingContent))}
+                {/* 打字機閃爍光標 — 流式輸出進行中時顯示 */}
+                <span
+                  className="inline-block w-2 h-4 bg-slate-100 ml-0.5 align-text-bottom animate-pulse rounded-sm"
+                  style={{ animationDuration: '1s' }}
+                />
+              </div>
+            )}
           </div>
         </div>
       )}

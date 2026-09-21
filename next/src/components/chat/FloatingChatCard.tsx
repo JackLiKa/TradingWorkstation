@@ -83,6 +83,7 @@ export function FloatingChatCard() {
   const [selectedProvider, setSelectedProvider] = useState<string>('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  const [traceId, setTraceId] = useState('');
   const [activeToolCalls, setActiveToolCalls] = useState<{ tool: string; status: 'running' | 'done' | 'error' }[]>([]);
   const [thinkingMessage, setThinkingMessage] = useState('');
   const [error, setError] = useState('');
@@ -346,6 +347,9 @@ export function FloatingChatCard() {
 
       for await (const event of generator) {
         switch (event.type) {
+          case 'trace':
+            setTraceId(event.trace_id);
+            break;
           case 'thinking':
             setThinkingMessage(event.message);
             break;
@@ -514,7 +518,7 @@ export function FloatingChatCard() {
         )}
 
         {/* 消息列表 */}
-        <div className="flex-1 overflow-auto p-3 space-y-3 min-h-0">
+        <div className="flex-1 overflow-auto p-3 sm:p-4 min-h-0">
           {messages.length === 0 && !streamingContent && !isStreaming && (
             <div className="flex flex-col items-center justify-center h-full text-center text-muted">
               <Bot className="w-12 h-12 mb-3 opacity-50" />
@@ -529,6 +533,15 @@ export function FloatingChatCard() {
             activeToolCalls={activeToolCalls}
             thinkingMessage={thinkingMessage}
           />
+          {traceId && (
+            <div
+              className="text-[10px] text-muted/60 text-right cursor-pointer hover:text-muted transition-colors select-none"
+              onClick={() => navigator.clipboard?.writeText(traceId)}
+              title="点击复制追踪 ID，可用于在服务端日志中检索本次对话"
+            >
+              trace: {traceId}
+            </div>
+          )}
           {error && (
             <div className="text-xs text-red-400 bg-red-400/10 rounded p-2">
               {error}
@@ -651,7 +664,7 @@ export function FloatingChatCard() {
         </div>
 
         {/* 消息列表 */}
-        <div className="flex-1 overflow-auto p-3 space-y-3">
+        <div className="flex-1 overflow-auto p-3 sm:p-4">
           {messages.length === 0 && !streamingContent && !isStreaming && (
             <div className="flex flex-col items-center justify-center h-full text-center text-muted">
               <Bot className="w-12 h-12 mb-3 opacity-50" />
@@ -666,6 +679,15 @@ export function FloatingChatCard() {
             activeToolCalls={activeToolCalls}
             thinkingMessage={thinkingMessage}
           />
+          {traceId && (
+            <div
+              className="text-[10px] text-muted/60 text-right cursor-pointer hover:text-muted transition-colors select-none"
+              onClick={() => navigator.clipboard?.writeText(traceId)}
+              title="点击复制追踪 ID，可用于在服务端日志中检索本次对话"
+            >
+              trace: {traceId}
+            </div>
+          )}
           {error && (
             <div className="text-xs text-red-400 bg-red-400/10 rounded p-2">
               {error}

@@ -46,8 +46,11 @@ class FtshareMcpTool(ToolBase):
                 "tool_name": {
                     "type": "string",
                     "description": (
-                        "要調用的 FTShare 工具名稱（如 'get_kline', 'get_financial_report', "
-                        "'get_capital_flow', 'get_valuation' 等）"
+                        "要調用的 FTShare 工具名稱（注意：工具名均帶 ft_v1_ 前綴，"
+                        "如個股 K 線用 'ft_v1_stock_candlesticks'，指數 K 線用 "
+                        "'ft_v1_index_candlesticks'，ETF K 線用 'ft_v1_etf_candlesticks'，"
+                        "個股資金流用 'ft_v1_eastmoney_stock_flow'，估值用 "
+                        "'ft_v1_eastmoney_stock_valuation' 等。舊工具名（如 get_kline）已失效）"
                     ),
                 },
                 "arguments": {

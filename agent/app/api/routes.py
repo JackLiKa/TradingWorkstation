@@ -789,10 +789,20 @@ async def chat_stream(request: ChatStreamRequest):
         for m in request.messages
     ]
 
+    # 生成本次對話的唯一追蹤標識（trace_id），貫穿日誌與 SSE 事件，便於問題排查
+    import time as _time
+    import uuid as _uuid
+    trace_id = f"{_time.strftime('%Y%m%d%H%M%S')}-{_uuid.uuid4().hex[:8]}"
+    logging.getLogger("agent.chat").info(
+        f"[聊天] trace_id={trace_id} 開始對話 (provider={request.provider or 'auto'}, messages={len(messages)})"
+    )
+
     async def event_generator():
         """SSE 事件生成器。"""
         try:
-            async for chunk in chat_engine.chat_stream(messages, request.provider):
+            # 首個事件：返回 trace_id，前端展示後可憑它在日誌中精確檢索本次對話
+            yield f"data: {json.dumps({'type': 'trace', 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
+            async for chunk in chat_engine.chat_stream(messages, request.provider, trace_id=trace_id):
                 yield f"data: {chunk}\n\n"
         except Exception as e:
             error_msg = json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False)

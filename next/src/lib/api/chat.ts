@@ -109,7 +109,12 @@ export interface SSEError {
   message: string;
 }
 
-export type SSEEvent = SSEToolStart | SSEToolEnd | SSEContent | SSEThinking | SSEProgress | SSETitleUpdate | SSEDone | SSEError;
+export interface SSETrace {
+  type: 'trace';
+  trace_id: string;
+}
+
+export type SSEEvent = SSEToolStart | SSEToolEnd | SSEContent | SSEThinking | SSEProgress | SSETitleUpdate | SSEDone | SSEError | SSETrace;
 
 // ===== Java 後端 API（對�?CRUD�?====
 

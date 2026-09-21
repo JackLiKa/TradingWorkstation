@@ -45,16 +45,7 @@ class LocalMarketDataTool(ToolBase):
             "這是獲取本地歷史數據的首選工具，比網絡搜索更準確、更完整。"
             "支持的操作類型（action）：market_overview, index_history, sector_performance, "
             "industry_prosperity, rotation_signals, market_breadth, local_news, "
-            "screener, data_range, industry_stocks。"
-            "industry_stocks - 行業股票列表（輕量查詢，只返回 code+name，支持按行業分類代碼或關鍵詞查詢）\n"
-            "\n"
-            "重要安全約束：\n"
-            "- 單次查詢最多返回 100 條記錄，超過時系統會自動分批並提示「還有 N 條數據，回復繼續查看更多」\n"
-            "- 當工具返回結果中包含 hasMore=true 時，請在回覆末尾提示用戶「回復「繼續」查看更多數據」\n"
-            "- 用戶回復「繼續」時，使用相同的 action 但傳入 offset 參數（如 offset=100）獲取下一批\n"
-            "- 查詢股票日線數據時必須指定具體 code（單個股票）和日期範圍，不要查詢所有股票\n"
-            "- 不要嘗試一次性查詢大量數據，這會導致服務器內存不足\n"
-            "- 如果用戶需要大量數據，建議分批查詢或縮小範圍"
+            "screener, data_range。"
         )
 
     @property
@@ -73,9 +64,7 @@ class LocalMarketDataTool(ToolBase):
                         "rotation_signals - 行業輪動信號\n"
                         "market_breadth - 市場廣度（漲跌家數）\n"
                         "local_news - 已入庫財經新聞（可選 channel 過濾）\n"
-                        "screener - 選股器（按條件篩選股票，如漲跌幅/換手率/市盈率等，需傳 criteria JSON）\n"
-                        "⚠ screener 是選股器，用於按財務指標篩選股票，不要用於查詢某個行業的股票列表\n"
-                        "⚠ 查詢行業股票列表請使用 industry_stocks action（輕量查詢，不會導致服務器內存不足）\n"
+                        "screener - 選股器（需傳 criteria JSON）\n"
                         "data_range - 數據時間範圍"
                     ),
                     "enum": [
@@ -88,7 +77,6 @@ class LocalMarketDataTool(ToolBase):
                         "local_news",
                         "screener",
                         "data_range",
-                        "industry_stocks",
                     ],
                 },
                 "code": {
@@ -122,46 +110,38 @@ class LocalMarketDataTool(ToolBase):
         try:
             from app.services.backend_client import backend_client
 
+            # 安全護欄：鉗制數值參數，防止 LLM 被誘導傳入極大值觸發大查詢 OOM
+            def _clamp_days(v: int) -> int:
+                return max(1, min(int(v), 60))
+            def _clamp_limit(v: int) -> int:
+                return max(1, min(int(v), 100))
+
             if action == "market_overview":
                 return await self._query_market_overview(backend_client)
             elif action == "index_history":
                 code = kwargs.get("code", "sh.000001")
-                days = kwargs.get("days", 10)
+                days = _clamp_days(kwargs.get("days", 10))
                 return await self._query_index_history(backend_client, code, days)
             elif action == "sector_performance":
-                days = kwargs.get("days", 10)
+                days = _clamp_days(kwargs.get("days", 10))
                 return await self._query_sector_performance(backend_client, days)
             elif action == "industry_prosperity":
                 return await self._query_industry_prosperity(backend_client)
             elif action == "rotation_signals":
-                days = kwargs.get("days", 10)
+                days = _clamp_days(kwargs.get("days", 10))
                 return await self._query_rotation_signals(backend_client, days)
             elif action == "market_breadth":
-                days = kwargs.get("days", 10)
+                days = _clamp_days(kwargs.get("days", 10))
                 return await self._query_market_breadth(backend_client, days)
             elif action == "local_news":
                 channel = kwargs.get("channel")
-                limit = kwargs.get("news_limit", 20)
+                limit = _clamp_limit(kwargs.get("news_limit", 20))
                 return await self._query_local_news(backend_client, channel, limit)
             elif action == "screener":
                 criteria = kwargs.get("criteria", {})
-                # 安全保護：如果 criteria 中包含行業代碼（如 C38），自動切換到輕量 industry_stocks
-                if isinstance(criteria, dict):
-                    ind = str(criteria.get("industry", "") or criteria.get("industryCode", "") or criteria.get("industryClassification", ""))
-                    if ind and len(ind) >= 2 and ind[0] in "CIGOADEFHJKLMNPQRS" and ind[1].isdigit():
-                        logger.info(f"[工具保護] screener 參數包含行業代碼 '{ind}'，自動切換到 industry_stocks")
-                        return await self._query_industry_stocks(backend_client, ind, "", 0)
-                    # 限制 maxResults 上限
-                    if criteria.get("maxResults", 50) > 100:
-                        criteria["maxResults"] = 100
                 return await self._run_screener(backend_client, criteria)
             elif action == "data_range":
                 return await self._query_data_range(backend_client)
-            elif action == "industry_stocks":
-                industry_codes = kwargs.get("industry_codes", "")
-                keyword = kwargs.get("keyword", "")
-                offset = kwargs.get("offset", 0)
-                return await self._query_industry_stocks(backend_client, industry_codes, keyword, offset)
             else:
                 return ToolResult(
                     success=False,
@@ -180,6 +160,21 @@ class LocalMarketDataTool(ToolBase):
         """市場概覽。"""
         data = await client.get_market_overview()
         content = self._format_dict("市場概覽", data)
+        # 數據時效性自動檢查：比對最新交易日與當前日期
+        try:
+            latest_date = await client.get_latest_trade_date()
+            if latest_date:
+                from datetime import date, datetime
+                today = date.today()
+                latest = datetime.strptime(latest_date, "%Y-%m-%d").date()
+                gap_days = (today - latest).days
+                now_hour = datetime.now().hour
+                if gap_days >= 1 and now_hour >= 15:
+                    content = f"⚠️ 數據提示：今日（{today}）行情數據尚未入庫，以下基於最新可用數據（{latest_date}）。\n\n" + content
+                elif gap_days >= 1 and now_hour < 15:
+                    content = f"ℹ️ 今日尚未收盤，最新可用數據為 {latest_date}。\n\n" + content
+        except Exception:
+            pass  # 時效性檢查失敗不影響正常返回
         return ToolResult(
             success=True,
             content=content,
@@ -217,7 +212,7 @@ class LocalMarketDataTool(ToolBase):
         data = await client.get_sector_performance(days)
         lines = [f"## 板塊多日表現（最近 {days} 天）\n"]
         if isinstance(data, list):
-            for row in data:
+            for row in data[:20]:
                 lines.append(f"- {row}")
         else:
             lines.append(self._format_dict_content(data))
@@ -235,7 +230,7 @@ class LocalMarketDataTool(ToolBase):
         if isinstance(data, list):
             lines.append("| 行業 | 景氣度分 | 動量 | 估值 | 資金 |")
             lines.append("|------|---------|------|------|------|")
-            for row in data:
+            for row in data[:30]:
                 if isinstance(row, dict):
                     lines.append(
                         f"| {row.get('industry', '')} | {row.get('prosperity_score', '')} | "
@@ -285,9 +280,13 @@ class LocalMarketDataTool(ToolBase):
         if channel:
             url = f"{base}/api/news/channel/{channel}"
         params = {"page": 0, "size": min(limit, 50)}
+        # 注入 X-API-Key 認證頭（與 backend_client 統一認證方式一致，後端開啟認證時必需）
+        headers = {}
+        if settings.api_key:
+            headers["X-API-Key"] = settings.api_key
 
         async with httpx.AsyncClient(timeout=15.0) as http:
-            resp = await http.get(url, params=params)
+            resp = await http.get(url, params=params, headers=headers)
             resp.raise_for_status()
             body = resp.json()
 
@@ -326,9 +325,6 @@ class LocalMarketDataTool(ToolBase):
                 "maxResults": 50,
                 "sortBy": "score",
             }
-        # 限制 maxResults 上限，防止查詢返回過多數據導致內存問題
-        if isinstance(criteria, dict) and criteria.get("maxResults", 50) > 100:
-            criteria["maxResults"] = 100
         data = await client.run_screener(criteria)
         content = self._format_dict("選股器結果", data)
         return ToolResult(
@@ -355,58 +351,6 @@ class LocalMarketDataTool(ToolBase):
             raw_data={"earliest": earliest, "latest": latest, "latest_trade_date": latest_date},
         )
 
-    async def _query_industry_stocks(self, client, industry_codes: str, keyword: str, offset: int = 0) -> ToolResult:
-        """行業股票列表（輕量投影查詢，只返回 code+name，支持分批）。"""
-        params = {}
-        if industry_codes:
-            params["industryCodes"] = industry_codes
-        elif keyword:
-            params["keyword"] = keyword
-        else:
-            return ToolResult(
-                success=False,
-                content="請提供 industryCodes（如 C38,C37）或 keyword（如「電氣機械」）參數",
-                error="missing parameter",
-            )
-        if offset > 0:
-            params["offset"] = offset
-        data = await client.get_industry_stocks(params)
-        resp = data.get("data", data) if isinstance(data, dict) else data
-        # 處理 PaginatedResponse 格式
-        if isinstance(resp, dict) and "data" in resp:
-            stocks = resp.get("data", [])
-            has_more = resp.get("hasMore", False)
-            total = resp.get("total", len(stocks))
-            message = resp.get("message", "")
-        else:
-            stocks = resp if isinstance(resp, list) else []
-            has_more = False
-            total = len(stocks)
-            message = ""
-        if not stocks:
-            return ToolResult(
-                success=True,
-                content="未找到符合條件的股票" if offset == 0 else "已沒有更多數據",
-                citations=[{"source": "本地數據庫", "title": "行業股票", "type": "industry_stocks"}],
-                raw_data=[],
-            )
-        lines = [f"## 行業股票列表（第 {offset+1}-{offset+len(stocks)} 條，共 {total} 隻）\n"]
-        lines.append("| 代碼 | 名稱 |")
-        lines.append("|------|------|")
-        for s in stocks:
-            code = s.get("code", "")
-            name = s.get("name", "")
-            lines.append(f"| {code} | {name} |")
-        if has_more:
-            lines.append(f"\n**還有 {total - offset - len(stocks)} 條數據，回復「繼續」查看更多**")
-        content = "\n".join(lines)
-        return ToolResult(
-            success=True,
-            content=content,
-            citations=[{"source": "本地數據庫", "title": "行業股票", "type": "industry_stocks"}],
-            raw_data=stocks,
-        )
-
     def _format_dict(self, title: str, data: Any) -> str:
         """格式化字典/列表為 Markdown。"""
         lines = [f"## {title}\n"]
@@ -425,11 +369,13 @@ class LocalMarketDataTool(ToolBase):
                 else:
                     lines.append(f"{prefix}- {k}: {v}")
         elif isinstance(data, list):
-            for i, item in enumerate(data):
+            for i, item in enumerate(data[:20]):
                 if isinstance(item, (dict, list)):
                     lines.append(f"{prefix}{i + 1}. {self._format_dict_content(item, indent + 1)}")
                 else:
                     lines.append(f"{prefix}{i + 1}. {item}")
+            if len(data) > 20:
+                lines.append(f"{prefix}... 共 {len(data)} 條")
         else:
             lines.append(f"{prefix}{data}")
         return "\n".join(lines)
