@@ -536,16 +536,17 @@ flowchart TD
 2. `ChatEngine` 構建 system prompt + tool definitions + 歷史消息
 3. 調用 LLM（OpenAI function calling 格式）
 4. 若 LLM 返回 `tool_calls` → 執行工具 → 將結果餵回 LLM → 重複（最多 5 輪）
-5. LLM 返回最終文本 → SSE 流式輸出（content 塊 + done 事件）
+5. LLM 以流式接口（`stream: true`）邊生成邊輸出 → 每個文本塊即時推送為 content 事件（真流式，非分塊模擬）；供應商失敗時自動降級（輸出前失敗切換下一家，輸出後失敗直接報錯避免重複）
 6. 前端收到 done 事件後，調用 Java 後端保存 AI 回復
 
 ### 13.3 SSE 事件協議
 
 | 事件類型 | 字段 | 說明 |
 |----------|------|------|
+| `trace` | trace_id | 本次對話的唯一追蹤標識（首個事件；前端展示可點擊複製，憑它可在服務端日誌精確檢索本次對話全部記錄） |
 | `tool_start` | tool, arguments | 工具開始執行 |
 | `tool_end` | tool, success, citations, error | 工具執行完成（含引用來源） |
-| `content` | text | 文本塊（打字機效果，20 字/塊） |
+| `content` | text | 文本塊（真流式：LLM 邊生成邊推送，每塊 1-2 字符） |
 | `done` | provider, model, citations, tool_calls_log, tokens | 全部完成（含所有引用 + 工具鏈） |
 | `error` | message | 錯誤 |
 | `thinking` | round, message | AI 思考中（每輪 LLM 調用前發送，前端顯示脈動大腦動畫） |
